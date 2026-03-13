@@ -1,0 +1,322 @@
+# SVPB Tools — Next Generation (TNG) Project Plan
+
+## Executive Summary
+
+TNG replaces the fragile, multi-tool Gen.1 pipeline with a single, self-contained web service that any
+technically-inclined band member can deploy and maintain. The core principle is that the server
+should require **no specialist knowledge** to run: one `docker compose up` command should be
+sufficient to have a working system.
+
+The two headline improvements over Gen.1 are:
+
+1. **Simplified operations** — ABC-to-PDF conversion is handled entirely in-process by two Swift
+   libraries ([ABCKit] and [SVGPDFKit]), so the server has no external build-tool dependencies
+   whatsoever. The only runtime requirement is Docker for the compose stack itself.
+
+2. **Personalised binders** — Band members can assemble a custom PDF that contains only the parts
+   they need, with page numbers that reflect *their* binder rather than the master copy.
+
+---
+
+## Background and Constraints
+
+- Source music is stored in ABC notation in the [svpb-music] GitHub repository.
+- Conversion from ABC → SVG is handled in-process by [ABCKit] (a Swift wrapper around the
+  vendored `abcm2ps` C library).
+- Conversion from SVG → PDF is handled in-process by [SVGPDFKit] (built on SwiftDraw +
+  CoreGraphics).
+- Finished PDFs are distributed via a shared Box folder.
+- Band members are notified via Slack.
+- The operator of the server **should not** need to understand Apache, certbot, Perl, or make.
+
+---
+
+## Feature List
+
+### Core — Automated Build Pipeline
+
+| # | Feature | Description |
+|---|---------|-------------|
+| C1 | GitHub webhook receiver | An HTTPS endpoint that accepts `push` events from GitHub. Validates the shared webhook secret before acting. |
+| C2 | Repository sync | On a valid webhook event, pull (or clone) the latest state of `svpb-music` into a working directory on the server. |
+| C3 | In-process conversion | For each changed ABC file, invoke `ABCKit` (configured for one SVG per page) to produce a sequence of per-page SVG documents, then pass them as an ordered list of `SVGSource` values to `SVGPDFKit` to produce a per-part PDF. Both steps run inside the server process — no external tools or containers required. |
+| C4 | Box upload | Walk the output directory for freshly-built PDFs and upload them to the configured Box folder via the Box API. Replaces any previous version of the same file. |
+| C5 | Slack notification | Post a build-summary message to the configured Slack channel (success / failure, list of changed files, link to Box folder). |
+| C6 | Build log retention | Store the stdout/stderr of each build locally, accessible via the admin UI, so failures can be diagnosed without SSH access. |
+
+### Binder — Personalised PDF Assembly
+
+| # | Feature | Description |
+|---|---------|-------------|
+| B1 | Tune catalogue | The server parses the ABC source files after each build and maintains a SQLite catalogue of every tune and every named part/voice within it, scoped to the branch (year) that was just built. The same tune slug may appear in multiple branches with differing arrangements. |
+| B2 | Canonical binder definition | The pipe major defines the official band binder as a YAML file committed to the relevant branch of `svpb-music`. The repository is the sole source of truth; the server reads this file from the working directory during the build — after the repo is pulled but before conversion results are persisted — and stores the binder definition in SQLite alongside the tune catalogue. |
+| B3 | Binder constructor (UI) | A web page that lets the pipe major assemble a binder interactively — browsing the tune catalogue, selecting parts, and setting the order — and then displays the resulting YAML for copy-paste into the repository. The page never commits anything itself; the pipe major remains in control of what lands in source control. |
+| B4 | Personal binder builder (UI) | A web page where any band member can browse the tune catalogue, select the specific parts they need, reorder them, name the binder, and request a PDF. No login required — a shareable URL encodes the binder definition. The binder constructor (B3) and the personal binder builder share the same tune-selection UI component; they differ only in their output (YAML vs. PDF). |
+| B5 | Personalised PDF generation | Given a binder definition, the server assembles the pre-built per-part PDFs for the selected entries and passes them to `SVGPDFKit` with a `startingPageNumber` offset, so footers reflect position within the *personal* binder rather than the master. No re-conversion from ABC is needed — the part PDFs produced during the build step are reused directly. |
+| B6 | Binder download link | The generated personalised PDF is served directly from the TNG server as a download. It is not pushed to Box (Box is for official band copies only). |
+| B7 | Binder URL sharing | A binder definition can be encoded in a URL so a band member can share their configuration with a section leader or print it later without re-selecting everything. |
+
+### Operations and Administration
+
+| # | Feature | Description |
+|---|---------|-------------|
+| O1 | Single-command startup | `docker compose up` starts the entire system. A `docker-compose.yml` is provided alongside the server image. |
+| O2 | Environment-variable configuration | All secrets and settings (GitHub webhook secret, Box credentials, Slack webhook URL, repo URL) are configured via environment variables or a `.env` file — no config files inside the container to edit. |
+| O3 | Automatic TLS | TLS termination is handled by [Caddy](https://caddyserver.com/) (included in the compose stack), which obtains and renews Let's Encrypt certificates automatically. No `certbot` cron jobs. |
+| O4 | Admin dashboard | A minimal password-protected web page showing: last build status, build history, links to build logs, and a trigger for a manual rebuild. |
+| O5 | Health endpoint | `GET /health` returns 200 OK with a JSON payload of server state, suitable for an uptime monitor. |
+| O6 | Graceful error handling | If Box or Slack are unreachable the build artefacts are retained locally and re-upload/re-notify is retried on the next build. The failure is surfaced in the admin dashboard. |
+
+---
+
+## Technical Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    docker compose stack                 │
+│                                                         │
+│  ┌──────────┐   HTTPS    ┌─────────────────────────┐   │
+│  │  Caddy   │ ◄────────► │      TNG Server         │   │
+│  │ (TLS +   │            │  (Swift / Vapor)        │   │
+│  │  proxy)  │            │                         │   │
+│  └──────────┘            │  • Webhook handler      │   │
+│                           │  • ABCKit  (ABC→SVG)   │   │
+│                           │  • SVGPDFKit (SVG→PDF) │   │
+│                           │  • Binder builder UI   │   │
+│                           │  • Admin dashboard     │   │
+│                           │  • Box & Slack clients │   │
+│                           └─────────────────────────┘   │
+│                                                         │
+│  Named volume: /music-workspace (cloned repo + PDFs)    │
+└─────────────────────────────────────────────────────────┘
+         │                        │
+         ▼                        ▼
+    Box Drive              Slack Channel
+  (official PDFs)         (build notices)
+```
+
+### Component Choices
+
+**Language / Framework:** Swift 6 + [Vapor 4](https://vapor.codes/)
+
+- Vapor is the most mature Swift web framework, with built-in async/await support, routing,
+  middleware, and WebSockets.
+- Swift compiles to a single native binary; the final Docker image can be kept very small using
+  a multi-stage build (builder stage: `swift:6.0`, runtime stage: `ubuntu:22.04`).
+- Vapor's structured concurrency model makes it straightforward to run background build jobs
+  without blocking the HTTP server.
+
+**ORM / Data Store:** SQLite via [Fluent](https://docs.vapor.codes/fluent/overview/) +
+[FluentSQLiteDriver](https://github.com/vapor/fluent-sqlite-driver)
+
+- Zero-dependency, zero-configuration relational store — part of the standard Vapor ecosystem.
+- Stores build history, logs, and the cached tune catalogue.
+- The database file lives on a Docker volume so it survives container restarts.
+
+**ABC → SVG Conversion:** [ABCKit](https://codeberg.org/sbeitzel/ABCKit)
+
+- Swift package that vendors the `abcm2ps` C library, so no external binary is needed.
+- Public API: `ABCConverter` actor; call `convert(_:includedFiles:)` with an ABC string and
+  receive SVG markup back as a `String`. Configured via `ABCConverter.Options` (output format,
+  page size, bagpipe format, etc.).
+- Output granularity: ABCKit is configured to emit **one SVG document per page**. This gives
+  SVGPDFKit a one-to-one mapping of SVG inputs to PDF pages, making `startingPageNumber`
+  injection precise and unambiguous.
+- The `Package.swift` platform declaration (`.macOS(.v13)`) does not exclude Linux; in Swift
+  Package Manager, specifying a minimum macOS version implies Linux compatibility for macOS ≥ 12.
+  No changes to the package manifest are required to use ABCKit in a Linux Docker image.
+
+**SVG → PDF Conversion and Binder Assembly:** [SVGPDFKit](https://github.com/sbeitzel/SVGPDFKit)
+
+- Swift package built on SwiftDraw + CoreGraphics; supports both macOS and Linux.
+- Public API: `SVGPDFConverter` struct; call `convert(sources:)` with an array of `SVGSource`
+  values (`.data(Data)` accepts in-memory SVG output directly from ABCKit) and receive a `Data`
+  blob containing the finished PDF.
+- `ConversionOptions.startingPageNumber` is used directly for personal binder page numbering:
+  each binder request calculates the correct offset and passes it in, so footer page numbers
+  automatically reflect position within the personal binder rather than the master.
+
+**TLS / Reverse Proxy:** [Caddy](https://caddyserver.com/)
+
+- Handles HTTPS automatically with zero configuration beyond a domain name.
+- Eliminates the certbot dependency from Gen.1.
+
+**HTTP Client (for Box and Slack):** [AsyncHTTPClient](https://github.com/swift-server/async-http-client)
+(part of the Swift on Server ecosystem)
+
+- Used to call the Box REST API directly via OAuth2 (the same credentials already in use by the
+  Gen.1 toolchain, so no new Box admin work is required). No official Swift SDK exists; the REST
+  API is straightforward and well-documented.
+- Used to POST to the Slack Incoming Webhook URL.
+
+**Slack Integration:** Incoming Webhook URL (no OAuth app required for notifications)
+
+---
+
+## Data Model
+
+Because the arrangement of a tune can differ from year to year (e.g. the last two measures of
+"Archie Beag" may be rewritten between 2025 and 2026), the printable identity of any piece of
+music is **tune slug + part name + branch**, where a git branch is the proxy for a year. The
+data model reflects this three-part key throughout.
+
+```
+Branch
+  name        TEXT  PRIMARY KEY   -- git branch name, used as year proxy, e.g. "2025", "2026"
+  last_built  DATETIME            -- timestamp of the most recent successful build
+  head_sha    TEXT                -- commit SHA at last successful build
+
+Tune
+  id          INTEGER PRIMARY KEY
+  branch      TEXT    NOT NULL    -- FK → Branch.name
+  slug        TEXT    NOT NULL    -- derived from ABC filename, e.g. "archie_beag"
+  title       TEXT                -- human-readable title from ABC T: field
+  abc_path    TEXT                -- path within the repo on this branch
+  updated_at  DATETIME
+  UNIQUE (branch, slug)           -- same tune name may exist on multiple branches
+
+Part
+  id          INTEGER PRIMARY KEY
+  tune_id     INTEGER NOT NULL    -- FK → Tune.id
+  name        TEXT    NOT NULL    -- e.g. "Melody", "Harmony 1", "Harmony 2"
+  pdf_path    TEXT                -- path to the pre-built single-part PDF for this branch
+  -- Composite natural key: (tune.branch, tune.slug, part.name)
+
+Build
+  id          INTEGER PRIMARY KEY
+  branch      TEXT    NOT NULL    -- FK → Branch.name
+  triggered   DATETIME
+  commit_sha  TEXT
+  status      TEXT                -- "running" | "success" | "failure"
+  log         TEXT
+  files       TEXT                -- JSON list of output PDF filenames
+
+BinderRequest
+  id          TEXT  PRIMARY KEY   -- short UUID, used in download URL
+  definition  TEXT                -- JSON-encoded binder spec (see below)
+  created_at  DATETIME
+  pdf_path    TEXT                -- NULL until generation completes
+```
+
+**Binder spec (JSON):**
+
+The `branch` field anchors the entire binder to a specific year's arrangements. Each entry
+identifies a tune by its slug (stable across years) and one or more parts by name. Together,
+`branch + tune_slug + part` uniquely identifies the exact PDF to include.
+
+```json
+{
+  "name": "My Binder - March 2026",
+  "branch": "2026",
+  "entries": [
+    { "tune_slug": "archie_beag",        "parts": ["Harmony 1"] },
+    { "tune_slug": "scotland_the_brave", "parts": ["Melody", "Harmony 1"] }
+  ]
+}
+```
+
+> **Note:** A binder is scoped to a single branch. If a musician needs tunes from two different
+> years (an unusual edge case), they would generate two separate binders and combine them
+> manually. Multi-branch binders are out of scope for TNG.
+
+---
+
+## API Surface
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/webhook/github` | GitHub push webhook receiver |
+| `GET`  | `/health` | Health check |
+| `GET`  | `/branches` | List all known branches (years) |
+| `GET`  | `/branches/{branch}/tunes` | List all tunes in the catalogue for a given branch |
+| `GET`  | `/branches/{branch}/tunes/{slug}` | Tune detail including available parts for that branch/year |
+| `GET`  | `/binder-constructor` | Interactive YAML generator for the pipe major |
+| `POST` | `/binders` | Submit a binder spec; returns a binder ID |
+| `GET`  | `/binders/{id}` | Binder status (pending / ready) |
+| `GET`  | `/binders/{id}/download` | Download the generated PDF |
+| `GET`  | `/admin` | Admin dashboard (password-protected) |
+| `GET`  | `/admin/builds` | Build history (password-protected) |
+| `POST` | `/admin/builds/trigger` | Manually trigger a rebuild (password-protected) |
+
+---
+
+## Implementation Phases
+
+### Phase 0 — Skeleton (1–2 days)
+
+- Repository scaffolding: `Package.swift`, multi-stage `Dockerfile`, `docker-compose.yml`,
+  `Caddyfile`.
+- Vapor app with `/health` and `/webhook/github` stub routes.
+- GitHub webhook validation (HMAC-SHA256 using `Crypto` from Swift Crypto).
+- Environment variable loading and validation at startup (using Vapor's `Environment` API).
+- README with setup instructions (< 10 steps, no specialist knowledge required).
+
+### Phase 1 — Automated Build Pipeline (C1–C6) (3–5 days)
+
+- Implement `git pull` / `git clone` of `svpb-music` via `Foundation.Process` on webhook receipt.
+- For each ABC file in the working directory, call `ABCKit.ABCConverter` (configured for one SVG
+  per page) to produce an ordered sequence of per-page SVG strings. Pass them as `[SVGSource]`
+  to `SVGPDFKit.SVGPDFConverter` to produce a single per-part PDF; write it to the named volume.
+  Both conversions run in a Swift structured-concurrency task group so files are processed
+  concurrently without blocking the HTTP server.
+- Persist `Build` records and captured diagnostic output in SQLite via Fluent models.
+- Upload output PDFs to Box using direct REST API calls via AsyncHTTPClient.
+- Post Slack notification (success/failure summary) via Incoming Webhook.
+- Admin dashboard (Leaf templated HTML) with build history and log viewer.
+
+### Phase 2 — Tune Catalogue and Binder UI (B1–B6) (5–7 days)
+
+- ABC file parser (pure Swift) to extract tune titles and part names from `T:` and `V:` fields;
+  upsert `Branch`, `Tune`, and `Part` Fluent models after each successful build, keyed on
+  `(branch, slug)` so that year-specific arrangements are stored and queried independently.
+- Shared tune-selection UI component (plain HTML + vanilla JavaScript, rendered via
+  [Leaf](https://docs.vapor.codes/leaf/overview/) templates): browse/search tunes, select parts,
+  drag to reorder, name the binder. Used by both pages below.
+- **Binder constructor page** (`/binder-constructor`): renders the shared component with a
+  "Generate YAML" button. On click, the YAML is rendered in a read-only `<textarea>` for the
+  pipe major to copy and commit to the `svpb-music` branch. No server-side state is created.
+- **Personal binder builder page** (`/binder-builder`): renders the same shared component with
+  a "Generate PDF" button. Also produces a shareable URL (Base64-encoded binder spec) so the
+  configuration can be bookmarked or sent to a section leader. Polls `GET /binders/{id}` for
+  completion, then presents a download link.
+- Binder generation backend:
+  - Look up the pre-built per-part PDF paths from the `Part` table for each binder entry.
+  - Feed the PDFs as `SVGSource.fileURL` inputs to `SVGPDFConverter`, setting
+    `startingPageNumber` to the correct offset for this binder (calculated by summing page
+    counts of preceding entries).
+  - Persist the completed `BinderRequest` record; serve the PDF via a streaming Vapor `Response`.
+
+### Phase 3 — Hardening and Handoff (2–3 days)
+
+- Retry logic for Box uploads and Slack notifications.
+- Admin dashboard: manual rebuild trigger, binder PDF cache cleanup.
+- Integration test suite covering the webhook → build → Box flow (using a local mock).
+- Operator runbook: how to deploy, how to rotate secrets, how to update ABCKit or SVGPDFKit dependencies.
+- Migration notes from Gen.1 (what to decommission, how to redirect the GitHub webhook).
+
+---
+
+## Out of Scope (for now)
+
+- **User authentication for band members** — the binder URL is the "credential"; there are no accounts.
+- **Editing ABC files through the UI** — source control (GitHub) remains the authoring tool.
+- **Mobile app** — the web UI should be usable on a phone, but no native app is planned.
+- **Multiple bands / repositories** — TNG is scoped to SVPB. Multi-tenancy is a future concern.
+
+---
+
+## Success Criteria
+
+- A new operator can go from zero to a running TNG server in under 30 minutes following the README.
+- A push to `svpb-music` on GitHub results in updated PDFs in Box and a Slack message within
+  5 minutes, with no manual intervention.
+- A band member can generate and download a personalised binder PDF in under 2 minutes from a
+  browser, without installing any software.
+- The system can be maintained (upgraded, restarted, debugged) by anyone comfortable with
+  `docker compose` — no Linux administration expertise required.
+
+---
+
+[svpb-music]: https://github.com/SVPB/svpb-music
+[ABCKit]: https://codeberg.org/sbeitzel/ABCKit
+[SVGPDFKit]: https://github.com/sbeitzel/SVGPDFKit
