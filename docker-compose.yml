@@ -1,0 +1,36 @@
+services:
+
+  tng:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_PATH=/app/data/tng.sqlite
+    volumes:
+      - tng-data:/app/data
+      - music-workspace:/workspace
+    # TNG is not exposed directly — all traffic flows through Caddy.
+    expose:
+      - "8080"
+    depends_on:
+      - caddy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - DOMAIN=${DOMAIN}
+
+volumes:
+  tng-data:
+  music-workspace:
+  caddy-data:
+  caddy-config:

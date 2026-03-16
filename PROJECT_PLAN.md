@@ -160,6 +160,11 @@ Because the arrangement of a tune can differ from year to year (e.g. the last tw
 music is **tune slug + part name + branch**, where a git branch is the proxy for a year. The
 data model reflects this three-part key throughout.
 
+> **Note on UUIDs and SQLite:** SQLite has no native UUID column type. All UUID values are
+> stored as TEXT (the standard lowercase hyphenated representation, e.g.
+> `550e8400-e29b-41d4-a716-446655440000`). Fluent's SQLite driver handles this conversion
+> automatically when the Swift model field is typed as `UUID`.
+
 ```
 Branch
   name        TEXT  PRIMARY KEY   -- git branch name, used as year proxy, e.g. "2025", "2026"
@@ -167,24 +172,24 @@ Branch
   head_sha    TEXT                -- commit SHA at last successful build
 
 Tune
-  id          INTEGER PRIMARY KEY
-  branch      TEXT    NOT NULL    -- FK → Branch.name
-  slug        TEXT    NOT NULL    -- derived from ABC filename, e.g. "archie_beag"
+  id          TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
+  branch      TEXT  NOT NULL      -- FK → Branch.name
+  slug        TEXT  NOT NULL      -- derived from ABC filename, e.g. "archie_beag"
   title       TEXT                -- human-readable title from ABC T: field
   abc_path    TEXT                -- path within the repo on this branch
   updated_at  DATETIME
   UNIQUE (branch, slug)           -- same tune name may exist on multiple branches
 
 Part
-  id          INTEGER PRIMARY KEY
-  tune_id     INTEGER NOT NULL    -- FK → Tune.id
-  name        TEXT    NOT NULL    -- e.g. "Melody", "Harmony 1", "Harmony 2"
+  id          TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
+  tune_id     TEXT  NOT NULL      -- UUID FK → Tune.id
+  name        TEXT  NOT NULL      -- e.g. "Melody", "Harmony 1", "Harmony 2"
   pdf_path    TEXT                -- path to the pre-built single-part PDF for this branch
   -- Composite natural key: (tune.branch, tune.slug, part.name)
 
 Build
-  id          INTEGER PRIMARY KEY
-  branch      TEXT    NOT NULL    -- FK → Branch.name
+  id          TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
+  branch      TEXT  NOT NULL      -- FK → Branch.name
   triggered   DATETIME
   commit_sha  TEXT
   status      TEXT                -- "running" | "success" | "failure"
@@ -192,7 +197,7 @@ Build
   files       TEXT                -- JSON list of output PDF filenames
 
 BinderRequest
-  id          TEXT  PRIMARY KEY   -- short UUID, used in download URL
+  id          TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
   definition  TEXT                -- JSON-encoded binder spec (see below)
   created_at  DATETIME
   pdf_path    TEXT                -- NULL until generation completes
