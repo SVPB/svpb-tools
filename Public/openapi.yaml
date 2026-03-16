@@ -1,0 +1,1041 @@
+openapi: 3.1.0
+
+info:
+  title: SVPB Tools — Next Generation (TNG)
+  version: 0.1.0
+  description: |
+    REST API for the SVPB TNG music distribution server.
+
+    The server converts ABC notation to PDF in-process (via ABCKit → SVGPDFKit),
+    distributes official band PDFs to Box, and allows band members to assemble
+    personalised binders containing only the parts they need.
+
+    ## Authentication
+
+    ### Admin endpoints
+    Admin endpoints (`/admin/*`) require a valid session cookie (`vapor-session`),
+    issued by `GET /auth/token/{token}`. The authenticated user must additionally
+    have the `admin` role; authenticated non-admins receive 403.
+
+    ### Obtaining a session
+    Send any direct message to the TNG Slack bot. It will reply with a one-time
+    login link valid for 10 minutes. Clicking the link calls
+    `GET /auth/token/{token}`, which sets the session cookie.
+
+    ### GitHub webhook
+    The `/webhook/github` endpoint validates an HMAC-SHA256 signature supplied
+    by GitHub in the `X-Hub-Signature-256` header, using the shared secret
+    configured in `GITHUB_WEBHOOK_SECRET`.
+
+    ### Slack Events API
+    The `/slack/events` endpoint validates an HMAC-SHA256 signature supplied by
+    Slack in the `X-Slack-Signature` header, using `SLACK_SIGNING_SECRET`.
+
+    ### All other endpoints
+    No authentication is required. The binder download URL is the sole "credential"
+    for a generated binder — share or protect it as appropriate.
+
+servers:
+  - url: https://{domain}
+    description: Production server
+    variables:
+      domain:
+        default: https://musictools.siliconvalleypipeband.com
+        description: Hostname configured in the server's DOMAIN environment variable
+
+tags:
+  - name: health
+    description: Server status
+  - name: catalogue
+    description: Tune and branch catalogue (populated after each build)
+  - name: binders
+    description: Personalised binder creation and download
+  - name: webhook
+    description: GitHub push event receiver
+  - name: auth
+    description: Session authentication via Slack magic-link
+  - name: admin
+    description: Administrative operations (session auth, admin role required)
+
+# ---------------------------------------------------------------------------
+# Reusable components
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: vapor-session
+      description: |
+        Session cookie issued by `GET /auth/token/{token}` after a successful
+        magic-link login. The authenticated user must have the `admin` role to
+        access `/admin/*` endpoints.
+
+  schemas:
+
+    # -- Catalogue ----------------------------------------------------------
+
+    Branch:
+      type: object
+      required: [name, head_sha]
+      properties:
+        name:
+          type: string
+          description: Git branch name, used as a proxy for year.
+          example: "2026"
+        last_built:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp of the most recent successful build, or null if never built.
+          example: "2026-03-13T10:00:00Z"
+        head_sha:
+          type: string
+          description: Commit SHA at the most recent successful build.
+          example: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
+    TuneSummary:
+      type: object
+      description: Abbreviated tune record for use in list responses.
+      required: [slug, title, branch, part_names]
+      properties:
+        slug:
+          type: string
+          description: Stable identifier derived from the ABC filename.
+          example: archie_beag
+        title:
+          type: string
+          description: "Human-readable title from the ABC T: field."
+          example: Archie Beag
+        branch:
+          type: string
+          description: Branch (year) this arrangement belongs to.
+          example: "2026"
+        part_names:
+          type: array
+          items:
+            type: string
+          description: Names of all available parts for this tune on this branch.
+          example: ["Melody", "Harmony 1", "Harmony 2"]
+
+    TuneDetail:
+      type: object
+      description: Full tune record including part metadata.
+      required: [slug, title, branch, abc_path, updated_at, parts]
+      properties:
+        slug:
+          type: string
+          example: archie_beag
+        title:
+          type: string
+          example: Archie Beag
+        branch:
+          type: string
+          example: "2026"
+        abc_path:
+          type: string
+          description: Path to the ABC source file within the svpb-music repository.
+          example: tunes/archie_beag.abc
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-03-13T10:00:00Z"
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Part'
+
+    Part:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: "Part name as declared in the ABC V: field."
+          example: Harmony 1
+
+    # -- Binders ------------------------------------------------------------
+
+    BinderEntry:
+      type: object
+      required: [tune_slug, parts]
+      properties:
+        tune_slug:
+          type: string
+          description: Slug of the tune to include.
+          example: archie_beag
+        parts:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: One or more part names to include from this tune.
+          example: ["Harmony 1"]
+
+    BinderSpec:
+      type: object
+      description: |
+        The complete definition of a binder. Submitted by the client to request
+        PDF generation. Also the format produced by the binder constructor page
+        for commit to svpb-music.
+      required: [name, branch, entries]
+      properties:
+        name:
+          type: string
+          description: Human-readable name for this binder.
+          example: "Alice's Binder - March 2026"
+        branch:
+          type: string
+          description: |
+            Branch (year) from which all tunes will be drawn. A binder is
+            scoped to a single branch.
+          example: "2026"
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/BinderEntry'
+          description: Ordered list of tune/part selections.
+
+    BinderStatus:
+      type: string
+      enum: [pending, ready, failed]
+      description: |
+        - `pending` — PDF generation is queued or in progress.
+        - `ready`   — PDF is available for download.
+        - `failed`  — Generation failed; the binder should be resubmitted.
+
+    BinderResponse:
+      type: object
+      required: [id, status, created_at, definition]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for this binder request. Used in download URL.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          $ref: '#/components/schemas/BinderStatus'
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-03-13T12:34:56Z"
+        definition:
+          $ref: '#/components/schemas/BinderSpec'
+
+    # -- Builds -------------------------------------------------------------
+
+    BuildStatus:
+      type: string
+      enum: [running, success, failure]
+
+    BuildSummary:
+      type: object
+      required: [id, branch, triggered, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        branch:
+          type: string
+          example: "2026"
+        triggered:
+          type: string
+          format: date-time
+          example: "2026-03-13T10:00:00Z"
+        commit_sha:
+          type: [string, 'null']
+          example: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        status:
+          $ref: '#/components/schemas/BuildStatus'
+        files:
+          type: array
+          items:
+            type: string
+          description: List of PDF filenames produced by this build.
+          example: ["archie_beag_melody.pdf", "archie_beag_harmony1.pdf"]
+
+    BuildDetail:
+      allOf:
+        - $ref: '#/components/schemas/BuildSummary'
+        - type: object
+          properties:
+            log:
+              type: [string, 'null']
+              description: Captured stdout/stderr from the build process.
+
+    # -- Health -------------------------------------------------------------
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+          description: |
+            - `ok`      — All subsystems are operational.
+            - `degraded` — The server is running but a subsystem (Box, Slack, etc.)
+              is unreachable or has a pending retry.
+        version:
+          type: string
+          description: Server version string.
+          example: "0.1.0"
+        branches:
+          type: array
+          items:
+            type: string
+          description: Branches (years) for which at least one successful build exists.
+          example: ["2025", "2026"]
+        last_build:
+          oneOf:
+            - $ref: '#/components/schemas/BuildSummary'
+            - type: 'null'
+          description: Most recent build across all branches, or null if none.
+
+    # -- Authentication -----------------------------------------------------
+
+    UserRole:
+      type: string
+      enum: [admin, member]
+      description: |
+        - `admin`  — Can view build logs, trigger rebuilds, and manage users.
+        - `member` — Authenticated band member; no administrative privileges.
+
+    User:
+      type: object
+      required: [id, slack_user_id, display_name, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        slack_user_id:
+          type: string
+          description: Slack user ID, e.g. `U012AB3CD`.
+          example: "U012AB3CD"
+        display_name:
+          type: string
+          description: Slack display name captured at last login.
+          example: "Alice McBagpipe"
+        role:
+          $ref: '#/components/schemas/UserRole'
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-01-15T09:00:00Z"
+        last_login_at:
+          type: [string, 'null']
+          format: date-time
+          example: "2026-03-13T12:34:56Z"
+
+    UserCreateRequest:
+      type: object
+      required: [slack_user_id, role]
+      properties:
+        slack_user_id:
+          type: string
+          description: Slack user ID of the person to add, e.g. `U012AB3CD`.
+          example: "U098ZY7WX"
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    UserRoleUpdate:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    # -- Errors -------------------------------------------------------------
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error description.
+          example: "Tune 'archie_beag' not found on branch '2026'."
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # -- Health ---------------------------------------------------------------
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: Server health check
+      tags: [health]
+      responses:
+        '200':
+          description: Server is running (check `status` field for subsystem health).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                version: "0.1.0"
+                branches: ["2025", "2026"]
+                last_build:
+                  id: 42
+                  branch: "2026"
+                  triggered: "2026-03-13T10:00:00Z"
+                  commit_sha: "a1b2c3d4"
+                  status: success
+                  files: ["archie_beag_melody.pdf"]
+
+  # -- Catalogue ------------------------------------------------------------
+
+  /branches:
+    get:
+      operationId: listBranches
+      summary: List all branches that have been built
+      tags: [catalogue]
+      responses:
+        '200':
+          description: Array of branches, ordered most-recently-built first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Branch'
+              example:
+                - name: "2026"
+                  last_built: "2026-03-13T10:00:00Z"
+                  head_sha: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+                - name: "2025"
+                  last_built: "2025-09-01T08:00:00Z"
+                  head_sha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+  /branches/{branch}/tunes:
+    get:
+      operationId: listTunes
+      summary: List all tunes in the catalogue for a given branch
+      tags: [catalogue]
+      parameters:
+        - name: branch
+          in: path
+          required: true
+          description: Branch (year) name, e.g. `2026`.
+          schema:
+            type: string
+          example: "2026"
+      responses:
+        '200':
+          description: Array of tune summaries for this branch, ordered alphabetically by title.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TuneSummary'
+        '404':
+          description: Branch not found or not yet built.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /branches/{branch}/tunes/{slug}:
+    get:
+      operationId: getTune
+      summary: Tune detail including available parts
+      tags: [catalogue]
+      parameters:
+        - name: branch
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "2026"
+        - name: slug
+          in: path
+          required: true
+          description: Tune slug derived from the ABC filename, e.g. `archie_beag`.
+          schema:
+            type: string
+          example: archie_beag
+      responses:
+        '200':
+          description: Full tune record with part list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TuneDetail'
+              example:
+                slug: archie_beag
+                title: Archie Beag
+                branch: "2026"
+                abc_path: tunes/archie_beag.abc
+                updated_at: "2026-03-13T10:00:00Z"
+                parts:
+                  - name: Melody
+                  - name: Harmony 1
+                  - name: Harmony 2
+        '404':
+          description: Tune or branch not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # -- Binders --------------------------------------------------------------
+
+  /binders:
+    post:
+      operationId: createBinder
+      summary: Submit a binder spec and request PDF generation
+      tags: [binders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BinderSpec'
+            example:
+              name: "Alice's Binder - March 2026"
+              branch: "2026"
+              entries:
+                - tune_slug: archie_beag
+                  parts: ["Harmony 1"]
+                - tune_slug: scotland_the_brave
+                  parts: ["Melody", "Harmony 1"]
+      responses:
+        '202':
+          description: |
+            Binder request accepted. PDF generation runs asynchronously.
+            Poll `GET /binders/{id}` until `status` is `ready` or `failed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BinderResponse'
+        '400':
+          description: Invalid binder spec (missing required fields, unknown tune slug, etc.).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Branch not found or not yet built.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /binders/{id}:
+    get:
+      operationId: getBinderStatus
+      summary: Poll binder generation status
+      tags: [binders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Binder request UUID returned by `POST /binders`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current status of the binder request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BinderResponse'
+        '404':
+          description: Binder ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /binders/{id}/download:
+    get:
+      operationId: downloadBinder
+      summary: Download the generated binder PDF
+      tags: [binders]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The generated PDF.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: Suggests a filename for the download.
+              schema:
+                type: string
+              example: 'attachment; filename="alices-binder-march-2026.pdf"'
+        '404':
+          description: Binder ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Binder generation is still pending or has failed; no PDF is available yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # -- Webhook --------------------------------------------------------------
+
+  /webhook/github:
+    post:
+      operationId: githubWebhook
+      summary: GitHub push event webhook receiver
+      tags: [webhook]
+      description: |
+        Receives `push` events from GitHub. The request must carry a valid
+        `X-Hub-Signature-256` HMAC header computed with the shared webhook
+        secret. Requests that fail signature validation are rejected with 401.
+
+        On receipt of a valid push event the server queues a build for the
+        affected branch and returns immediately. The build runs asynchronously.
+      parameters:
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          description: HMAC-SHA256 signature of the raw request body, prefixed with `sha256=`.
+          schema:
+            type: string
+          example: "sha256=d57c10f5ad..."
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          description: GitHub event type. Only `push` events are acted upon; others return 200 and are ignored.
+          schema:
+            type: string
+          example: push
+      requestBody:
+        required: true
+        description: Standard GitHub push event payload.
+        content:
+          application/json:
+            schema:
+              type: object
+              description: |
+                GitHub push event payload. TNG inspects `ref` (to determine the
+                branch) and `head_commit.id` (to record the SHA). All other
+                fields are ignored.
+              required: [ref, head_commit]
+              properties:
+                ref:
+                  type: string
+                  description: Full ref of the pushed branch, e.g. `refs/heads/2026`.
+                  example: refs/heads/2026
+                head_commit:
+                  type: object
+                  required: [id]
+                  properties:
+                    id:
+                      type: string
+                      description: SHA of the head commit.
+                      example: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+      responses:
+        '202':
+          description: Webhook accepted; build queued.
+        '200':
+          description: Webhook received but ignored (event type other than `push`).
+        '401':
+          description: Signature validation failed.
+        '400':
+          description: Malformed payload.
+
+  # -- Authentication -------------------------------------------------------
+
+  /slack/events:
+    post:
+      operationId: slackEvents
+      summary: Slack Events API receiver
+      tags: [auth]
+      description: |
+        Receives events from Slack. Two event types are handled:
+
+        - `url_verification` — Slack sends this once when the endpoint is first
+          registered. The server responds with the `challenge` value verbatim.
+        - `event_callback` with `type: message` in a direct-message channel —
+          Triggers magic-link token generation and a bot reply.
+
+        All other event types are acknowledged with 200 and ignored.
+
+        Each request must carry a valid `X-Slack-Signature` header (HMAC-SHA256
+        of `v0:timestamp:body` using `SLACK_SIGNING_SECRET`). Requests that fail
+        signature validation are rejected with 401.
+      parameters:
+        - name: X-Slack-Signature
+          in: header
+          required: true
+          description: Slack request signature, prefixed with `v0=`.
+          schema:
+            type: string
+          example: "v0=a2114d57b48eac39b9ad189dd8316235a7b4a8d21a10bd27519666489c69b503"
+        - name: X-Slack-Request-Timestamp
+          in: header
+          required: true
+          description: Unix timestamp used in signature computation.
+          schema:
+            type: string
+          example: "1531420618"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  description: Slack event envelope type.
+                  example: event_callback
+                challenge:
+                  type: string
+                  description: Present only when `type` is `url_verification`.
+                  example: "3eZbrw1aBm2rZgRNFdxV2595E9CY3gmdALWMmHkvFXO7tYXAYM8P"
+      responses:
+        '200':
+          description: |
+            Event acknowledged. For `url_verification`, the response body is
+            the `challenge` string. For all other events, the body is empty.
+        '401':
+          description: Signature validation failed.
+        '400':
+          description: Malformed payload.
+
+  /auth/token/{token}:
+    get:
+      operationId: redeemLoginToken
+      summary: Redeem a magic-link login token
+      tags: [auth]
+      description: |
+        Validates the token, marks it used, and sets a `vapor-session` cookie
+        identifying the user. Redirects to `/admin` if the user has the `admin`
+        role, or to `/` otherwise.
+
+        Tokens are single-use and expire after 10 minutes.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: The UUID token from the bot's login link.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '302':
+          description: Token valid; session cookie set; redirecting.
+          headers:
+            Set-Cookie:
+              description: The `vapor-session` session cookie.
+              schema:
+                type: string
+            Location:
+              schema:
+                type: string
+        '404':
+          description: Token not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Token has already been used or has expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # -- Admin ----------------------------------------------------------------
+
+  /admin:
+    get:
+      operationId: adminDashboard
+      summary: Admin dashboard
+      tags: [admin]
+      description: |
+        Returns an HTML page showing last build status, build history, and a
+        manual rebuild trigger. Requires session authentication with admin role.
+      security:
+        - sessionAuth: []
+      responses:
+        '200':
+          description: HTML dashboard page.
+          content:
+            text/html:
+              schema:
+                type: string
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+
+  /admin/builds:
+    get:
+      operationId: listBuilds
+      summary: Build history
+      tags: [admin]
+      description: Returns the build history for all branches. Requires session authentication with admin role.
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: branch
+          in: query
+          required: false
+          description: Filter results to a specific branch.
+          schema:
+            type: string
+          example: "2026"
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of builds to return. Defaults to 20.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          description: Number of builds to skip (for pagination).
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: Array of build summaries, ordered most-recent first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BuildSummary'
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+
+  /admin/builds/{id}:
+    get:
+      operationId: getBuild
+      summary: Build detail including full log
+      tags: [admin]
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Full build record including captured log output.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildDetail'
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+        '404':
+          description: Build not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/builds/trigger:
+    post:
+      operationId: triggerBuild
+      summary: Manually trigger a build for a branch
+      tags: [admin]
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch]
+              properties:
+                branch:
+                  type: string
+                  description: Branch to rebuild.
+                  example: "2026"
+      responses:
+        '202':
+          description: Build queued. Returns the new build record (status will be `running`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildSummary'
+        '400':
+          description: Missing or invalid branch name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+        '409':
+          description: A build for this branch is already running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/users:
+    get:
+      operationId: listUsers
+      summary: List all users and their roles
+      tags: [admin]
+      security:
+        - sessionAuth: []
+      responses:
+        '200':
+          description: Array of users, ordered by creation date.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+    post:
+      operationId: createUser
+      summary: Create a new user by Slack user ID
+      tags: [admin]
+      description: |
+        Adds a user to TNG by their Slack user ID without requiring them to log
+        in first. Useful for pre-provisioning accounts or granting admin rights
+        before a person has sent their first message to the bot.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+            example:
+              slack_user_id: "U098ZY7WX"
+              role: member
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Missing or invalid fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+        '409':
+          description: A user with this Slack user ID already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /admin/users/{id}:
+    patch:
+      operationId: updateUserRole
+      summary: Update a user's role
+      tags: [admin]
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the user to update.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRoleUpdate'
+      responses:
+        '200':
+          description: Updated user record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid role value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+        '403':
+          description: An admin cannot demote themselves.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteUser
+      summary: Remove a user
+      tags: [admin]
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the user to remove.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: User removed. No content returned.
+        '401':
+          description: Missing session cookie, expired session, or insufficient role (admin required).
+        '403':
+          description: An admin cannot remove themselves.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
