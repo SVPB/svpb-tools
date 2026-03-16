@@ -1,7 +1,7 @@
 # SVPB Tools — Next Generation (TNG)
 
 A self-contained web service that automates sheet music distribution for the
-[Silicon Valley Pipe Band](https://svpb.org). When a musician pushes updated ABC notation to
+[Silicon Valley Pipe Band](https://siliconvalleypipeband.org). When a musician pushes updated ABC notation to
 GitHub, TNG converts it to PDF in-process and uploads the results to the band's Box folder, then
 notifies Slack. Band members can also use the built-in binder builder to generate a personalised
 PDF containing only the parts they need, with page numbers that reflect their own binder.
@@ -32,7 +32,9 @@ band binder, which is then committed to `svpb-music`.
 - A domain name pointed at the server's public IP address (required for automatic TLS).
 - A GitHub webhook secret (any strong random string).
 - Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).
-- A Slack Incoming Webhook URL.
+- Your own Slack user ID (to seed the initial admin account on first startup).
+- A Slack app with bot and Events API capabilities (see [Slack setup](#slack-setup) below).
+- Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).
 
 ---
 
@@ -43,15 +45,17 @@ each value before starting the stack.
 
 | Variable | Description |
 |---|---|
-| `DOMAIN` | Public hostname, e.g. `music.svpb.org` — used by Caddy for TLS |
+| `DOMAIN` | Public hostname, e.g. `musictools.siliconvalleypipeband.com` — used by Caddy for TLS |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
 | `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
 | `BOX_CLIENT_SECRET` | Box OAuth2 application client secret |
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |
-| `BOX_FOLDER_ID` | ID of the Box folder to upload PDFs into |
-| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL |
-| `ADMIN_PASSWORD` | Password for the `/admin` dashboard |
+| `BOX_FOLDER_ID` | ID of the top-level `pipe_music` Box folder; TNG creates year subfolders inside it automatically |
+| `SLACK_BOT_TOKEN` | Bot token (`xoxb-…`) for sending login links and build notifications |
+| `SLACK_SIGNING_SECRET` | Signing secret for verifying inbound Events API payloads |
+| `SLACK_WEBHOOK_URL` | Incoming Webhook URL for posting build notifications |
+| `INITIAL_ADMIN_SLACK_USER_ID` | Slack user ID granted admin access on first startup |
 
 ---
 
@@ -161,23 +165,52 @@ In the `svpb-music` repository settings on GitHub, add a webhook:
 
 ---
 
-### Slack incoming webhook
+### Slack setup
 
-TNG posts build notifications to a single Slack channel using an Incoming Webhook URL — a
-self-contained URL that authorises posting to one channel without requiring a full OAuth app.
+TNG uses a single Slack app for three purposes: posting build notifications (Incoming Webhook),
+receiving direct messages to issue login links (Bot + Events API), and reading the sender's
+identity. All three are configured in the same app.
+
+**Create the app:**
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App → From
-   scratch**. Give it a name (e.g. "SVPB Music Bot") and choose the SVPB Slack workspace.
-2. In the left sidebar, click **Incoming Webhooks**, then toggle **Activate Incoming Webhooks**
-   to On.
-3. Click **Add New Webhook to Workspace**, choose the channel where build notifications should
-   appear (e.g. `#music-updates`), and click **Allow**.
-4. Copy the Webhook URL that appears — it looks like
-   `https://hooks.slack.com/services/T.../B.../...`. This is the value of `SLACK_WEBHOOK_URL`
-   in your `.env`.
+   scratch**. Name it "SVPB Music Bot" and choose the SVPB workspace.
 
-The webhook URL is tied to the channel you chose. If you ever need to change the channel,
-generate a new webhook URL and update `SLACK_WEBHOOK_URL`.
+**Bot token and scopes:**
+
+2. In the left sidebar, click **OAuth & Permissions**. Under **Bot Token Scopes**, add:
+   - `chat:write` — to send login links and build notifications
+   - `im:read` — to receive direct messages
+   - `users:read` — to look up the sender's display name
+3. Click **Install to Workspace** and authorise. Copy the **Bot User OAuth Token**
+   (`xoxb-…`) — this is `SLACK_BOT_TOKEN`.
+
+**Signing secret:**
+
+4. In the left sidebar, click **Basic Information**. Under **App Credentials**, copy the
+   **Signing Secret** — this is `SLACK_SIGNING_SECRET`.
+
+**Incoming Webhook (build notifications):**
+
+5. In the left sidebar, click **Incoming Webhooks** and toggle it **On**. Click
+   **Add New Webhook to Workspace**, choose the channel for build notifications
+   (e.g. `#music-updates`), and click **Allow**. Copy the Webhook URL — this is
+   `SLACK_WEBHOOK_URL`.
+
+**Events API (login bot):**
+
+6. In the left sidebar, click **Event Subscriptions** and toggle **Enable Events** to On.
+7. In **Request URL**, enter `https://<your-domain>/slack/events`. Slack will immediately
+   send a `url_verification` challenge — TNG responds automatically, and Slack will show
+   a green **Verified** badge.
+8. Under **Subscribe to bot events**, add `message.im` (direct messages to the bot).
+9. Click **Save Changes**, then reinstall the app if prompted.
+
+**Initial admin:**
+
+10. Find your own Slack user ID: open your Slack profile, click **⋯ More**, then
+    **Copy member ID**. Set `INITIAL_ADMIN_SLACK_USER_ID` to that value. On first startup
+    TNG creates your admin account automatically — no password required.
 
 ---
 
@@ -223,8 +256,15 @@ the terminal. Copy it into `BOX_REFRESH_TOKEN` in your `.env`.
 
 **Finding the Box folder ID:**
 
-Navigate to the music folder in [box.com](https://box.com). The folder ID is the number at
-the end of the URL: `https://app.box.com/folder/`**`123456789`**. This is `BOX_FOLDER_ID`.
+Navigate to the **`pipe_music`** folder in [box.com](https://box.com) — this is the top-level
+folder that contains the year folders (e.g. `2025`, `2026`). The folder ID is the number at
+the end of the URL: `https://app.box.com/folder/`**`123456789`**. Set this as `BOX_FOLDER_ID`.
+
+TNG will automatically create a subfolder for each git branch (year) the first time it builds
+that branch, and will upload PDFs into the appropriate year folder. For example, after a push
+to the `2026` branch, PDFs appear at `pipe_music/2026/` in Box. The Gen.1 `full_band`, `g3`,
+and `g4` subdirectory structure is not used; all PDFs for a year sit directly in the year
+folder.
 
 ---
 

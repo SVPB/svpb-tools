@@ -40,7 +40,7 @@ The two headline improvements over Gen.1 are:
 | C1 | GitHub webhook receiver | An HTTPS endpoint that accepts `push` events from GitHub. Validates the shared webhook secret before acting. |
 | C2 | Repository sync | On a valid webhook event, pull (or clone) the latest state of `svpb-music` into a working directory on the server. |
 | C3 | In-process conversion | For each changed ABC file, invoke `ABCKit` (configured for one SVG per page) to produce a sequence of per-page SVG documents, then pass them as an ordered list of `SVGSource` values to `SVGPDFKit` to produce a per-part PDF. Both steps run inside the server process — no external tools or containers required. |
-| C4 | Box upload | Walk the output directory for freshly-built PDFs and upload them to the configured Box folder via the Box API. Replaces any previous version of the same file. |
+| C4 | Box upload | Walk the output directory for freshly-built PDFs and upload them to Box via the Box REST API. PDFs are placed in a year-named subfolder of `pipe_music` (e.g. `pipe_music/2026/`) matching the git branch. If the subfolder does not yet exist it is created automatically via the Box API before uploading. Replaces any previous version of the same file within that folder. |
 | C5 | Slack notification | Post a build-summary message to the configured Slack channel (success / failure, list of changed files, link to Box folder). |
 | C6 | Build log retention | Store the stdout/stderr of each build locally, accessible via the admin UI, so failures can be diagnosed without SSH access. |
 
@@ -56,6 +56,20 @@ The two headline improvements over Gen.1 are:
 | B6 | Binder download link | The generated personalised PDF is served directly from the TNG server as a download. It is not pushed to Box (Box is for official band copies only). |
 | B7 | Binder URL sharing | A binder definition can be encoded in a URL so a band member can share their configuration with a section leader or print it later without re-selecting everything. |
 
+### Authentication — Slack-based session login
+
+Band members and administrators authenticate by messaging the TNG Slack bot. No passwords are
+managed by TNG itself; identity is delegated entirely to the band's Slack workspace.
+
+| # | Feature | Description |
+|---|---------|-------------|
+| S1 | Slack Events API listener | `POST /slack/events` receives message events from Slack. Request signatures are validated with HMAC-SHA256 using `SLACK_SIGNING_SECRET` — the same approach already used for the GitHub webhook. On first registration, Slack sends a `url_verification` challenge that the endpoint echoes back. |
+| S2 | Magic-link token generation | When the bot receives any direct message it generates a single-use `LoginToken` (UUID, 10-minute expiry, tied to the sender's Slack `user_id`) and replies with a personalised login link. |
+| S3 | Token redemption and session | `GET /auth/token/{token}` validates the token (exists, not expired, not yet used), marks it used, and sets a signed session cookie identifying the user by Slack `user_id`. |
+| S4 | Session-protected admin routes | All `/admin/*` routes require a valid session cookie. The authenticated user must have the `admin` role; others receive 403. This replaces HTTP Basic Auth entirely. |
+| S5 | User table with roles | A `User` record is created automatically on first login if one does not already exist for that Slack `user_id`. Users have a role of either `admin` or `member`. Existing admins can promote or demote users through the admin UI. |
+| S6 | Initial admin bootstrap | On first startup, if the `User` table is empty, TNG creates one `admin` User for the Slack user ID specified in `INITIAL_ADMIN_SLACK_USER_ID`. This replaces the `ADMIN_PASSWORD` environment variable from earlier designs. |
+
 ### Operations and Administration
 
 | # | Feature | Description |
@@ -63,7 +77,7 @@ The two headline improvements over Gen.1 are:
 | O1 | Single-command startup | `docker compose up` starts the entire system. A `docker-compose.yml` is provided alongside the server image. |
 | O2 | Environment-variable configuration | All secrets and settings (GitHub webhook secret, Box credentials, Slack webhook URL, repo URL) are configured via environment variables or a `.env` file — no config files inside the container to edit. |
 | O3 | Automatic TLS | TLS termination is handled by [Caddy](https://caddyserver.com/) (included in the compose stack), which obtains and renews Let's Encrypt certificates automatically. No `certbot` cron jobs. |
-| O4 | Admin dashboard | A minimal password-protected web page showing: last build status, build history, links to build logs, and a trigger for a manual rebuild. |
+| O4 | Admin dashboard | A minimal web page showing: last build status, build history, links to build logs, and a trigger for a manual rebuild. Access is controlled by session authentication (see S1–S6 below). |
 | O5 | Health endpoint | `GET /health` returns 200 OK with a JSON payload of server state, suitable for an uptime monitor. |
 | O6 | Graceful error handling | If Box or Slack are unreachable the build artefacts are retained locally and re-upload/re-notify is retried on the next build. The failure is surfaced in the admin dashboard. |
 
@@ -102,7 +116,7 @@ The two headline improvements over Gen.1 are:
 - Vapor is the most mature Swift web framework, with built-in async/await support, routing,
   middleware, and WebSockets.
 - Swift compiles to a single native binary; the final Docker image can be kept very small using
-  a multi-stage build (builder stage: `swift:6.0`, runtime stage: `ubuntu:22.04`).
+  a multi-stage build (builder stage: `swift:6.2-noble`, runtime stage: `swift:6.2-noble-slim`).
 - Vapor's structured concurrency model makes it straightforward to run background build jobs
   without blocking the HTTP server.
 
@@ -201,6 +215,21 @@ BinderRequest
   definition  TEXT                -- JSON-encoded binder spec (see below)
   created_at  DATETIME
   pdf_path    TEXT                -- NULL until generation completes
+
+User
+  id              TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
+  slack_user_id   TEXT  NOT NULL      -- Slack user ID, e.g. "U012AB3CD"
+  display_name    TEXT                -- Slack display name at time of last login
+  role            TEXT  NOT NULL      -- "admin" | "member"
+  created_at      DATETIME
+  last_login_at   DATETIME
+  UNIQUE (slack_user_id)
+
+LoginToken
+  id              TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite; also the URL token
+  slack_user_id   TEXT  NOT NULL      -- Slack user ID this token was issued for
+  expires_at      DATETIME NOT NULL
+  used_at         DATETIME            -- NULL until redeemed; single-use enforcement
 ```
 
 **Binder spec (JSON):**
@@ -239,9 +268,15 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 | `POST` | `/binders` | Submit a binder spec; returns a binder ID |
 | `GET`  | `/binders/{id}` | Binder status (pending / ready) |
 | `GET`  | `/binders/{id}/download` | Download the generated PDF |
-| `GET`  | `/admin` | Admin dashboard (password-protected) |
-| `GET`  | `/admin/builds` | Build history (password-protected) |
-| `POST` | `/admin/builds/trigger` | Manually trigger a rebuild (password-protected) |
+| `POST` | `/slack/events` | Slack Events API receiver (bot messages + url_verification challenge) |
+| `GET`  | `/auth/token/{token}` | Redeem a login token; sets session cookie |
+| `GET`  | `/admin` | Admin dashboard (session auth, admin role required) |
+| `GET`  | `/admin/builds` | Build history (session auth, admin role required) |
+| `POST` | `/admin/builds/trigger` | Manually trigger a rebuild (session auth, admin role required) |
+| `GET`    | `/admin/users` | List users and roles (session auth, admin role required) |
+| `POST`   | `/admin/users` | Create a new user by Slack user ID with a specified role (session auth, admin role required) |
+| `PATCH`  | `/admin/users/{id}` | Update a user's role (session auth, admin role required) |
+| `DELETE` | `/admin/users/{id}` | Remove a user (session auth, admin role required) |
 
 ---
 
@@ -268,6 +303,18 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 - Upload output PDFs to Box using direct REST API calls via AsyncHTTPClient.
 - Post Slack notification (success/failure summary) via Incoming Webhook.
 - Admin dashboard (Leaf templated HTML) with build history and log viewer.
+- Slack Events API handler (`POST /slack/events`): verify Slack request signature (HMAC-SHA256
+  with `SLACK_SIGNING_SECRET`), handle `url_verification` challenge, dispatch DM events to the
+  token-generation flow.
+- `LoginToken` and `User` Fluent models; database migrations for both.
+- On first startup (empty `User` table), seed an admin `User` from `INITIAL_ADMIN_SLACK_USER_ID`.
+- Token generation: create a `LoginToken`, call `chat.postMessage` via AsyncHTTPClient to reply
+  with the login link.
+- Token redemption (`GET /auth/token/{token}`): validate and mark used; establish Vapor session.
+- Session middleware applied to all `/admin/*` routes; role check (`admin`) returns 403 for
+  authenticated non-admins.
+- User management endpoints (`GET /admin/users`, `POST /admin/users`, `PATCH /admin/users/{id}`,
+  `DELETE /admin/users/{id}`) for creating, promoting, demoting, and removing members.
 
 ### Phase 2 — Tune Catalogue and Binder UI (B1–B6) (5–7 days)
 

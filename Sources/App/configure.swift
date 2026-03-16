@@ -25,8 +25,10 @@ private let requiredEnvironmentVariables: [String] = [
     "BOX_CLIENT_SECRET",
     "BOX_REFRESH_TOKEN",
     "BOX_FOLDER_ID",
+    "SLACK_BOT_TOKEN",
+    "SLACK_SIGNING_SECRET",
     "SLACK_WEBHOOK_URL",
-    "ADMIN_PASSWORD",
+    "INITIAL_ADMIN_SLACK_USER_ID",
 ]
 
 public func configure(_ app: Application) async throws {
