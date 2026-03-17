@@ -28,14 +28,29 @@ final class Part: Model, @unchecked Sendable {
     @OptionalField(key: "pdf_path")
     var pdfPath: String?
 
+    /// Ordered paths to the per-page SVG files for this part.
+    /// Each entry is an absolute path to a `.svg` file on disk.
+    /// Used by the binder assembly pipeline to re-render pages with a
+    /// custom `startingPageNumber` offset via SVGPDFKit.
+    /// Nil for Part records created before this column was added.
+    @OptionalField(key: "svg_paths")
+    var svgPaths: [String]?
+
     // MARK: - Lifecycle
 
     init() {}
 
-    init(id: UUID? = nil, tune: Tune, name: String, pdfPath: String? = nil) throws {
+    init(
+        id: UUID? = nil,
+        tune: Tune,
+        name: String,
+        pdfPath: String? = nil,
+        svgPaths: [String]? = nil
+    ) throws {
         self.id = id
         self.$tune.id = try tune.requireID()
         self.name = name
         self.pdfPath = pdfPath
+        self.svgPaths = svgPaths
     }
 }

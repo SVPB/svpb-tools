@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Personal Binder Builder — SVPB TNG</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
+    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    header nav a { color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.9rem; }
+    header nav a:hover { color: #fff; }
+    main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+    h2     { font-size: 1.05rem; margin: 0 0 0.75rem; }
+    .card  { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    .full-width { grid-column: 1 / -1; }
+    label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
+    select, input[type=text] {
+      width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px;
+      font-size: 0.9rem; margin-bottom: 0.75rem;
+    }
+    .tune-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 4px; }
+    .tune-list li { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; }
+    .tune-list li:last-child { border-bottom: none; }
+    .tune-list li.added { background: #f0fdf4; }
+    .tune-list li button { font-size: 0.75rem; padding: 2px 8px; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
+    .tune-list li button:hover { background: #eee; }
+    .binder-entries { list-style: none; margin: 0; padding: 0; }
+    .binder-entries li { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; background: #f9f9f9; border-radius: 4px; margin-bottom: 4px; }
+    .binder-entries li button { font-size: 0.75rem; padding: 2px 8px; border: 1px solid #f99; border-radius: 3px; cursor: pointer; background: #fff; color: #c00; }
+    .binder-entries li button:hover { background: #fee; }
+    .move-btn { background: none!important; border: none!important; color: #888!important; cursor: pointer; font-size: 1rem; padding: 0 4px!important; }
+    .part-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .part-tag  { background: #e0e7ff; color: #3730a3; border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; cursor: pointer; }
+    .part-tag.selected { background: #3730a3; color: #fff; }
+    .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+    .btn-primary { background: #1a1a2e; color: #fff; }
+    .btn-primary:hover { background: #2a2a4e; }
+    .btn-share   { background: #e0e7ff; color: #3730a3; border: 1px solid #a5b4fc; }
+    .btn-share:hover { background: #c7d2fe; }
+    #status-msg { font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+    #status-msg.error { color: #c00; }
+    #status-msg.info  { color: #166534; }
+    #download-section { display: none; margin-top: 1rem; padding: 1rem; background: #f0fdf4; border-radius: 6px; border: 1px solid #bbf7d0; }
+    #download-section a { font-weight: 600; color: #166534; }
+    .progress { font-size: 0.85rem; color: #666; }
+    .share-url { font-family: monospace; font-size: 0.8rem; word-break: break-all; background: #f5f5f5; padding: 0.4rem; border-radius: 4px; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎵 SVPB TNG — Personal Binder Builder</h1>
+  <nav><a href="/binder-constructor">Binder Constructor</a></nav>
+</header>
+
+<main>
+
+  <!-- Left column: tune catalogue -->
+  <div>
+    <div class="card" style="margin-bottom:1rem;">
+      <h2>Binder Settings</h2>
+      <label for="sel-branch">Year (branch)</label>
+      <select id="sel-branch">
+        <option value="">Loading…</option>
+      </select>
+      <label for="binder-name">Your binder name</label>
+      <input type="text" id="binder-name" placeholder="e.g. My 2026 Binder" value="">
+    </div>
+
+    <div class="card">
+      <h2>Tune Catalogue</h2>
+      <input type="text" id="search-tunes" placeholder="Search tunes…" style="margin-bottom:0.5rem;">
+      <ul class="tune-list" id="tune-list">
+        <li style="color:#888;">Select a year above to load tunes.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Right column: selected entries + download -->
+  <div>
+    <div class="card">
+      <h2>Your Binder</h2>
+      <ul class="binder-entries" id="binder-entries">
+        <li id="empty-msg" style="color:#888; background:none; justify-content:center;">
+          No tunes selected yet.
+        </li>
+      </ul>
+
+      <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="requestPDF()">Generate PDF</button>
+        <button class="btn btn-share" onclick="shareURL()">Share URL</button>
+        <button class="btn" onclick="clearBinder()">Clear</button>
+      </div>
+
+      <div id="status-msg"></div>
+
+      <div id="download-section">
+        <strong>Your binder is ready!</strong><br>
+        <a id="download-link" href="#">Download PDF</a>
+      </div>
+
+      <div id="share-section" style="display:none;margin-top:1rem;">
+        <label>Shareable URL:</label>
+        <div class="share-url" id="share-url-text"></div>
+        <button class="btn" style="margin-top:0.4rem;font-size:0.8rem;padding:0.25rem 0.75rem;"
+                onclick="copyShareURL()">Copy</button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer style="text-align:center;padding:2rem;font-size:0.8rem;color:#999;">
+  SVPB TNG v#(appVersion)
+</footer>
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let allTunes = [];
+let tuneDetails = {};
+let binderEntries = [];
+let pollTimer = null;
+
+// ── Initialise from shared URL if present ──────────────────────────────────
+const INITIAL_SPEC = '#if(encodedSpec)##(encodedSpec)##endif#';
+
+(async () => {
+  try {
+    const res = await fetch('/branches');
+    const branches = await res.json();
+    const sel = document.getElementById('sel-branch');
+    sel.innerHTML = '<option value="">— select a year —</option>';
+    branches.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.name;
+      opt.textContent = b.name;
+      sel.appendChild(opt);
+    });
+
+    // Restore from shared URL spec if provided
+    if (INITIAL_SPEC) {
+      try {
+        const spec = JSON.parse(atob(INITIAL_SPEC));
+        if (spec.branch && sel.querySelector(`option[value="${spec.branch}"]`)) {
+          sel.value = spec.branch;
+          document.getElementById('binder-name').value = spec.name || '';
+          await loadTunes(spec.branch);
+          // Restore entries
+          for (const entry of (spec.entries || [])) {
+            const tune = allTunes.find(t => t.slug === entry.tune_slug);
+            if (tune) {
+              const detail = await getTuneDetail(entry.tune_slug);
+              binderEntries.push({
+                tuneSlug: entry.tune_slug,
+                title: tune.title || tune.slug,
+                parts: entry.parts || detail.parts.map(p => p.name),
+              });
+            }
+          }
+          renderBinder();
+        }
+      } catch (_) { /* ignore malformed spec */ }
+    } else if (branches.length === 1) {
+      sel.value = branches[0].name;
+      await loadTunes(branches[0].name);
+    }
+  } catch (e) {
+    setStatus('Failed to load branches: ' + e.message, 'error');
+  }
+})();
+
+document.getElementById('sel-branch').addEventListener('change', async e => {
+  binderEntries = [];
+  renderBinder();
+  if (e.target.value) await loadTunes(e.target.value);
+});
+
+document.getElementById('search-tunes').addEventListener('input', e => {
+  renderTuneList(e.target.value.toLowerCase());
+});
+
+// ── Data loading ────────────────────────────────────────────────────────────
+async function loadTunes(branch) {
+  const list = document.getElementById('tune-list');
+  list.innerHTML = '<li style="color:#888;">Loading…</li>';
+  allTunes = [];
+  tuneDetails = {};
+  try {
+    const res = await fetch(`/branches/${encodeURIComponent(branch)}/tunes`);
+    allTunes = await res.json();
+    renderTuneList('');
+  } catch (e) {
+    list.innerHTML = '<li style="color:#c00;">Failed to load tunes.</li>';
+  }
+}
+
+async function getTuneDetail(slug) {
+  if (tuneDetails[slug]) return tuneDetails[slug];
+  const branch = document.getElementById('sel-branch').value;
+  const res = await fetch(`/branches/${encodeURIComponent(branch)}/tunes/${encodeURIComponent(slug)}`);
+  const detail = await res.json();
+  tuneDetails[slug] = detail;
+  return detail;
+}
+
+// ── Render helpers ─────────────────────────────────────────────────────────
+function renderTuneList(filter) {
+  const list = document.getElementById('tune-list');
+  if (!allTunes.length) {
+    list.innerHTML = '<li style="color:#888;">No tunes found.</li>';
+    return;
+  }
+  const visible = filter
+    ? allTunes.filter(t => (t.title || t.slug).toLowerCase().includes(filter))
+    : allTunes;
+  list.innerHTML = '';
+  visible.forEach(tune => {
+    const added = binderEntries.some(e => e.tuneSlug === tune.slug);
+    const li = document.createElement('li');
+    if (added) li.className = 'added';
+    const label = document.createElement('span');
+    label.textContent = tune.title || tune.slug;
+    const btn = document.createElement('button');
+    btn.textContent = added ? 'Added ✓' : '+ Add';
+    btn.disabled = added;
+    btn.addEventListener('click', () => addTune(tune.slug, tune.title || tune.slug));
+    li.appendChild(label);
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+function renderBinder() {
+  const ul = document.getElementById('binder-entries');
+  const empty = document.getElementById('empty-msg');
+  ul.innerHTML = '';
+  if (binderEntries.length === 0) {
+    ul.appendChild(empty);
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  binderEntries.forEach((entry, idx) => {
+    const li = document.createElement('li');
+    const up = document.createElement('button');
+    up.className = 'move-btn'; up.textContent = '↑';
+    up.addEventListener('click', () => { if (idx > 0) { [binderEntries[idx-1], binderEntries[idx]] = [binderEntries[idx], binderEntries[idx-1]]; renderBinder(); } });
+    const dn = document.createElement('button');
+    dn.className = 'move-btn'; dn.textContent = '↓';
+    dn.addEventListener('click', () => { if (idx < binderEntries.length-1) { [binderEntries[idx], binderEntries[idx+1]] = [binderEntries[idx+1], binderEntries[idx]]; renderBinder(); } });
+    const info = document.createElement('div');
+    info.style.flex = '1';
+    info.style.marginLeft = '4px';
+    const title = document.createElement('div');
+    title.textContent = entry.title;
+    const tags = document.createElement('div');
+    tags.className = 'part-tags';
+    if (tuneDetails[entry.tuneSlug]) {
+      tuneDetails[entry.tuneSlug].parts.forEach(p => {
+        const tag = document.createElement('span');
+        tag.className = 'part-tag' + (entry.parts.includes(p.name) ? ' selected' : '');
+        tag.textContent = p.name;
+        tag.addEventListener('click', () => togglePart(entry.tuneSlug, p.name));
+        tags.appendChild(tag);
+      });
+    }
+    info.appendChild(title);
+    info.appendChild(tags);
+    const rm = document.createElement('button');
+    rm.textContent = '✕';
+    rm.addEventListener('click', () => { binderEntries.splice(idx, 1); renderBinder(); renderTuneList(document.getElementById('search-tunes').value.toLowerCase()); });
+    li.appendChild(up);
+    li.appendChild(dn);
+    li.appendChild(info);
+    li.appendChild(rm);
+    ul.appendChild(li);
+  });
+  renderTuneList(document.getElementById('search-tunes').value.toLowerCase());
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+async function addTune(slug, title) {
+  if (binderEntries.some(e => e.tuneSlug === slug)) return;
+  try {
+    const detail = await getTuneDetail(slug);
+    binderEntries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
+    renderBinder();
+  } catch (e) {
+    setStatus('Failed to load tune detail: ' + e.message, 'error');
+  }
+}
+
+function togglePart(slug, partName) {
+  const entry = binderEntries.find(e => e.tuneSlug === slug);
+  if (!entry) return;
+  const idx = entry.parts.indexOf(partName);
+  if (idx >= 0) {
+    entry.parts.splice(idx, 1);
+    if (entry.parts.length === 0) entry.parts.push(partName);
+  } else {
+    entry.parts.push(partName);
+  }
+  renderBinder();
+}
+
+function clearBinder() {
+  binderEntries = [];
+  document.getElementById('download-section').style.display = 'none';
+  document.getElementById('share-section').style.display = 'none';
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  setStatus('');
+  renderBinder();
+}
+
+async function requestPDF() {
+  const branch = document.getElementById('sel-branch').value;
+  const name = document.getElementById('binder-name').value.trim() || 'My Binder';
+  if (!branch) { setStatus('Please select a year first.', 'error'); return; }
+  if (binderEntries.length === 0) { setStatus('Please add at least one tune.', 'error'); return; }
+
+  document.getElementById('download-section').style.display = 'none';
+  setStatus('Submitting binder request…', 'info');
+
+  const spec = buildSpec(branch, name);
+
+  try {
+    const res = await fetch('/binders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spec),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      setStatus('Error: ' + txt, 'error');
+      return;
+    }
+    const dto = await res.json();
+    setStatus('Generating your PDF… this may take a moment.', 'info');
+    pollForCompletion(dto.id);
+  } catch (e) {
+    setStatus('Request failed: ' + e.message, 'error');
+  }
+}
+
+function pollForCompletion(binderId) {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/binders/${binderId}`);
+      const dto = await res.json();
+      if (dto.status === 'ready') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        setStatus('', '');
+        const dl = document.getElementById('download-section');
+        dl.style.display = '';
+        document.getElementById('download-link').href = dto.downloadURL;
+      }
+    } catch (_) { /* keep polling */ }
+  }, 2000);
+}
+
+function shareURL() {
+  const branch = document.getElementById('sel-branch').value;
+  const name = document.getElementById('binder-name').value.trim() || 'My Binder';
+  if (!branch || binderEntries.length === 0) {
+    setStatus('Select a year and add tunes first.', 'error');
+    return;
+  }
+  const spec = buildSpec(branch, name);
+  const encoded = btoa(JSON.stringify(spec));
+  const url = `${location.origin}/binder-builder?spec=${encodeURIComponent(encoded)}`;
+  document.getElementById('share-url-text').textContent = url;
+  document.getElementById('share-section').style.display = '';
+}
+
+function copyShareURL() {
+  const text = document.getElementById('share-url-text').textContent;
+  navigator.clipboard.writeText(text).then(() => setStatus('URL copied!', 'info'));
+}
+
+function buildSpec(branch, name) {
+  return {
+    name,
+    branch,
+    entries: binderEntries.map(e => ({ tune_slug: e.tuneSlug, parts: e.parts })),
+  };
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = cls ? cls : '';
+}
+</script>
+
+</body>
+</html>

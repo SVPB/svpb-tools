@@ -32,7 +32,19 @@ private let requiredEnvironmentVariables: [String] = [
     "INITIAL_ADMIN_SLACK_USER_ID",
 ]
 
+/// Returns `true` when the process was invoked as `TNG box-auth …`
+private var isBoxAuthMode: Bool {
+    CommandLine.arguments.contains(BoxAuthCommand.name)
+}
+
 public func configure(_ app: Application) async throws {
+    // ── Register commands ───────────────────────────────────────────────────
+    app.asyncCommands.use(BoxAuthCommand(), as: BoxAuthCommand.name)
+
+    // In box-auth mode, skip full configuration — the command only needs the
+    // event loop and its own minimal HTTP setup.
+    if isBoxAuthMode { return }
+
     // ── Environment variable validation ────────────────────────────────────
     if app.environment != .testing {
         for key in requiredEnvironmentVariables {
@@ -104,6 +116,8 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(CreateBuild())
     app.migrations.add(CreateBinderRequest())
     app.migrations.add(CreateLoginToken())
+    // Phase 2
+    app.migrations.add(AddSvgPathsToPart())
 }
 
 // MARK: - Service initialisation
@@ -145,6 +159,8 @@ private func initServices(_ app: Application) {
         slackService:       slackService,
         musicWorkspacePath: musicWorkspacePath
     )
+
+    app.binderService = BinderService(musicWorkspacePath: musicWorkspacePath)
 }
 
 // MARK: - Admin bootstrap

@@ -7,8 +7,10 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
-    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; }
+    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
     header h1 { margin: 0; font-size: 1.2rem; }
+    nav a  { color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.9rem; margin-right: 1.25rem; }
+    nav a:hover { color: #fff; }
     main   { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
     .meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; background: #fff; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
     .meta-grid dt { font-weight: 600; color: #555; }
@@ -26,6 +28,10 @@
 
 <header>
   <h1>🎵 SVPB TNG — Build Detail</h1>
+  <nav>
+    <a href="/admin">Dashboard</a>
+    <a href="/admin/users">Users</a>
+  </nav>
 </header>
 
 <main>

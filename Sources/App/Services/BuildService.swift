@@ -74,6 +74,16 @@ actor BuildService {
             let sha = try await gitService.headSHA(in: branchDir)
             log += "[git] HEAD is \(sha)\n"
 
+            // ── Step 2b: ensure Branch record exists before Tunes are created ──
+            let branchRecord: Branch
+            if let existing = try await Branch.find(branch, on: db) {
+                branchRecord = existing
+            } else {
+                let fresh = Branch(name: branch)
+                try await fresh.save(on: db)
+                branchRecord = fresh
+            }
+
             // ── Step 3: discover .abc files ─────────────────────────────────
             let abcFiles = try discoverABCFiles(in: branchDir)
             log += "[build] Found \(abcFiles.count) .abc file(s)\n"
@@ -122,12 +132,26 @@ actor BuildService {
                     logger.warning("[BuildService] Box upload failed for \(stem).pdf: \(error)")
                 }
 
-                // Phase 2 TODO: upsert Tune and Part catalogue records here,
-                // parsing T:/V: fields from `abcContent`.
+                // ── Catalogue population ────────────────────────────────────
+                do {
+                    try await upsertCatalogueEntry(
+                        branch: branch,
+                        branchRecord: branchRecord,
+                        stem: stem,
+                        abcPath: abcURL.path,
+                        abcContent: abcContent,
+                        pdfPath: pdfURL.path,
+                        svgPaths: svgFiles.map(\.path),
+                        db: db
+                    )
+                    log += "[catalogue] Upserted catalogue for \(stem)\n"
+                } catch {
+                    log += "[catalogue] Upsert failed for \(stem): \(error)\n"
+                    logger.warning("[BuildService] Catalogue upsert failed for \(stem): \(error)")
+                }
             }
 
-            // ── Step 6: upsert Branch record ────────────────────────────────
-            let branchRecord = try await Branch.find(branch, on: db) ?? Branch(name: branch)
+            // ── Step 6: update Branch record timestamps ──────────────────────
             branchRecord.lastBuilt = Date()
             branchRecord.headSha = sha
             try await branchRecord.save(on: db)
@@ -160,6 +184,63 @@ actor BuildService {
 
             try? await slackService.postBuildNotification(
                 branch: branch, status: .failure, files: [])
+        }
+    }
+
+    // MARK: - Catalogue population
+
+    /// Upserts `Tune` and `Part` records for one converted ABC file.
+    private func upsertCatalogueEntry(
+        branch: String,
+        branchRecord: Branch,
+        stem: String,
+        abcPath: String,
+        abcContent: String,
+        pdfPath: String,
+        svgPaths: [String],
+        db: Database
+    ) async throws {
+        let parsed = ABCParser.parse(abcContent)
+
+        // Upsert Tune
+        let tune: Tune
+        if let existing = try await Tune.query(on: db)
+            .filter(\.$branch.$id == branch)
+            .filter(\.$slug == stem)
+            .first() {
+            existing.title = parsed.title
+            existing.abcPath = abcPath
+            try await existing.save(on: db)
+            tune = existing
+        } else {
+            let fresh = Tune()
+            fresh.$branch.id = branch
+            fresh.slug = stem
+            fresh.title = parsed.title
+            fresh.abcPath = abcPath
+            try await fresh.save(on: db)
+            tune = fresh
+        }
+
+        let tuneID = try tune.requireID()
+
+        // Upsert Parts
+        for partName in parsed.parts {
+            if let existing = try await Part.query(on: db)
+                .filter(\.$tune.$id == tuneID)
+                .filter(\.$name == partName)
+                .first() {
+                existing.pdfPath = pdfPath
+                existing.svgPaths = svgPaths
+                try await existing.save(on: db)
+            } else {
+                let part = Part()
+                part.$tune.id = tuneID
+                part.name = partName
+                part.pdfPath = pdfPath
+                part.svgPaths = svgPaths
+                try await part.save(on: db)
+            }
         }
     }
 

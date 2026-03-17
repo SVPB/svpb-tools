@@ -22,6 +22,8 @@
     .status-success { color: #166534; }
     .status-failure { color: #991b1b; }
     a { color: #1a1a2e; }
+    nav a  { color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.9rem; margin-right: 1.25rem; }
+    nav a:hover { color: #fff; }
     form.logout { display: inline; }
     button.logout { background: none; border: 1px solid rgba(255,255,255,.4); color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
   </style>
@@ -30,7 +32,11 @@
 
 <header>
   <h1>🎵 SVPB TNG Admin</h1>
-  <div style="display:flex;align-items:center;gap:1rem;">
+  <div style="display:flex;align-items:center;gap:1.5rem;">
+    <nav>
+      <a href="/admin">Dashboard</a>
+      <a href="/admin/users">Users</a>
+    </nav>
     <span class="meta">Signed in as #(currentUser)</span>
     <form class="logout" method="POST" action="/admin/logout">
       <button class="logout" type="submit">Sign out</button>

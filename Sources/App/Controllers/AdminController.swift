@@ -133,14 +133,52 @@ struct AdminController: RouteCollection {
         return req.redirect(to: "/admin/login")
     }
 
-    // MARK: - User management API
+    // MARK: - User management
 
+    /// `GET /admin/users` — HTML page listing all users with role and delete controls.
     @Sendable
-    func listUsers(_ req: Request) async throws -> [UserDTO] {
+    func listUsers(_ req: Request) async throws -> View {
         let users = try await User.query(on: req.db)
             .sort(\.$createdAt, .ascending)
             .all()
-        return try users.map { try UserDTO(from: $0) }
+
+        struct UserRow: Encodable {
+            let id: String
+            let slackUserId: String
+            let displayName: String
+            let role: String
+            let createdAt: String
+            let lastLoginAt: String
+            let isSelf: Bool
+        }
+
+        struct UsersContext: Encodable {
+            let appVersion: String
+            let currentUser: String
+            let users: [UserRow]
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        let selfId = req.authenticatedUser?.id?.uuidString ?? ""
+
+        let rows = try users.map { u in
+            UserRow(
+                id: try u.requireID().uuidString,
+                slackUserId: u.slackUserId,
+                displayName: u.displayName ?? u.slackUserId,
+                role: u.role.rawValue,
+                createdAt: u.createdAt.map { isoFormatter.string(from: $0) } ?? "—",
+                lastLoginAt: u.lastLoginAt.map { isoFormatter.string(from: $0) } ?? "never",
+                isSelf: try u.requireID().uuidString == selfId
+            )
+        }
+
+        let ctx = UsersContext(
+            appVersion: AppVersion.current,
+            currentUser: req.authenticatedUser?.slackUserId ?? "",
+            users: rows
+        )
+        return try await req.view.render("admin/users", ctx)
     }
 
     @Sendable

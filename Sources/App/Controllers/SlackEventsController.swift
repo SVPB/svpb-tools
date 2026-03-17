@@ -66,13 +66,19 @@ struct SlackEventsController: RouteCollection {
 
         do {
             // Ensure the user exists in our database.
-            guard (try await User.query(on: db)
+            guard let user = try await User.query(on: db)
                 .filter(\.$slackUserId == slackUserId)
-                .first()) != nil
+                .first()
             else {
                 // Unknown user — silently ignore (prevents user enumeration).
                 logger.info("[Slack] Unknown user \(slackUserId) — not in user table")
                 return
+            }
+
+            // Refresh the display name from Slack.
+            if let name = await app.slackService.fetchDisplayName(for: slackUserId) {
+                user.displayName = name
+                try await user.save(on: db)
             }
 
             // Generate a single-use token valid for 10 minutes.
