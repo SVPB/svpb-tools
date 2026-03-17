@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Dashboard — SVPB TNG</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
+    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    header .meta { font-size: 0.85rem; opacity: 0.7; }
+    main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
+    .branches { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    .badge { background: #1a1a2e; color: #fff; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; }
+    table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
+    th     { background: #eee; font-weight: 600; }
+    tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+    .status-running { color: #b45309; }
+    .status-success { color: #166534; }
+    .status-failure { color: #991b1b; }
+    a { color: #1a1a2e; }
+    form.logout { display: inline; }
+    button.logout { background: none; border: 1px solid rgba(255,255,255,.4); color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎵 SVPB TNG Admin</h1>
+  <div style="display:flex;align-items:center;gap:1rem;">
+    <span class="meta">Signed in as #(currentUser)</span>
+    <form class="logout" method="POST" action="/admin/logout">
+      <button class="logout" type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+
+<main>
+
+  <h2>Known Branches</h2>
+  <div class="branches">
+    #for(branch in branchNames):
+      <span class="badge">#(branch)</span>
+    #endfor
+    #if(branchNames.isEmpty):
+      <em style="color:#888">No builds yet.</em>
+    #endif
+  </div>
+
+  <h2>Recent Builds</h2>
+  #if(builds.isEmpty):
+    <p style="color:#888">No builds recorded yet. Push to <code>svpb-music</code> to trigger the first build.</p>
+  #else:
+  <table>
+    <thead>
+      <tr>
+        <th>Branch</th>
+        <th>Triggered</th>
+        <th>Status</th>
+        <th>Files</th>
+        <th>Log</th>
+      </tr>
+    </thead>
+    <tbody>
+      #for(build in builds):
+      <tr>
+        <td><strong>#(build.branch)</strong></td>
+        <td>#(build.triggeredISO)</td>
+        <td class="status-#(build.status)">#(build.status)</td>
+        <td>#(build.fileCount)</td>
+        <td><a href="/admin/builds/#(build.id)">View</a></td>
+      </tr>
+      #endfor
+    </tbody>
+  </table>
+  #endif
+
+</main>
+
+<footer style="text-align:center;padding:2rem;font-size:0.8rem;color:#999;">
+  SVPB TNG v#(appVersion)
+</footer>
+
+</body>
+</html>

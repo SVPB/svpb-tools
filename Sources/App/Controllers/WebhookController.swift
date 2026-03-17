@@ -45,7 +45,15 @@ struct WebhookController: RouteCollection {
 
         req.logger.info("Push event received for branch '\(branch)' at \(payload.headCommit.id).")
 
-        // Phase 1: queue build job here.
+        // Fire the build in the background; return 202 immediately.
+        let db = req.db
+        let logger = req.logger
+        let commitSha = payload.headCommit.id
+        let buildService = req.application.buildService
+        Task {
+            await buildService.runBuild(
+                branch: branch, commitSha: commitSha, db: db, logger: logger)
+        }
 
         return Response(status: .accepted)
     }
