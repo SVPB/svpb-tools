@@ -21,3 +21,5 @@ dev.sh
 ng_tunnel.sh
 dev.dockerfile
 .claude
+run_server.sh
+.env.development

@@ -12,6 +12,7 @@ RUN swift package resolve
 COPY Sources ./Sources
 COPY Tests ./Tests
 COPY Resources ./Resources
+COPY Public ./Public
 RUN swift build -c release --product TNG 2>&1
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
@@ -21,11 +22,13 @@ FROM swift:6.2-noble-slim AS runtime
 #   - libssl / libcurl: for AsyncHTTPClient / Vapor
 #   - git: for cloning and pulling svpb-music on webhook events
 #   - ca-certificates: for TLS verification against Box and Slack APIs
+#   - librsvg2-bin: for converting SVG to PDF when we don't have CoreGraphics
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libssl3 \
       libcurl4 \
       libxml2 \
+      librsvg2-bin \
       ca-certificates \
       git \
  && rm -rf /var/lib/apt/lists/*
@@ -34,6 +37,7 @@ WORKDIR /app
 
 COPY --from=build /build/.build/release/TNG .
 COPY --from=build /build/Resources ./Resources
+COPY --from=build /build/Public ./Public
 
 # The database and built PDFs live on the named volume, not in the image.
 RUN mkdir -p data

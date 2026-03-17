@@ -29,6 +29,16 @@ struct AuthController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid token format.")
         }
 
+        // Slack (and other chat clients) prefetch link previews using a bot User-Agent.
+        // Respond with a neutral page without consuming the token.
+        if let ua = req.headers.first(name: .userAgent), ua.contains("Slackbot") {
+            return Response(
+                status: .ok,
+                headers: ["Content-Type": "text/html; charset=utf-8"],
+                body: .init(string: "<html><body>TNG login link</body></html>")
+            )
+        }
+
         // Look up the token.
         guard let token = try await LoginToken.find(tokenUUID, on: req.db) else {
             return invalidTokenResponse(req)

@@ -12,7 +12,7 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.21.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "5.0.0"),
         .package(url: "https://codeberg.org/sbeitzel/ABCKit.git", from: "0.1.1"),
-        .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.1.1"),
+        .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.2.0"),
     ],
     targets: [
         // Library target — imported by both the executable and the test target.
