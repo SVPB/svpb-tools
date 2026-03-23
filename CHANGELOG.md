@@ -67,9 +67,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+#### SVG/PDF conversion pipeline
+
+- Fixed a build/sync failure ("At least one SVGSource must be provided" / rsvg-convert XML
+  parse error) caused by a fundamental misreading of the ABCKit return value, compounded by
+  two secondary bugs:
+  - **All pages mishandled** — ABCKit returns *all* pages as concatenated `<svg>…</svg>`
+    documents in the return value (not just page 1 as the C header comment implies). The
+    original code passed this to `collectSVGFiles` unused, so nothing was converted. The
+    intermediate fix wrote the entire multi-page blob as a single file, giving rsvg-convert
+    invalid XML ("Extra content at the end of the document").
+  - **Wrong output file naming** — `svgOutputDirectory` was set to `outputDir + "/"` (trailing
+    slash), which caused any disk files to use the generic `Out` prefix rather than the tune
+    stem. The stem-prefix filter in `collectSVGFiles` therefore never matched any files.
+  - **Dangerous cross-tune fallback** — when no stem-matching files were found,
+    `collectSVGFiles` fell back to returning *all* SVGs in the directory, which would have
+    mixed pages from different tunes on multi-file builds.
+- The fix drops `svgOutputDirectory` entirely. ABCKit's return value (all pages concatenated)
+  is split on `</svg>` into individual documents and each is written to its own numbered file
+  (`<stem>000.svg`, `<stem>001.svg`, …). `collectSVGFiles` is replaced by `splitSVGPages`.
+
 - Magic-link tokens are no longer consumed by Slack's link-preview bot. `AuthController` now
   returns a neutral HTML response (without marking the token used) when the request `User-Agent`
   contains `Slackbot`.
+
+#### Persistent sessions
+
+- Switched from in-memory sessions to Fluent-backed sessions (`app.sessions.use(.fluent)`).
+  Session cookies now survive server restarts — authenticated admin users no longer need to
+  re-login after a container restart or redeploy.
+- `SessionRecord.migration` added as the first migration so the `_fluent_sessions` table is
+  always present before any route handler attempts to read a session.
 
 #### Box OAuth2 helper — `--redirect-base-url` option
 
@@ -84,6 +112,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   The path `/box-callback` is appended automatically. When the option is omitted the behaviour
   is unchanged: the redirect URI defaults to `http://localhost:<port>`.
+
+#### Catalogue sync — admin-triggered pull without Box upload
+
+- `BuildService.syncCatalogue(branch:db:logger:)` — new public method that runs the full
+  conversion pipeline (git pull → ABCKit → SVGPDFKit → Tune/Part upsert) but skips Box upload
+  and Slack notification. Produces PDFs on disk so the binder builder works immediately after
+  a sync. Creates a `Build` record (visible in the build history log) with a note that external
+  services were skipped.
+- Internally, `runBuild` and `syncCatalogue` now share a private `_performBuild` method
+  parameterised by `uploadToBox` and `notifySlack` flags, eliminating code duplication.
+- `POST /admin/branches/:branch/sync` — new admin-only route (guarded by
+  `AdminAuthMiddleware`) that fires `syncCatalogue` as a background task and returns
+  `202 Accepted`. Accepts branch names not yet in the database, enabling a first-time sync
+  without waiting for a GitHub push event.
+- Admin dashboard (`admin/index.leaf`) — two new UI elements in the Known Branches section:
+  - **↻ Sync** button next to each existing branch badge; posts to the sync endpoint and
+    shows inline status feedback.
+  - Branch name text input + **↻ Sync branch…** button below the badges, for syncing a
+    branch that does not yet appear in the Known Branches list.
+
+#### Admin UI — user display names
+
+- `SlackService.fetchDisplayName(for:)` — new method that calls `GET slack.com/api/users.info`
+  with the bot token and returns the user's profile display name (falling back to real name, then
+  nil). Requires the `users:read` bot scope already listed in the README setup.
+- `SlackEventsController` now calls `fetchDisplayName` in the login-token background task and
+  saves the result to `User.displayName`, refreshing it on every login-link request.
+- The admin users page shows the Slack display name (falling back to the Slack user ID for
+  accounts that have never requested a login link).
 
 #### Admin UI — user management page and navigation
 

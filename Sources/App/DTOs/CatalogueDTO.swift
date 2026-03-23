@@ -65,10 +65,10 @@ struct BinderStatusDTO: Content {
     let status: String
     let downloadURL: String?
 
-    init(from request: BinderRequest, baseURL: String) throws {
+    init(from request: BinderRequest) throws {
         let id = try request.requireID()
         self.id = id
         self.status = request.pdfPath != nil ? "ready" : "pending"
-        self.downloadURL = request.pdfPath != nil ? "\(baseURL)/binders/\(id)/download" : nil
+        self.downloadURL = request.pdfPath != nil ? "/binders/\(id)/download" : nil
     }
 }

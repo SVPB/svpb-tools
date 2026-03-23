@@ -39,57 +39,72 @@ actor BinderService {
     // MARK: - Private implementation
 
     private func _generateBinder(requestID: UUID, db: Database, logger: Logger) async throws {
+        logger.info("[BinderService] \(requestID): looking up request")
         guard let request = try await BinderRequest.find(requestID, on: db) else {
             throw Abort(.notFound, reason: "BinderRequest \(requestID) not found")
         }
 
         let spec = request.definition
+        logger.info("[BinderService] \(requestID): building '\(spec.name)' — branch '\(spec.branch)', \(spec.entries.count) entr(ies)")
+
         var svgSources: [SVGSource] = []
 
         for entry in spec.entries {
+            logger.debug("[BinderService] \(requestID): looking up tune '\(entry.tuneSlug)'")
             guard let tune = try await Tune.query(on: db)
                 .filter(\.$branch.$id == spec.branch)
                 .filter(\.$slug == entry.tuneSlug)
                 .first(),
                 let tuneID = tune.id else {
-                logger.warning("[BinderService] Tune '\(entry.tuneSlug)' not found in branch '\(spec.branch)'")
+                logger.warning("[BinderService] \(requestID): tune '\(entry.tuneSlug)' not found in branch '\(spec.branch)' — skipping")
                 continue
             }
+            logger.debug("[BinderService] \(requestID): tune '\(entry.tuneSlug)' found, requesting \(entry.parts.count) part(s): \(entry.parts.joined(separator: ", "))")
 
             for partName in entry.parts {
                 guard let part = try await Part.query(on: db)
                     .filter(\.$tune.$id == tuneID)
                     .filter(\.$name == partName)
                     .first() else {
-                    logger.warning("[BinderService] Part '\(partName)' not found for tune '\(entry.tuneSlug)'")
+                    logger.warning("[BinderService] \(requestID): part '\(partName)' not found for tune '\(entry.tuneSlug)' — skipping")
                     continue
                 }
 
-                for svgPath in part.svgPaths ?? [] {
-                    svgSources.append(.fileURL(URL(fileURLWithPath: svgPath)))
+                let paths = part.svgPaths ?? []
+                if paths.isEmpty {
+                    logger.warning("[BinderService] \(requestID): part '\(partName)' of '\(entry.tuneSlug)' has no SVG paths — skipping")
+                } else {
+                    logger.debug("[BinderService] \(requestID): adding \(paths.count) SVG page(s) for '\(entry.tuneSlug)' / '\(partName)'")
+                    for svgPath in paths {
+                        svgSources.append(.fileURL(URL(fileURLWithPath: svgPath)))
+                    }
                 }
             }
         }
 
+        logger.info("[BinderService] \(requestID): collected \(svgSources.count) SVG source(s) total")
         guard !svgSources.isEmpty else {
             throw Abort(.unprocessableEntity, reason: "No SVG sources found for binder '\(spec.name)'")
         }
 
+        logger.info("[BinderService] \(requestID): starting PDF conversion")
         var options = ConversionOptions()
         options.startingPageNumber = 1
         let converter = SVGPDFConverter(options: options)
         let pdfData = try converter.convert(sources: svgSources)
+        logger.info("[BinderService] \(requestID): PDF conversion complete (\(pdfData.count) bytes)")
 
-        // Write to binders directory
         let bindersDir = musicWorkspaceURL
             .appendingPathComponent("binders", isDirectory: true)
+        logger.debug("[BinderService] \(requestID): creating binders directory at \(bindersDir.path)")
         try FileManager.default.createDirectory(at: bindersDir, withIntermediateDirectories: true)
 
         let pdfURL = bindersDir.appendingPathComponent("\(requestID).pdf")
+        logger.info("[BinderService] \(requestID): writing PDF to \(pdfURL.path)")
         try pdfData.write(to: pdfURL, options: .atomic)
 
         request.pdfPath = pdfURL.path
         try await request.save(on: db)
-        logger.info("[BinderService] Binder \(requestID) ready at \(pdfURL.path)")
+        logger.info("[BinderService] \(requestID): ready ✓")
     }
 }

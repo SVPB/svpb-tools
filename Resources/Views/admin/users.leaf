@@ -1,59 +1,35 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Users — SVPB TNG Admin</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
-    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
-    header h1 { margin: 0; font-size: 1.2rem; }
-    nav a  { color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.9rem; margin-right: 1.25rem; }
-    nav a:hover { color: #fff; }
-    .meta  { font-size: 0.85rem; opacity: 0.7; }
-    main   { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
-    h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
-    table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 2rem; }
-    th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
-    th     { background: #eee; font-weight: 600; }
-    tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
-    .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 0.78rem; font-weight: 600; }
-    .badge-admin  { background: #1a1a2e; color: #fff; }
-    .badge-member { background: #e5e7eb; color: #374151; }
-    .btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; font-size: 0.82rem; background: #fff; }
-    .btn:hover { background: #f5f5f5; }
-    .btn-danger { color: #c00; border-color: #f99; }
-    .btn-danger:hover { background: #fee; }
-    .btn:disabled { opacity: 0.4; cursor: default; }
-    .add-card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
-    .add-card h2 { margin-top: 0; }
-    .field-row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
-    label  { font-size: 0.85rem; font-weight: 600; }
-    input[type=text], select { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
-    .btn-primary { background: #1a1a2e; color: #fff; border-color: #1a1a2e; padding: 6px 16px; }
-    .btn-primary:hover { background: #2a2a4e; }
-    #add-msg { font-size: 0.85rem; margin-top: 0.5rem; min-height: 1.2em; }
-    form.logout { display: inline; }
-    button.logout { background: none; border: 1px solid rgba(255,255,255,.4); color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-  </style>
-</head>
-<body>
+#extend("layouts/public"):
 
-<header>
-  <h1>🎵 SVPB TNG Admin</h1>
-  <div style="display:flex;align-items:center;gap:1.5rem;">
-    <nav>
-      <a href="/admin">Dashboard</a>
-      <a href="/admin/users">Users</a>
-    </nav>
-    <span class="meta">Signed in as #(currentUser)</span>
-    <form class="logout" method="POST" action="/admin/logout">
-      <button class="logout" type="submit">Sign out</button>
-    </form>
-  </div>
-</header>
+#export("title"):Users — SVPB TNG#endexport
 
+#export("styles"):
+<style>
+  main   { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+  h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
+  table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 2rem; }
+  th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
+  th     { background: #eee; font-weight: 600; }
+  tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 0.78rem; font-weight: 600; }
+  .badge-admin  { background: #1a1a2e; color: #fff; }
+  .badge-member { background: #e5e7eb; color: #374151; }
+  .btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; font-size: 0.82rem; background: #fff; }
+  .btn:hover { background: #f5f5f5; }
+  .btn-danger { color: #c00; border-color: #f99; }
+  .btn-danger:hover { background: #fee; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .add-card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .add-card h2 { margin-top: 0; }
+  .field-row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+  label  { font-size: 0.85rem; font-weight: 600; }
+  input[type=text], select { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+  .btn-primary { background: #1a1a2e; color: #fff; border-color: #1a1a2e; padding: 6px 16px; }
+  .btn-primary:hover { background: #2a2a4e; }
+  #add-msg { font-size: 0.85rem; margin-top: 0.5rem; min-height: 1.2em; }
+</style>
+#endexport
+
+#export("content"):
 <main>
 
   <h2>Users</h2>
@@ -81,12 +57,8 @@
         <td style="font-size:0.82rem;color:#555;">#(user.lastLoginAt)</td>
         <td style="white-space:nowrap;">
           #if(!user.isSelf):
-          <button class="btn" onclick="toggleRole('#(user.id)', '#(user.role)')">
-            Toggle role
-          </button>
-          <button class="btn btn-danger" onclick="deleteUser('#(user.id)', '#(user.displayName)')">
-            Delete
-          </button>
+          <button class="btn" onclick="toggleRole('#(user.id)', '#(user.role)')">Toggle role</button>
+          <button class="btn btn-danger" onclick="deleteUser('#(user.id)', '#(user.displayName)')">Delete</button>
           #else:
           <span style="font-size:0.8rem;color:#888;">(you)</span>
           #endif
@@ -116,11 +88,9 @@
   </div>
 
 </main>
+#endexport
 
-<footer style="text-align:center;padding:2rem;font-size:0.8rem;color:#999;">
-  SVPB TNG v#(appVersion)
-</footer>
-
+#export("scripts"):
 <script>
 'use strict';
 
@@ -139,7 +109,6 @@ async function toggleRole(id, currentRole) {
   const badge = document.getElementById('badge-' + id);
   badge.textContent = newRole;
   badge.className = 'badge badge-' + newRole;
-  // Update the onclick so the next click flips the other way
   const btn = badge.closest('tr').querySelector('button');
   btn.setAttribute('onclick', `toggleRole('${id}', '${newRole}')`);
 }
@@ -180,6 +149,6 @@ async function addUser() {
   document.getElementById('new-slack-id').value = '';
 }
 </script>
+#endexport
 
-</body>
-</html>
+#endextend

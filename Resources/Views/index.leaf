@@ -1,0 +1,59 @@
+#extend("layouts/public"):
+
+#export("title"):SVPB TNG#endexport
+
+#export("styles"):
+<style>
+  main   { max-width: 760px; margin: 3rem auto; padding: 0 1rem; }
+  h2     { font-size: 1rem; font-weight: 600; margin: 0 0 0.5rem; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media (max-width: 540px) { .cards { grid-template-columns: 1fr; } }
+  .card  {
+    background: #fff; border-radius: 8px; padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.1); text-decoration: none; color: inherit;
+    display: block; transition: box-shadow .15s;
+  }
+  .card:hover { box-shadow: 0 3px 8px rgba(0,0,0,.15); }
+  .card h2 { color: #1a1a2e; }
+  .card p  { margin: 0.4rem 0 0; font-size: 0.88rem; color: #555; line-height: 1.5; }
+  .signin-card {
+    background: #fff; border-radius: 8px; padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-top: 1.25rem;
+  }
+  .signin-card h2 { color: #1a1a2e; margin-top: 0; }
+  .signin-card ol { margin: 0.5rem 0 0.75rem 1.25rem; padding: 0; font-size: 0.88rem; color: #444; line-height: 1.7; }
+  .signin-card p  { margin: 0.4rem 0 0; font-size: 0.88rem; color: #555; }
+  code { background: #eee; padding: 2px 5px; border-radius: 3px; font-size: 0.85em; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+  <div class="cards">
+    <a class="card" href="/binder-builder">
+      <h2>Personal Binder Builder</h2>
+      <p>Select tunes and parts to assemble a custom PDF binder for your set list. Share your configuration with a URL.</p>
+    </a>
+    <a class="card" href="/binder-constructor">
+      <h2>Binder Constructor</h2>
+      <p>Browse the full tune catalogue, select tunes and parts, and generate a YAML binder definition for the pipe major.</p>
+    </a>
+  </div>
+  #if(!currentUser):
+  <div class="signin-card">
+    <h2>Sign In</h2>
+    <p>TNG uses Slack for authentication. To get a login link:</p>
+    <ol>
+      <li>Open Slack and send <em>any message</em> to the <strong>TNG</strong> bot.</li>
+      <li>The bot will reply with a one-time login link valid for 10 minutes.</li>
+      <li>Click the link to access the admin dashboard.</li>
+    </ol>
+    <p>If you do not have access, ask a band administrator to add your Slack account.</p>
+  </div>
+  #endif
+</main>
+#endexport
+
+#export("scripts"): #endexport
+
+#endextend

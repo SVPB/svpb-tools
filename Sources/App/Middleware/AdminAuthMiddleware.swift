@@ -14,6 +14,22 @@ extension Request {
         get { storage[AuthenticatedUserKey.self] }
         set { storage[AuthenticatedUserKey.self] = newValue }
     }
+
+    /// Returns the session user if one is present, regardless of role.
+    /// Does not redirect — safe to call on unauthenticated routes.
+    func sessionUser() async -> User? {
+        guard let userIdString = session.data["userId"],
+              let userId = UUID(uuidString: userIdString)
+        else { return nil }
+        return try? await User.find(userId, on: db)
+    }
+
+    /// Returns `true` if the current session belongs to an admin user.
+    /// Does not redirect — safe to call on unauthenticated routes.
+    func isAdminSession() async -> Bool {
+        guard let user = await sessionUser() else { return false }
+        return user.role == .admin
+    }
 }
 
 // MARK: - AdminAuthMiddleware

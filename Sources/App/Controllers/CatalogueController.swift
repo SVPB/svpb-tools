@@ -33,9 +33,20 @@ struct CatalogueController: RouteCollection {
         }
         let tunes = try await Tune.query(on: req.db)
             .filter(\.$branch.$id == branchName)
-            .sort(\.$slug)
             .all()
-        return try tunes.map { try TuneListItemDTO(from: $0) }
+        return try tunes
+            .sorted { sortKey($0.title ?? $0.slug) < sortKey($1.title ?? $1.slug) }
+            .map { try TuneListItemDTO(from: $0) }
+    }
+
+    // MARK: - Helpers
+
+    /// Returns the sort key for a tune title: strips a leading "The " (case-insensitive)
+    /// so that e.g. "The Snipe" sorts under S rather than T.
+    private func sortKey(_ title: String) -> String {
+        let prefix = "the "
+        guard title.lowercased().hasPrefix(prefix) else { return title }
+        return String(title.dropFirst(prefix.count))
     }
 
     /// `GET /branches/:branch/tunes/:slug` — tune detail including its parts.

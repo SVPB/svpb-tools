@@ -58,9 +58,8 @@ public func configure(_ app: Application) async throws {
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
     // ── Sessions ───────────────────────────────────────────────────────────
-    // Memory sessions are sufficient for Phase 1. Switching to Fluent-backed
-    // sessions (so they survive server restarts) is a Phase 3 hardening task.
-    app.sessions.use(.memory)
+    // Fluent-backed sessions persist across server restarts.
+    app.sessions.use(.fluent)
     app.middleware.use(app.sessions.middleware)
 
     // ── Templating ─────────────────────────────────────────────────────────
@@ -109,6 +108,7 @@ private func addMigrations(_ app: Application) {
     //   4. Build         — FK → Branch
     //   5. BinderRequest — no external FKs
     //   6. LoginToken    — no FK (Slack user ID stored as plain TEXT)
+    app.migrations.add(SessionRecord.migration)
     app.migrations.add(CreateBranch())
     app.migrations.add(CreateUser())
     app.migrations.add(CreateTune())

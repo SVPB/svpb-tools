@@ -11,17 +11,11 @@ import Vapor
 ///   1. Create a `Build` record (status: .running).
 ///   2. `git` sync via `GitService`.
 ///   3. Discover every `.abc` file in the working tree.
-///   4. For each file: convert ABC → per-page SVGs (ABCKit) → PDF (SVGPDFKit stub).
-///   5. Upload each PDF to Box (via `BoxService`).
-///   6. Upsert the `Branch` record (last_built, head_sha).
-///   7. Post a Slack notification (via `SlackService`).
+///   4. For each file: convert ABC → per-page SVGs (ABCKit) → PDF (SVGPDFKit).
+///   5. Optionally upload each PDF to Box (via `BoxService`).
+///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records.
+///   7. Optionally post a Slack notification (via `SlackService`).
 ///   8. Update the `Build` record (status: .success or .failure, log, files).
-///
-/// **Catalogue population** (Tune/Part records) is Phase 2 work; a TODO marks
-/// the place in the pipeline where it will be inserted.
-///
-/// **SVGPDFKit** converts the per-page SVGs into a single multi-page PDF via
-/// `convertToPDF(svgFiles:outputURL:)`.
 actor BuildService {
 
     private let gitService: GitService
@@ -43,12 +37,58 @@ actor BuildService {
 
     // MARK: - Public API
 
-    /// Runs a full build for `branch` in the background.
+    /// Runs a full build for `branch`: converts ABC files, uploads PDFs to Box,
+    /// updates the catalogue, and posts a Slack notification.
     ///
-    /// This method never throws — all errors are caught, logged, and persisted
-    /// to the `Build` record so that the HTTP handler can return 202 immediately.
+    /// Never throws — all errors are caught, logged, and persisted to the
+    /// `Build` record so the HTTP handler can return 202 immediately.
     func runBuild(branch: String, commitSha: String?, db: Database, logger: Logger) async {
         logger.info("[BuildService] Starting build for branch '\(branch)'")
+        await _performBuild(
+            branch: branch, commitSha: commitSha,
+            db: db, logger: logger,
+            uploadToBox: true, notifySlack: true
+        )
+    }
+
+    /// Syncs the repository and updates the tune catalogue for `branch` without
+    /// uploading to Box or posting a Slack notification.
+    ///
+    /// Use this to populate (or refresh) `Branch`, `Tune`, and `Part` records
+    /// during development or before a full build has been triggered by a push.
+    func syncCatalogue(branch: String, db: Database, logger: Logger) async {
+        logger.info("[BuildService] Starting catalogue sync for branch '\(branch)'")
+        await _performBuild(
+            branch: branch, commitSha: nil,
+            db: db, logger: logger,
+            uploadToBox: false, notifySlack: false
+        )
+    }
+
+    // MARK: - Core pipeline
+
+    private func _performBuild(
+        branch: String,
+        commitSha: String?,
+        db: Database,
+        logger: Logger,
+        uploadToBox: Bool,
+        notifySlack: Bool
+    ) async {
+        // Ensure the Branch record exists before creating the Build (FK constraint).
+        let branchRecord: Branch
+        do {
+            if let existing = try await Branch.find(branch, on: db) {
+                branchRecord = existing
+            } else {
+                let fresh = Branch(name: branch)
+                try await fresh.save(on: db)
+                branchRecord = fresh
+            }
+        } catch {
+            logger.error("[BuildService] Could not ensure Branch record for '\(branch)': \(error)")
+            return
+        }
 
         // Create the Build record up-front so it appears in the admin UI immediately.
         let build = Build()
@@ -64,42 +104,42 @@ actor BuildService {
             return
         }
 
-        var log = ""
+        var log = uploadToBox ? "" : "[catalogue-sync] Box upload and Slack notification skipped.\n"
         var producedFiles: [String] = []
 
         do {
-            // ── Step 2: git sync ────────────────────────────────────────────
+            // ── git sync ────────────────────────────────────────────────────
             log += "[git] Syncing branch '\(branch)'…\n"
             let branchDir = try await gitService.sync(branch: branch, logger: logger)
             let sha = try await gitService.headSHA(in: branchDir)
             log += "[git] HEAD is \(sha)\n"
 
-            // ── Step 2b: ensure Branch record exists before Tunes are created ──
-            let branchRecord: Branch
-            if let existing = try await Branch.find(branch, on: db) {
-                branchRecord = existing
-            } else {
-                let fresh = Branch(name: branch)
-                try await fresh.save(on: db)
-                branchRecord = fresh
-            }
-
-            // ── Step 3: discover .abc files ─────────────────────────────────
+            // ── discover .abc files ─────────────────────────────────────────
             let abcFiles = try discoverABCFiles(in: branchDir)
             log += "[build] Found \(abcFiles.count) .abc file(s)\n"
             logger.info("[BuildService] \(abcFiles.count) .abc files in '\(branch)'")
 
-            // ── Step 4: convert each file ───────────────────────────────────
+            // ── clear existing catalogue for this branch ─────────────────────
+            // Delete all Tune records (Parts cascade-delete via FK constraint).
+            try await Tune.query(on: db)
+                .filter(\.$branch.$id == branch)
+                .delete()
+            log += "[catalogue] Cleared existing catalogue entries for '\(branch)'\n"
+            logger.info("[BuildService] Cleared catalogue for '\(branch)'")
+
+            // ── convert each file ───────────────────────────────────────────
             let outputDir = musicWorkspaceURL
                 .appendingPathComponent("output", isDirectory: true)
                 .appendingPathComponent(branch, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDir,
                                                     withIntermediateDirectories: true)
+
+            // One converter for all files; no svgOutputDirectory — ABCKit returns
+            // all pages as concatenated SVG documents in the return value.
             let converter = ABCConverter(options: .init(
                 outputFormat: .svg,
                 pageSize: .letter,
-                bagpipeFormat: true,
-                svgOutputDirectory: outputDir.path + "/"
+                bagpipeFormat: true
             ))
 
             for abcURL in abcFiles {
@@ -108,31 +148,43 @@ actor BuildService {
 
                 let abcContent = try String(contentsOf: abcURL, encoding: .utf8)
 
-                // ABCKit: ABC → per-page SVG files written into outputDir.
-                let svgIndex = try await converter.convert(abcContent)
-                let svgFiles = try collectSVGFiles(stem: stem, in: outputDir, index: svgIndex)
-                log += "[convert]   → \(svgFiles.count) page(s)\n"
+                // ABCKit returns all pages concatenated as individual <svg>…</svg>
+                // documents. Split them and write each to its own numbered file so
+                // SVGPDFKit can render them as separate PDF pages.
+                let allPagesSVG = try await converter.convert(abcContent)
+                let pageStrings = splitSVGPages(allPagesSVG)
+                log += "[convert]   → \(pageStrings.count) page(s)\n"
 
-                // PDF output path.
-                let pdfURL = outputDir.appendingPathComponent("\(stem).pdf")
-
-                // SVGPDFKit: SVG pages → PDF.
-                try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL)
-
-                producedFiles.append("\(stem).pdf")
-
-                // ── Step 5: Box upload ──────────────────────────────────────
-                do {
-                    try await boxService.upload(pdf: pdfURL, forBranch: branch)
-                    log += "[box] Uploaded \(stem).pdf\n"
-                } catch {
-                    // Box upload failure is non-fatal; the local PDF is retained
-                    // for retry on the next build.
-                    log += "[box] Upload failed for \(stem).pdf: \(error)\n"
-                    logger.warning("[BuildService] Box upload failed for \(stem).pdf: \(error)")
+                guard !pageStrings.isEmpty else {
+                    log += "[convert]   ⚠ No SVG output for \(stem).abc — skipping PDF\n"
+                    logger.warning("[BuildService] No SVG output for \(stem).abc; skipping")
+                    continue
                 }
 
-                // ── Catalogue population ────────────────────────────────────
+                var svgFiles: [URL] = []
+                for (i, pageString) in pageStrings.enumerated() {
+                    let pageURL = outputDir.appendingPathComponent(
+                        String(format: "%@%03d.svg", stem, i))
+                    try pageString.write(to: pageURL, atomically: true, encoding: .utf8)
+                    svgFiles.append(pageURL)
+                }
+
+                let pdfURL = outputDir.appendingPathComponent("\(stem).pdf")
+                try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL)
+                producedFiles.append("\(stem).pdf")
+
+                // ── Box upload (skipped for catalogue sync) ─────────────────
+                if uploadToBox {
+                    do {
+                        try await boxService.upload(pdf: pdfURL, forBranch: branch)
+                        log += "[box] Uploaded \(stem).pdf\n"
+                    } catch {
+                        log += "[box] Upload failed for \(stem).pdf: \(error)\n"
+                        logger.warning("[BuildService] Box upload failed for \(stem).pdf: \(error)")
+                    }
+                }
+
+                // ── catalogue population ────────────────────────────────────
                 do {
                     try await upsertCatalogueEntry(
                         branch: branch,
@@ -144,29 +196,31 @@ actor BuildService {
                         svgPaths: svgFiles.map(\.path),
                         db: db
                     )
-                    log += "[catalogue] Upserted catalogue for \(stem)\n"
+                    log += "[catalogue] Upserted \(stem)\n"
                 } catch {
                     log += "[catalogue] Upsert failed for \(stem): \(error)\n"
                     logger.warning("[BuildService] Catalogue upsert failed for \(stem): \(error)")
                 }
             }
 
-            // ── Step 6: update Branch record timestamps ──────────────────────
+            // ── update Branch record timestamps ─────────────────────────────
             branchRecord.lastBuilt = Date()
             branchRecord.headSha = sha
             try await branchRecord.save(on: db)
             log += "[db] Branch '\(branch)' updated\n"
 
-            // ── Step 7: Slack notification ──────────────────────────────────
-            do {
-                try await slackService.postBuildNotification(
-                    branch: branch, status: .success, files: producedFiles)
-            } catch {
-                log += "[slack] Notification failed: \(error)\n"
-                logger.warning("[BuildService] Slack notification failed: \(error)")
+            // ── Slack notification (skipped for catalogue sync) ──────────────
+            if notifySlack {
+                do {
+                    try await slackService.postBuildNotification(
+                        branch: branch, status: .success, files: producedFiles)
+                } catch {
+                    log += "[slack] Notification failed: \(error)\n"
+                    logger.warning("[BuildService] Slack notification failed: \(error)")
+                }
             }
 
-            // ── Step 8: mark success ────────────────────────────────────────
+            // ── mark success ────────────────────────────────────────────────
             build.status = .success
             build.files = producedFiles
             build.log = log
@@ -182,8 +236,10 @@ actor BuildService {
             build.log = log
             try? await build.save(on: db)
 
-            try? await slackService.postBuildNotification(
-                branch: branch, status: .failure, files: [])
+            if notifySlack {
+                try? await slackService.postBuildNotification(
+                    branch: branch, status: .failure, files: [])
+            }
         }
     }
 
@@ -259,34 +315,21 @@ actor BuildService {
             .sorted { $0.path < $1.path }
     }
 
-    // MARK: - SVG collection
+    // MARK: - SVG page splitting
 
-    /// After ABCKit writes per-page SVG files into `directory`, this method
-    /// collects them in page order.
-    ///
-    /// ABCKit (and the underlying abcm2ps) names per-page SVG files with a
-    /// numeric suffix, e.g. `archie_beag001.svg`, `archie_beag002.svg`.
-    /// Files are returned sorted by name so page order is preserved.
-    private func collectSVGFiles(stem: String, in directory: URL, index: String) throws -> [URL] {
-        let allSVGs = try FileManager.default
-            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension.lowercased() == "svg" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-
-        // If abcm2ps wrote numbered files for this stem, use them.
-        // Otherwise fall back to all SVGs in the directory.
-        let stemFiles = allSVGs.filter {
-            $0.lastPathComponent.hasPrefix(stem) && $0.pathExtension == "svg"
-        }
-        return stemFiles.isEmpty ? allSVGs : stemFiles
+    /// Splits a concatenated multi-page SVG string (as returned by ABCKit) into
+    /// individual `<svg>…</svg>` documents, one per page.
+    private func splitSVGPages(_ svg: String) -> [String] {
+        svg.components(separatedBy: "</svg>")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { $0 + "</svg>" }
     }
 
     // MARK: - PDF conversion
 
     private func convertToPDF(svgFiles: [URL], outputURL: URL) throws {
         let sources = svgFiles.map { SVGSource.fileURL($0) }
-        // Phase 2 TODO: set startingPageNumber per-tune once catalogue records
-        // are being upserted so personal-binder page offsets can be applied.
         let converter = SVGPDFConverter()
         try converter.convert(sources: sources, to: outputURL)
     }

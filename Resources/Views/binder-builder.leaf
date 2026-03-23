@@ -1,61 +1,49 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Personal Binder Builder — SVPB TNG</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
-    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
-    header h1 { margin: 0; font-size: 1.2rem; }
-    header nav a { color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.9rem; }
-    header nav a:hover { color: #fff; }
-    main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-    @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
-    h2     { font-size: 1.05rem; margin: 0 0 0.75rem; }
-    .card  { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
-    .full-width { grid-column: 1 / -1; }
-    label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
-    select, input[type=text] {
-      width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px;
-      font-size: 0.9rem; margin-bottom: 0.75rem;
-    }
-    .tune-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 4px; }
-    .tune-list li { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; }
-    .tune-list li:last-child { border-bottom: none; }
-    .tune-list li.added { background: #f0fdf4; }
-    .tune-list li button { font-size: 0.75rem; padding: 2px 8px; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
-    .tune-list li button:hover { background: #eee; }
-    .binder-entries { list-style: none; margin: 0; padding: 0; }
-    .binder-entries li { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; background: #f9f9f9; border-radius: 4px; margin-bottom: 4px; }
-    .binder-entries li button { font-size: 0.75rem; padding: 2px 8px; border: 1px solid #f99; border-radius: 3px; cursor: pointer; background: #fff; color: #c00; }
-    .binder-entries li button:hover { background: #fee; }
-    .move-btn { background: none!important; border: none!important; color: #888!important; cursor: pointer; font-size: 1rem; padding: 0 4px!important; }
-    .part-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-    .part-tag  { background: #e0e7ff; color: #3730a3; border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; cursor: pointer; }
-    .part-tag.selected { background: #3730a3; color: #fff; }
-    .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
-    .btn-primary { background: #1a1a2e; color: #fff; }
-    .btn-primary:hover { background: #2a2a4e; }
-    .btn-share   { background: #e0e7ff; color: #3730a3; border: 1px solid #a5b4fc; }
-    .btn-share:hover { background: #c7d2fe; }
-    #status-msg { font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
-    #status-msg.error { color: #c00; }
-    #status-msg.info  { color: #166534; }
-    #download-section { display: none; margin-top: 1rem; padding: 1rem; background: #f0fdf4; border-radius: 6px; border: 1px solid #bbf7d0; }
-    #download-section a { font-weight: 600; color: #166534; }
-    .progress { font-size: 0.85rem; color: #666; }
-    .share-url { font-family: monospace; font-size: 0.8rem; word-break: break-all; background: #f5f5f5; padding: 0.4rem; border-radius: 4px; margin-top: 0.5rem; }
-  </style>
-</head>
-<body>
+#extend("layouts/public"):
 
-<header>
-  <h1>🎵 SVPB TNG — Personal Binder Builder</h1>
-  <nav><a href="/binder-constructor">Binder Constructor</a></nav>
-</header>
+#export("title"):Personal Binder Builder — SVPB TNG#endexport
 
+#export("styles"):
+<style>
+  main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  h2     { font-size: 1.05rem; margin: 0 0 0.75rem; }
+  .card  { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .full-width { grid-column: 1 / -1; }
+  label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
+  select, input[type=text] {
+    width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px;
+    font-size: 0.9rem; margin-bottom: 0.75rem;
+  }
+  .tune-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 4px; }
+  .tune-list li { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; }
+  .tune-list li:last-child { border-bottom: none; }
+  .tune-list li.added { background: #f0fdf4; }
+  .tune-list li button { font-size: 0.75rem; padding: 2px 8px; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
+  .tune-list li button:hover { background: #eee; }
+  .binder-entries { list-style: none; margin: 0; padding: 0; }
+  .binder-entries li { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; background: #f9f9f9; border-radius: 4px; margin-bottom: 4px; }
+  .binder-entries li button { font-size: 0.75rem; padding: 2px 8px; border: 1px solid #f99; border-radius: 3px; cursor: pointer; background: #fff; color: #c00; }
+  .binder-entries li button:hover { background: #fee; }
+  .move-btn { background: none!important; border: none!important; color: #888!important; cursor: pointer; font-size: 1rem; padding: 0 4px!important; }
+  .part-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .part-tag  { background: #e0e7ff; color: #3730a3; border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; cursor: pointer; }
+  .part-tag.selected { background: #3730a3; color: #fff; }
+  .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+  .btn-primary { background: #1a1a2e; color: #fff; }
+  .btn-primary:hover { background: #2a2a4e; }
+  .btn-share   { background: #e0e7ff; color: #3730a3; border: 1px solid #a5b4fc; }
+  .btn-share:hover { background: #c7d2fe; }
+  #status-msg { font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+  #status-msg.error { color: #c00; }
+  #status-msg.info  { color: #166534; }
+  #download-section { display: none; margin-top: 1rem; padding: 1rem; background: #f0fdf4; border-radius: 6px; border: 1px solid #bbf7d0; }
+  #download-section a { font-weight: 600; color: #166534; }
+  .progress { font-size: 0.85rem; color: #666; }
+  .share-url { font-family: monospace; font-size: 0.8rem; word-break: break-all; background: #f5f5f5; padding: 0.4rem; border-radius: 4px; margin-top: 0.5rem; }
+</style>
+#endexport
+
+#export("content"):
 <main>
 
   <!-- Left column: tune catalogue -->
@@ -83,11 +71,8 @@
   <div>
     <div class="card">
       <h2>Your Binder</h2>
-      <ul class="binder-entries" id="binder-entries">
-        <li id="empty-msg" style="color:#888; background:none; justify-content:center;">
-          No tunes selected yet.
-        </li>
-      </ul>
+      <p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
+      <ul class="binder-entries" id="binder-entries"></ul>
 
       <div style="display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="requestPDF()">Generate PDF</button>
@@ -112,11 +97,9 @@
   </div>
 
 </main>
+#endexport
 
-<footer style="text-align:center;padding:2rem;font-size:0.8rem;color:#999;">
-  SVPB TNG v#(appVersion)
-</footer>
-
+#export("scripts"):
 <script>
 'use strict';
 
@@ -127,7 +110,7 @@ let binderEntries = [];
 let pollTimer = null;
 
 // ── Initialise from shared URL if present ──────────────────────────────────
-const INITIAL_SPEC = '#if(encodedSpec)##(encodedSpec)##endif#';
+const INITIAL_SPEC = '#if(encodedSpec):#(encodedSpec)#endif';
 
 (async () => {
   try {
@@ -239,12 +222,8 @@ function renderBinder() {
   const ul = document.getElementById('binder-entries');
   const empty = document.getElementById('empty-msg');
   ul.innerHTML = '';
-  if (binderEntries.length === 0) {
-    ul.appendChild(empty);
-    empty.style.display = '';
-    return;
-  }
-  empty.style.display = 'none';
+  empty.style.display = binderEntries.length === 0 ? '' : 'none';
+  if (binderEntries.length === 0) return;
   binderEntries.forEach((entry, idx) => {
     const li = document.createElement('li');
     const up = document.createElement('button');
@@ -356,9 +335,9 @@ function pollForCompletion(binderId) {
       if (dto.status === 'ready') {
         clearInterval(pollTimer);
         pollTimer = null;
-        setStatus('', '');
+        setStatus('Your binder is ready!', 'info');
         const dl = document.getElementById('download-section');
-        dl.style.display = '';
+        dl.style.display = 'block';
         document.getElementById('download-link').href = dto.downloadURL;
       }
     } catch (_) { /* keep polling */ }
@@ -398,6 +377,6 @@ function setStatus(msg, cls) {
   el.className = cls ? cls : '';
 }
 </script>
+#endexport
 
-</body>
-</html>
+#endextend
