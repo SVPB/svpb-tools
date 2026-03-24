@@ -27,6 +27,10 @@ struct AdminController: RouteCollection {
         admin.get("admin", "builds", ":buildId", use: buildDetail)
         admin.post("admin", "logout", use: logout)
 
+        // Catalogue sync.
+        admin.post("admin", "branches", ":branch", "sync", use: syncBranch)
+        admin.get("admin", "branches", ":branch", "latest-build", use: latestBuildStatus)
+
         // User management API.
         let users = admin.grouped("admin", "users")
         users.get(use: listUsers)
@@ -64,6 +68,7 @@ struct AdminController: RouteCollection {
                 let fileCount: Int
             }
             let appVersion: String
+            let isAdmin: Bool
             let builds: [BuildRow]
             let branchNames: [String]
             let currentUser: String
@@ -82,9 +87,10 @@ struct AdminController: RouteCollection {
 
         let ctx = DashboardContext(
             appVersion: AppVersion.current,
+            isAdmin: true,
             builds: buildRows,
             branchNames: branches.map(\.name),
-            currentUser: req.authenticatedUser?.slackUserId ?? ""
+            currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? ""
         )
         return try await req.view.render("admin/index", ctx)
     }
@@ -102,6 +108,8 @@ struct AdminController: RouteCollection {
 
         struct DetailContext: Encodable {
             let appVersion: String
+            let isAdmin: Bool
+            let currentUser: String
             let buildId: String
             let branch: String
             let triggeredISO: String
@@ -114,6 +122,8 @@ struct AdminController: RouteCollection {
         let isoFormatter = ISO8601DateFormatter()
         let ctx = DetailContext(
             appVersion: AppVersion.current,
+            isAdmin: true,
+            currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "",
             buildId: build.id?.uuidString ?? "",
             branch: build.$branch.id,
             triggeredISO: build.triggered.map { isoFormatter.string(from: $0) } ?? "—",
@@ -130,17 +140,114 @@ struct AdminController: RouteCollection {
     @Sendable
     func logout(_ req: Request) async throws -> Response {
         req.session.destroy()
-        return req.redirect(to: "/admin/login")
+        return req.redirect(to: "/")
     }
 
-    // MARK: - User management API
+    // MARK: - Catalogue sync
 
+    /// `POST /admin/branches/:branch/sync`
+    ///
+    /// Triggers a catalogue sync for the named branch: git pull + ABC conversion +
+    /// Tune/Part upsert, without uploading to Box or posting to Slack.
+    /// Accepts branch names that do not yet exist in the database (first-time sync).
     @Sendable
-    func listUsers(_ req: Request) async throws -> [UserDTO] {
+    func syncBranch(_ req: Request) async throws -> Response {
+        guard let branch = req.parameters.get("branch"), !branch.isEmpty else {
+            throw Abort(.badRequest, reason: "Branch name is required.")
+        }
+
+        let buildService = req.application.buildService
+        let appDB = req.application.db
+        let logger = req.logger
+        Task {
+            await buildService.syncCatalogue(branch: branch, db: appDB, logger: logger)
+        }
+
+        return Response(status: .accepted,
+                        headers: ["Content-Type": "application/json"],
+                        body: .init(string: #"{"status":"accepted","branch":"\#(branch)"}"#))
+    }
+
+    /// `GET /admin/branches/:branch/latest-build`
+    ///
+    /// Returns the status of the most recent build for a branch as JSON.
+    /// Used by the dashboard JS to poll for sync completion.
+    @Sendable
+    func latestBuildStatus(_ req: Request) async throws -> Response {
+        guard let branch = req.parameters.get("branch") else {
+            throw Abort(.badRequest)
+        }
+
+        struct BuildStatusDTO: Encodable {
+            let id: String?
+            let status: String
+        }
+
+        let dto: BuildStatusDTO
+        if let build = try await Build.query(on: req.db)
+            .filter(\.$branch.$id == branch)
+            .sort(\.$triggered, .descending)
+            .first() {
+            dto = BuildStatusDTO(id: build.id?.uuidString, status: build.status.rawValue)
+        } else {
+            dto = BuildStatusDTO(id: nil, status: "none")
+        }
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(dto)
+        return Response(status: .ok,
+                        headers: ["Content-Type": "application/json"],
+                        body: .init(data: data))
+    }
+
+    // MARK: - User management
+
+    /// `GET /admin/users` — HTML page listing all users with role and delete controls.
+    @Sendable
+    func listUsers(_ req: Request) async throws -> View {
         let users = try await User.query(on: req.db)
             .sort(\.$createdAt, .ascending)
             .all()
-        return try users.map { try UserDTO(from: $0) }
+
+        struct UserRow: Encodable {
+            let id: String
+            let slackUserId: String
+            let displayName: String
+            let role: String
+            let createdAt: String
+            let lastLoginAt: String
+            let isSelf: Bool
+        }
+
+        struct UsersContext: Encodable {
+            let appVersion: String
+            let isAdmin: Bool
+            let currentUser: String
+            let users: [UserRow]
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        let selfId = req.authenticatedUser?.id?.uuidString ?? ""
+
+        let rows = try users.map { u in
+            UserRow(
+                id: try u.requireID().uuidString,
+                slackUserId: u.slackUserId,
+                displayName: u.displayName ?? u.slackUserId,
+                role: u.role.rawValue,
+                createdAt: u.createdAt.map { isoFormatter.string(from: $0) } ?? "—",
+                lastLoginAt: u.lastLoginAt.map { isoFormatter.string(from: $0) } ?? "never",
+                isSelf: try u.requireID().uuidString == selfId
+            )
+        }
+
+        let ctx = UsersContext(
+            appVersion: AppVersion.current,
+            isAdmin: true,
+            currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "",
+            users: rows
+        )
+        return try await req.view.render("admin/users", ctx)
     }
 
     @Sendable

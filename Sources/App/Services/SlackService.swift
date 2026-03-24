@@ -68,6 +68,47 @@ actor SlackService {
         logger.info("[Slack] Notification posted for branch '\(branch)' (\(status.rawValue))")
     }
 
+    /// Fetches the display name for a Slack user via `users.info`.
+    ///
+    /// Returns the user's profile display name, falling back to their real name,
+    /// then to nil if the API call fails or the fields are empty.
+    /// Requires the `users:read` bot scope.
+    func fetchDisplayName(for slackUserId: String) async -> String? {
+        let url = "https://slack.com/api/users.info?user=\(slackUserId)"
+        var request = HTTPClientRequest(url: url)
+        request.method = .GET
+        request.headers.add(name: "Authorization", value: "Bearer \(botToken)")
+
+        struct UsersInfoResponse: Decodable {
+            let ok: Bool
+            let user: SlackUser?
+            struct SlackUser: Decodable {
+                let profile: Profile
+                struct Profile: Decodable {
+                    let displayName: String?
+                    let realName: String?
+                    enum CodingKeys: String, CodingKey {
+                        case displayName = "display_name"
+                        case realName    = "real_name"
+                    }
+                }
+            }
+        }
+
+        do {
+            let response = try await httpClient.execute(request, timeout: .seconds(10))
+            let buffer = try await response.body.collect(upTo: 64 * 1024)
+            let decoded = try JSONDecoder().decode(UsersInfoResponse.self, from: Data(buffer: buffer))
+            guard decoded.ok, let profile = decoded.user?.profile else { return nil }
+            let name = profile.displayName?.trimmingCharacters(in: .whitespaces)
+            if let name, !name.isEmpty { return name }
+            return profile.realName?.trimmingCharacters(in: .whitespaces)
+        } catch {
+            logger.warning("[Slack] Could not fetch display name for \(slackUserId): \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Private helpers
 
     private func postJSON<T: Encodable>(

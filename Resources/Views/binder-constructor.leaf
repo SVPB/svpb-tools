@@ -1,0 +1,291 @@
+#extend("layouts/public"):
+
+#export("title"):Binder Constructor — SVPB TNG#endexport
+
+#export("styles"):
+<style>
+  main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  h2     { font-size: 1.05rem; margin: 0 0 0.75rem; }
+  .card  { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .full-width { grid-column: 1 / -1; }
+  label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
+  select, input[type=text] {
+    width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px;
+    font-size: 0.9rem; margin-bottom: 0.75rem;
+  }
+  .tune-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 4px; }
+  .tune-list li { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; }
+  .tune-list li:last-child { border-bottom: none; }
+  .tune-list li.added { background: #f0fdf4; }
+  .tune-list li button { font-size: 0.75rem; padding: 2px 8px; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
+  .tune-list li button:hover { background: #eee; }
+  .binder-entries { list-style: none; margin: 0; padding: 0; }
+  .binder-entries li { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; background: #f9f9f9; border-radius: 4px; margin-bottom: 4px; }
+  .binder-entries li button { font-size: 0.75rem; padding: 2px 8px; border: 1px solid #f99; border-radius: 3px; cursor: pointer; background: #fff; color: #c00; }
+  .binder-entries li button:hover { background: #fee; }
+  .move-btn { background: none!important; border: none!important; color: #888!important; cursor: pointer; font-size: 1rem; padding: 0 4px!important; }
+  .part-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .part-tag  { background: #e0e7ff; color: #3730a3; border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; cursor: pointer; }
+  .part-tag.selected { background: #3730a3; color: #fff; }
+  textarea   { width: 100%; min-height: 200px; font-family: monospace; font-size: 0.82rem; padding: 0.6rem; border: 1px solid #ccc; border-radius: 4px; resize: vertical; }
+  .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+  .btn-primary { background: #1a1a2e; color: #fff; }
+  .btn-primary:hover { background: #2a2a4e; }
+  .btn-danger  { background: #fee; color: #c00; border: 1px solid #f99; }
+  #status-msg { font-size: 0.85rem; color: #666; margin-top: 0.5rem; min-height: 1.2em; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+
+  <!-- Left column: tune catalogue -->
+  <div>
+    <div class="card" style="margin-bottom:1rem;">
+      <h2>Binder Settings</h2>
+      <label for="sel-branch">Year (branch)</label>
+      <select id="sel-branch">
+        <option value="">Loading…</option>
+      </select>
+      <label for="binder-name">Binder name</label>
+      <input type="text" id="binder-name" placeholder="e.g. 2026 Band Binder" value="">
+    </div>
+
+    <div class="card">
+      <h2>Tune Catalogue</h2>
+      <input type="text" id="search-tunes" placeholder="Search tunes…" style="margin-bottom:0.5rem;">
+      <ul class="tune-list" id="tune-list">
+        <li style="color:#888;">Select a year above to load tunes.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Right column: selected entries -->
+  <div>
+    <div class="card">
+      <h2>Selected Entries</h2>
+      <p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
+      <ul class="binder-entries" id="binder-entries"></ul>
+    </div>
+
+    <div class="card" style="margin-top:1rem;">
+      <h2>Generated YAML</h2>
+      <textarea id="yaml-output" readonly placeholder="Click &quot;Generate YAML&quot; to see the binder definition."></textarea>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+        <button class="btn btn-primary" onclick="generateYAML()">Generate YAML</button>
+        <button class="btn" onclick="clearBinder()">Clear</button>
+      </div>
+      <div id="status-msg"></div>
+    </div>
+  </div>
+
+</main>
+#endexport
+
+#export("scripts"):
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let allTunes = [];       // [{id, slug, title}]
+let tuneDetails = {};    // slug → {id, slug, title, parts: [{id, name}]}
+let binderEntries = [];  // [{tuneSlug, title, parts: [string]}]
+
+// ── Initialise ─────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    const res = await fetch('/branches');
+    const branches = await res.json();
+    const sel = document.getElementById('sel-branch');
+    sel.innerHTML = '<option value="">— select a year —</option>';
+    branches.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.name;
+      opt.textContent = b.name;
+      sel.appendChild(opt);
+    });
+    if (branches.length === 1) {
+      sel.value = branches[0].name;
+      await loadTunes(branches[0].name);
+    }
+  } catch (e) {
+    setStatus('Failed to load branches: ' + e.message);
+  }
+})();
+
+document.getElementById('sel-branch').addEventListener('change', async e => {
+  binderEntries = [];
+  renderBinder();
+  if (e.target.value) await loadTunes(e.target.value);
+});
+
+document.getElementById('search-tunes').addEventListener('input', e => {
+  renderTuneList(e.target.value.toLowerCase());
+});
+
+// ── Data loading ────────────────────────────────────────────────────────────
+async function loadTunes(branch) {
+  const list = document.getElementById('tune-list');
+  list.innerHTML = '<li style="color:#888;">Loading…</li>';
+  allTunes = [];
+  tuneDetails = {};
+  try {
+    const res = await fetch(`/branches/${encodeURIComponent(branch)}/tunes`);
+    allTunes = await res.json();
+    renderTuneList('');
+  } catch (e) {
+    list.innerHTML = '<li style="color:#c00;">Failed to load tunes.</li>';
+  }
+}
+
+async function getTuneDetail(slug) {
+  if (tuneDetails[slug]) return tuneDetails[slug];
+  const branch = document.getElementById('sel-branch').value;
+  const res = await fetch(`/branches/${encodeURIComponent(branch)}/tunes/${encodeURIComponent(slug)}`);
+  const detail = await res.json();
+  tuneDetails[slug] = detail;
+  return detail;
+}
+
+// ── Render helpers ─────────────────────────────────────────────────────────
+function renderTuneList(filter) {
+  const list = document.getElementById('tune-list');
+  if (!allTunes.length) {
+    list.innerHTML = '<li style="color:#888;">No tunes found.</li>';
+    return;
+  }
+  const visible = filter
+    ? allTunes.filter(t => (t.title || t.slug).toLowerCase().includes(filter))
+    : allTunes;
+  list.innerHTML = '';
+  visible.forEach(tune => {
+    const added = binderEntries.some(e => e.tuneSlug === tune.slug);
+    const li = document.createElement('li');
+    if (added) li.className = 'added';
+    const label = document.createElement('span');
+    label.textContent = tune.title || tune.slug;
+    const btn = document.createElement('button');
+    btn.textContent = added ? 'Added ✓' : '+ Add';
+    btn.disabled = added;
+    btn.addEventListener('click', () => addTune(tune.slug, tune.title || tune.slug));
+    li.appendChild(label);
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+function renderBinder() {
+  const ul = document.getElementById('binder-entries');
+  const empty = document.getElementById('empty-msg');
+  ul.innerHTML = '';
+  empty.style.display = binderEntries.length === 0 ? '' : 'none';
+  if (binderEntries.length === 0) return;
+  binderEntries.forEach((entry, idx) => {
+    const li = document.createElement('li');
+    // Reorder buttons
+    const up = document.createElement('button');
+    up.className = 'move-btn'; up.textContent = '↑'; up.title = 'Move up';
+    up.addEventListener('click', () => { if (idx > 0) { [binderEntries[idx-1], binderEntries[idx]] = [binderEntries[idx], binderEntries[idx-1]]; renderBinder(); } });
+    const dn = document.createElement('button');
+    dn.className = 'move-btn'; dn.textContent = '↓'; dn.title = 'Move down';
+    dn.addEventListener('click', () => { if (idx < binderEntries.length-1) { [binderEntries[idx], binderEntries[idx+1]] = [binderEntries[idx+1], binderEntries[idx]]; renderBinder(); } });
+    // Info
+    const info = document.createElement('div');
+    info.style.flex = '1';
+    info.style.marginLeft = '4px';
+    const title = document.createElement('div');
+    title.textContent = entry.title;
+    // Part tags
+    const tags = document.createElement('div');
+    tags.className = 'part-tags';
+    if (tuneDetails[entry.tuneSlug]) {
+      tuneDetails[entry.tuneSlug].parts.forEach(p => {
+        const tag = document.createElement('span');
+        tag.className = 'part-tag' + (entry.parts.includes(p.name) ? ' selected' : '');
+        tag.textContent = p.name;
+        tag.addEventListener('click', () => togglePart(entry.tuneSlug, p.name));
+        tags.appendChild(tag);
+      });
+    }
+    info.appendChild(title);
+    info.appendChild(tags);
+    // Remove
+    const rm = document.createElement('button');
+    rm.textContent = '✕'; rm.title = 'Remove';
+    rm.addEventListener('click', () => {
+      binderEntries.splice(idx, 1);
+      renderBinder();
+      renderTuneList(document.getElementById('search-tunes').value.toLowerCase());
+    });
+    li.appendChild(up);
+    li.appendChild(dn);
+    li.appendChild(info);
+    li.appendChild(rm);
+    ul.appendChild(li);
+  });
+  renderTuneList(document.getElementById('search-tunes').value.toLowerCase());
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+async function addTune(slug, title) {
+  if (binderEntries.some(e => e.tuneSlug === slug)) return;
+  try {
+    const detail = await getTuneDetail(slug);
+    const allPartNames = detail.parts.map(p => p.name);
+    binderEntries.push({ tuneSlug: slug, title, parts: allPartNames });
+    renderBinder();
+  } catch (e) {
+    setStatus('Failed to load tune detail: ' + e.message);
+  }
+}
+
+function togglePart(slug, partName) {
+  const entry = binderEntries.find(e => e.tuneSlug === slug);
+  if (!entry) return;
+  const idx = entry.parts.indexOf(partName);
+  if (idx >= 0) {
+    entry.parts.splice(idx, 1);
+    if (entry.parts.length === 0) entry.parts.push(partName); // keep at least one
+  } else {
+    entry.parts.push(partName);
+  }
+  renderBinder();
+}
+
+function clearBinder() {
+  binderEntries = [];
+  document.getElementById('yaml-output').value = '';
+  setStatus('');
+  renderBinder();
+  renderTuneList(document.getElementById('search-tunes').value.toLowerCase());
+}
+
+function generateYAML() {
+  const branch = document.getElementById('sel-branch').value;
+  const name = document.getElementById('binder-name').value.trim() || 'Untitled Binder';
+  if (!branch) { setStatus('Please select a year first.'); return; }
+  if (binderEntries.length === 0) { setStatus('No tunes selected.'); return; }
+
+  const lines = [
+    `name: "${name}"`,
+    `branch: "${branch}"`,
+    `entries:`,
+  ];
+  binderEntries.forEach(entry => {
+    lines.push(`  - tune_slug: "${entry.tuneSlug}"`);
+    lines.push(`    parts:`);
+    entry.parts.forEach(p => lines.push(`      - "${p}"`));
+  });
+
+  document.getElementById('yaml-output').value = lines.join('\n');
+  setStatus('YAML generated. Copy and commit it to the svpb-music repository.');
+}
+
+function setStatus(msg) {
+  document.getElementById('status-msg').textContent = msg;
+}
+</script>
+#endexport
+
+#endextend

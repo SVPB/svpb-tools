@@ -36,6 +36,15 @@ extension Application {
         set { storage[BoxServiceKey.self] = newValue }
     }
 
+    // MARK: BinderService
+
+    private struct BinderServiceKey: StorageKey { typealias Value = BinderService }
+
+    var binderService: BinderService {
+        get { storage[BinderServiceKey.self]! }
+        set { storage[BinderServiceKey.self] = newValue }
+    }
+
     // MARK: Shared HTTPClient
 
     private struct SharedHTTPClientKey: StorageKey { typealias Value = HTTPClient }

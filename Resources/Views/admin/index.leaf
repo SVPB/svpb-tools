@@ -1,54 +1,53 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Admin Dashboard — SVPB TNG</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
-    header { background: #1a1a2e; color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
-    header h1 { margin: 0; font-size: 1.2rem; }
-    header .meta { font-size: 0.85rem; opacity: 0.7; }
-    main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
-    h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
-    .branches { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 2rem; }
-    .badge { background: #1a1a2e; color: #fff; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; }
-    table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
-    th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
-    th     { background: #eee; font-weight: 600; }
-    tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
-    .status-running { color: #b45309; }
-    .status-success { color: #166534; }
-    .status-failure { color: #991b1b; }
-    a { color: #1a1a2e; }
-    form.logout { display: inline; }
-    button.logout { background: none; border: 1px solid rgba(255,255,255,.4); color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-  </style>
-</head>
-<body>
+#extend("layouts/public"):
 
-<header>
-  <h1>🎵 SVPB TNG Admin</h1>
-  <div style="display:flex;align-items:center;gap:1rem;">
-    <span class="meta">Signed in as #(currentUser)</span>
-    <form class="logout" method="POST" action="/admin/logout">
-      <button class="logout" type="submit">Sign out</button>
-    </form>
-  </div>
-</header>
+#export("title"):Admin — SVPB TNG#endexport
 
+#export("styles"):
+<style>
+  main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+  h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
+  .branches { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 2rem; }
+  .badge { background: #1a1a2e; color: #fff; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; }
+  .sync-btn { font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(0,0,0,.2); background: none; color: #1a1a2e; cursor: pointer; margin-left: 4px; vertical-align: middle; }
+  .sync-btn:hover { background: rgba(0,0,0,.06); }
+  .sync-btn:disabled { opacity: 0.5; cursor: default; }
+  .branch-item { display: inline-flex; align-items: center; margin-bottom: 4px; }
+  .sync-form { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
+  .sync-form input { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.88rem; width: 160px; }
+  .sync-form button { padding: 4px 12px; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; font-size: 0.88rem; }
+  .sync-form button:hover { background: #f0f0f0; }
+  #sync-status { font-size: 0.83rem; color: #555; margin-top: 0.4rem; min-height: 1.2em; }
+  table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
+  th     { background: #eee; font-weight: 600; }
+  tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+  .status-running { color: #b45309; }
+  .status-success { color: #166534; }
+  .status-failure { color: #991b1b; }
+  a { color: #1a1a2e; }
+</style>
+#endexport
+
+#export("content"):
 <main>
 
   <h2>Known Branches</h2>
   <div class="branches">
     #for(branch in branchNames):
-      <span class="badge">#(branch)</span>
+      <span class="branch-item">
+        <span class="badge">#(branch)</span>
+        <button class="sync-btn" onclick="syncBranch('#(branch)', this)" title="Sync catalogue for #(branch)">↻ Sync</button>
+      </span>
     #endfor
     #if(branchNames.isEmpty):
       <em style="color:#888">No builds yet.</em>
     #endif
   </div>
+  <div class="sync-form">
+    <input type="text" id="new-branch" placeholder="Branch name, e.g. 2026">
+    <button onclick="syncNewBranch()">↻ Sync branch…</button>
+  </div>
+  <div id="sync-status"></div>
 
   <h2>Recent Builds</h2>
   #if(builds.isEmpty):
@@ -79,10 +78,74 @@
   #endif
 
 </main>
+#endexport
 
-<footer style="text-align:center;padding:2rem;font-size:0.8rem;color:#999;">
-  SVPB TNG v#(appVersion)
-</footer>
+#export("scripts"):
+<script>
+'use strict';
 
-</body>
-</html>
+async function syncBranch(branch, btn) {
+  const status = document.getElementById('sync-status');
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
+  status.textContent = 'Syncing catalogue for branch "' + branch + '"…';
+
+  try {
+    const res = await fetch('/admin/branches/' + encodeURIComponent(branch) + '/sync', {
+      method: 'POST',
+    });
+    if (res.ok) {
+      status.textContent = 'Build started for "' + branch + '". Waiting for completion…';
+      pollBuildStatus(branch, btn);
+    } else {
+      const text = await res.text();
+      status.textContent = 'Error: ' + text;
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+    }
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+  }
+}
+
+function pollBuildStatus(branch, btn) {
+  const status = document.getElementById('sync-status');
+  let attempts = 0;
+  const maxAttempts = 120; // 10 minutes at 5s intervals
+  const timer = setInterval(async () => {
+    if (++attempts > maxAttempts) {
+      clearInterval(timer);
+      status.textContent = 'Sync is taking longer than expected. Reload to check.';
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+      return;
+    }
+    try {
+      const res = await fetch('/admin/branches/' + encodeURIComponent(branch) + '/latest-build');
+      const dto = await res.json();
+      if (dto.status === 'success') {
+        clearInterval(timer);
+        status.textContent = 'Sync complete for "' + branch + '"! Reloading…';
+        setTimeout(() => location.reload(), 800);
+      } else if (dto.status === 'failure') {
+        clearInterval(timer);
+        status.textContent = 'Sync failed for "' + branch + '". See the build log for details.';
+        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+        setTimeout(() => location.reload(), 800);
+      }
+    } catch (_) { /* keep polling */ }
+  }, 5000);
+}
+
+function syncNewBranch() {
+  const input = document.getElementById('new-branch');
+  const branch = input.value.trim();
+  if (!branch) {
+    document.getElementById('sync-status').textContent = 'Please enter a branch name.';
+    return;
+  }
+  input.value = '';
+  syncBranch(branch, null);
+}
+</script>
+#endexport
+
+#endextend

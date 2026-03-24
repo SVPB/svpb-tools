@@ -23,3 +23,5 @@ dev.dockerfile
 .claude
 run_server.sh
 .env.development
+data
+box_auth.sh

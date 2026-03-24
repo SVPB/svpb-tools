@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>#import("title")</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body   { font-family: system-ui, sans-serif; margin: 0; background: #f5f5f5; color: #222; }
+    header { background: #1a1a2e; color: #fff; padding: 0 2rem; display: flex; justify-content: space-between; align-items: stretch; }
+    header h1 { margin: 0; font-size: 1.2rem; display: flex; align-items: center; }
+
+    /* ── Navigation ── */
+    nav { display: flex; align-items: stretch; }
+    .nav-item { position: relative; display: flex; align-items: stretch; }
+    .nav-item > a, .nav-item > button.nav-label {
+      color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.9rem;
+      padding: 0 1.1rem; display: flex; align-items: center; gap: 0.25rem;
+      background: none; border: none; cursor: pointer; white-space: nowrap;
+    }
+    .nav-item > a:hover, .nav-item > button.nav-label:hover { color: #fff; background: rgba(255,255,255,.08); }
+    .nav-item > a.active, .nav-item > button.nav-label.active { color: #fff; }
+
+    /* Dropdown */
+    .nav-dropdown {
+      display: none; position: absolute; top: 100%; left: 0;
+      background: #1a1a2e; border: 1px solid rgba(255,255,255,.18);
+      border-top: none; border-radius: 0 0 6px 6px;
+      min-width: 180px; z-index: 200;
+    }
+    .nav-item:hover .nav-dropdown { display: block; }
+    .nav-dropdown a {
+      display: block; padding: 0.6rem 1rem;
+      color: rgba(255,255,255,.8); text-decoration: none; font-size: 0.88rem;
+      white-space: nowrap;
+    }
+    .nav-dropdown a:hover { background: rgba(255,255,255,.1); color: #fff; }
+    .nav-dropdown a:last-child { border-radius: 0 0 6px 6px; }
+
+    /* ── Right side: user info ── */
+    .header-right { display: flex; align-items: center; gap: 1rem; padding: 0 0 0 1.5rem; min-width: 220px; justify-content: flex-end; }
+    .header-right .meta { font-size: 0.82rem; opacity: 0.7; white-space: nowrap; }
+    form.logout { display: inline; }
+    button.logout {
+      background: none; border: 1px solid rgba(255,255,255,.4);
+      color: #fff; padding: 4px 12px; border-radius: 4px;
+      cursor: pointer; font-size: 0.82rem;
+    }
+    button.logout:hover { background: rgba(255,255,255,.1); }
+
+    footer { text-align: center; padding: 2rem; font-size: 0.8rem; color: #999; }
+  </style>
+  #import("styles")
+</head>
+<body>
+
+<header>
+  <h1>🎵 SVPB TNG</h1>
+  <nav>
+    <div class="nav-item">
+      <a href="/">Home</a>
+    </div>
+    <div class="nav-item">
+      <button class="nav-label">Binders ▾</button>
+      <div class="nav-dropdown">
+        <a href="/binder-constructor">Describe a binder</a>
+        <a href="/binder-builder">Personalized Set</a>
+      </div>
+    </div>
+    #if(isAdmin):
+    <div class="nav-item">
+      <button class="nav-label">Admin ▾</button>
+      <div class="nav-dropdown">
+        <a href="/admin/users">Users</a>
+        <a href="/admin">Builds</a>
+      </div>
+    </div>
+    #endif
+  </nav>
+  <div class="header-right">
+    #if(currentUser):
+    <span class="meta">Signed in as #(currentUser)</span>
+    <form class="logout" method="POST" action="/admin/logout">
+      <button class="logout" type="submit">Sign out</button>
+    </form>
+    #endif
+  </div>
+</header>
+
+#import("content")
+
+<footer>SVPB TNG v#(appVersion)</footer>
+
+#import("scripts")
+</body>
+</html>
