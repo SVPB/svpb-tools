@@ -34,7 +34,6 @@ band binder, which is then committed to `svpb-music`.
 - Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).
 - Your own Slack user ID (to seed the initial admin account on first startup).
 - A Slack app with bot and Events API capabilities (see [Slack setup](#slack-setup) below).
-- Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).
 
 ---
 
