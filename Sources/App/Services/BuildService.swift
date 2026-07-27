@@ -1,4 +1,5 @@
-import ABCKit
+import CeolKitParser
+import CeolKitSVGRenderer
 import Fluent
 import Foundation
 import SVGPDFKit
@@ -11,7 +12,7 @@ import Vapor
 ///   1. Create a `Build` record (status: .running).
 ///   2. `git` sync via `GitService`.
 ///   3. Discover every `.abc` file in the working tree.
-///   4. For each file: convert ABC → per-page SVGs (ABCKit) → PDF (SVGPDFKit).
+///   4. For each file: convert ABC → per-page SVGs (CeolKit) → PDF (SVGPDFKit).
 ///   5. Optionally upload each PDF to Box (via `BoxService`).
 ///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records.
 ///   7. Optionally post a Slack notification (via `SlackService`).
@@ -134,13 +135,9 @@ actor BuildService {
             try FileManager.default.createDirectory(at: outputDir,
                                                     withIntermediateDirectories: true)
 
-            // One converter for all files; no svgOutputDirectory — ABCKit returns
-            // all pages as concatenated SVG documents in the return value.
-            let converter = ABCConverter(options: .init(
-                outputFormat: .svg,
-                pageSize: .letter,
-                bagpipeFormat: true
-            ))
+            // One renderer for all files. Bagpipe-specific engraving is driven from
+            // the ABC source itself (`%%ceolkit:pipeformat true`), not from config.
+            let renderer = SVGRenderer(config: .init(pageSize: .letter))
 
             for abcURL in abcFiles {
                 let stem = abcURL.deletingPathExtension().lastPathComponent
@@ -148,11 +145,19 @@ actor BuildService {
 
                 let abcContent = try String(contentsOf: abcURL, encoding: .utf8)
 
-                // ABCKit returns all pages concatenated as individual <svg>…</svg>
-                // documents. Split them and write each to its own numbered file so
-                // SVGPDFKit can render them as separate PDF pages.
-                let allPagesSVG = try await converter.convert(abcContent)
-                let pageStrings = splitSVGPages(allPagesSVG)
+                // The parser's base directory is the ABC file's own directory so
+                // `I:abc-include` references resolve relative to the source file.
+                let parser = CeolKitParser(
+                    for: abcURL.deletingLastPathComponent(),
+                    fileResolver: CeolKitParser.defaultFileResolver
+                )
+                let parsed = parser.parse(abcContent, options: .default)
+                log += formatDiagnostics(parsed, stem: stem)
+
+                // CeolKit's SVG renderer returns one complete <svg>…</svg> document
+                // per page. Write each to its own numbered file so SVGPDFKit can
+                // render them as separate PDF pages.
+                let pageStrings = try renderer.render(parsed.score)
                 log += "[convert]   → \(pageStrings.count) page(s)\n"
 
                 guard !pageStrings.isEmpty else {
@@ -188,10 +193,9 @@ actor BuildService {
                 do {
                     try await upsertCatalogueEntry(
                         branch: branch,
-                        branchRecord: branchRecord,
                         stem: stem,
                         abcPath: abcURL.path,
-                        abcContent: abcContent,
+                        parsed: parsed,
                         pdfPath: pdfURL.path,
                         svgPaths: svgFiles.map(\.path),
                         db: db
@@ -246,17 +250,20 @@ actor BuildService {
     // MARK: - Catalogue population
 
     /// Upserts `Tune` and `Part` records for one converted ABC file.
+    ///
+    /// Takes the `ParseResult` produced for rendering rather than the raw ABC
+    /// text: the file has already been parsed once, and CeolKit's score model
+    /// carries the title and voice names the catalogue needs.
     private func upsertCatalogueEntry(
         branch: String,
-        branchRecord: Branch,
         stem: String,
         abcPath: String,
-        abcContent: String,
+        parsed: ParseResult,
         pdfPath: String,
         svgPaths: [String],
         db: Database
     ) async throws {
-        let parsed = ABCParser.parse(abcContent)
+        let entry = CatalogueExtractor.extract(from: parsed)
 
         // Upsert Tune
         let tune: Tune
@@ -264,7 +271,7 @@ actor BuildService {
             .filter(\.$branch.$id == branch)
             .filter(\.$slug == stem)
             .first() {
-            existing.title = parsed.title
+            existing.title = entry.title
             existing.abcPath = abcPath
             try await existing.save(on: db)
             tune = existing
@@ -272,7 +279,7 @@ actor BuildService {
             let fresh = Tune()
             fresh.$branch.id = branch
             fresh.slug = stem
-            fresh.title = parsed.title
+            fresh.title = entry.title
             fresh.abcPath = abcPath
             try await fresh.save(on: db)
             tune = fresh
@@ -281,7 +288,7 @@ actor BuildService {
         let tuneID = try tune.requireID()
 
         // Upsert Parts
-        for partName in parsed.parts {
+        for partName in entry.parts {
             if let existing = try await Part.query(on: db)
                 .filter(\.$tune.$id == tuneID)
                 .filter(\.$name == partName)
@@ -315,15 +322,32 @@ actor BuildService {
             .sorted { $0.path < $1.path }
     }
 
-    // MARK: - SVG page splitting
+    // MARK: - Parser diagnostics
 
-    /// Splits a concatenated multi-page SVG string (as returned by ABCKit) into
-    /// individual `<svg>…</svg>` documents, one per page.
-    private func splitSVGPages(_ svg: String) -> [String] {
-        svg.components(separatedBy: "</svg>")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .map { $0 + "</svg>" }
+    /// Renders CeolKit parse diagnostics as build-log lines.
+    ///
+    /// Diagnostics replace the stdout/stderr that the previous `abcm2ps`-backed
+    /// converter emitted, so they are the operator's only window into a source
+    /// file that parsed badly. `info`-severity entries are dropped to keep the
+    /// log readable.
+    private func formatDiagnostics(_ parsed: ParseResult, stem: String) -> String {
+        var out = ""
+        for diagnostic in parsed.diagnostics {
+            let label: String
+            switch diagnostic.severity {
+            case .error:   label = "✗ error"
+            case .warning: label = "⚠ warning"
+            case .info:    continue
+            }
+            let source = diagnostic.source
+            let file = source.file?.lastPathComponent ?? "\(stem).abc"
+            out += "[parse]   \(label) \(file):\(source.line):\(source.column): "
+            out += "\(diagnostic.message) [\(diagnostic.code.rawValue)]\n"
+            if let hint = diagnostic.hint {
+                out += "[parse]     hint: \(hint)\n"
+            }
+        }
+        return out
     }
 
     // MARK: - PDF conversion

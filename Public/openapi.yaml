@@ -6,7 +6,7 @@ info:
   description: |
     REST API for the SVPB TNG music distribution server.
 
-    The server converts ABC notation to PDF in-process (via ABCKit → SVGPDFKit),
+    The server converts ABC notation to PDF in-process (via CeolKit → SVGPDFKit),
     distributes official band PDFs to Box, and allows band members to assemble
     personalised binders containing only the parts they need.
 

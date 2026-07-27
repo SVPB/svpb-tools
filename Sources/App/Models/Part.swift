@@ -1,7 +1,13 @@
 import Fluent
 import Vapor
 
-/// A single named part (voice) within a tune on a given branch.
+/// A single named part within a tune on a given branch.
+///
+/// Each part corresponds to one ABC voice (`V:`) found by CeolKit when the file
+/// was rendered. The name is the voice's `nm=` attribute, falling back to `snm=`
+/// and then to the raw voice ID, so `V:2 nm="Harmony 1"` becomes "Harmony 1" and
+/// a bare `V:Bass` becomes "Bass". A file that declares no voices at all yields a
+/// single part named "Full Score". See `CatalogueExtractor`.
 ///
 /// Examples of part names: "Melody", "Harmony 1", "Harmony 2".
 /// The composite natural key across the data model is

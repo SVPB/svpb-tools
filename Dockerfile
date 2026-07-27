@@ -1,5 +1,7 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM swift:6.2-noble AS build
+# Swift 6.3 or newer is required: CeolKit's manifest declares
+# `swift-tools-version: 6.3`, which older toolchains refuse to parse.
+FROM swift:6.3-noble AS build
 
 WORKDIR /build
 
@@ -15,8 +17,24 @@ COPY Resources ./Resources
 COPY Public ./Public
 RUN swift build -c release --product TNG 2>&1
 
+# Collect the executable and every SwiftPM resource bundle into one staging
+# directory. `Bundle.module` resolves resources relative to the executable, so
+# these must travel together — CeolKit's SVG renderer loads the Bravura and
+# Libertinus Serif fonts this way and throws on every conversion without them.
+RUN set -eu; \
+    mkdir -p /staging; \
+    BIN="$(swift build -c release --show-bin-path)"; \
+    cp "$BIN/TNG" /staging/; \
+    find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} /staging/ \; ; \
+    if [ ! -d /staging/CeolKit_CeolKitSVGRenderer.resources ] \
+    && [ ! -d /staging/CeolKit_CeolKitSVGRenderer.bundle ]; then \
+      echo "ERROR: CeolKit resource bundle not found in $BIN." >&2; \
+      echo "The SVG renderer's fonts would fail to load on every conversion." >&2; \
+      exit 1; \
+    fi
+
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM swift:6.2-noble-slim AS runtime
+FROM swift:6.3-noble-slim AS runtime
 
 # Runtime dependencies:
 #   - libssl / libcurl: for AsyncHTTPClient / Vapor
@@ -35,7 +53,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=build /build/.build/release/TNG .
+# The executable plus its SwiftPM resource bundles, staged together above.
+COPY --from=build /staging/ ./
 COPY --from=build /build/Resources ./Resources
 COPY --from=build /build/Public ./Public
 

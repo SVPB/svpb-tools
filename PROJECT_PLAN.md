@@ -10,7 +10,7 @@ sufficient to have a working system.
 The two headline improvements over Gen.1 are:
 
 1. **Simplified operations** — ABC-to-PDF conversion is handled entirely in-process by two Swift
-   libraries ([ABCKit] and [SVGPDFKit]), so the server has no external build-tool dependencies
+   libraries ([CeolKit] and [SVGPDFKit]), so the server has no external build-tool dependencies
    whatsoever. The only runtime requirement is Docker for the compose stack itself.
 
 2. **Personalised binders** — Band members can assemble a custom PDF that contains only the parts
@@ -21,8 +21,7 @@ The two headline improvements over Gen.1 are:
 ## Background and Constraints
 
 - Source music is stored in ABC notation in the [svpb-music] GitHub repository.
-- Conversion from ABC → SVG is handled in-process by [ABCKit] (a Swift wrapper around the
-  vendored `abcm2ps` C library).
+- Conversion from ABC → SVG is handled in-process by [CeolKit] (a Swift library).
 - Conversion from SVG → PDF is handled in-process by [SVGPDFKit] (built on SwiftDraw +
   CoreGraphics).
 - Finished PDFs are distributed via a shared Box folder.
@@ -39,7 +38,7 @@ The two headline improvements over Gen.1 are:
 |---|---------|-------------|
 | C1 | GitHub webhook receiver | An HTTPS endpoint that accepts `push` events from GitHub. Validates the shared webhook secret before acting. |
 | C2 | Repository sync | On a valid webhook event, pull (or clone) the latest state of `svpb-music` into a working directory on the server. |
-| C3 | In-process conversion | For each changed ABC file, invoke `ABCKit` (configured for one SVG per page) to produce a sequence of per-page SVG documents, then pass them as an ordered list of `SVGSource` values to `SVGPDFKit` to produce a per-part PDF. Both steps run inside the server process — no external tools or containers required. |
+| C3 | In-process conversion | For each changed ABC file, invoke `CeolKit` (configured for one SVG per page) to produce a sequence of per-page SVG documents, then pass them as an ordered list of `SVGSource` values to `SVGPDFKit` to produce a per-part PDF. Both steps run inside the server process — no external tools or containers required. |
 | C4 | Box upload | Walk the output directory for freshly-built PDFs and upload them to Box via the Box REST API. PDFs are placed in a year-named subfolder of `pipe_music` (e.g. `pipe_music/2026/`) matching the git branch. If the subfolder does not yet exist it is created automatically via the Box API before uploading. Replaces any previous version of the same file within that folder. |
 | C5 | Slack notification | Post a build-summary message to the configured Slack channel (success / failure, list of changed files, link to Box folder). |
 | C6 | Build log retention | Store the stdout/stderr of each build locally, accessible via the admin UI, so failures can be diagnosed without SSH access. |
@@ -89,17 +88,17 @@ managed by TNG itself; identity is delegated entirely to the band's Slack worksp
 ┌─────────────────────────────────────────────────────────┐
 │                    docker compose stack                 │
 │                                                         │
-│  ┌──────────┐   HTTPS    ┌─────────────────────────┐   │
-│  │  Caddy   │ ◄────────► │      TNG Server         │   │
-│  │ (TLS +   │            │  (Swift / Vapor)        │   │
-│  │  proxy)  │            │                         │   │
-│  └──────────┘            │  • Webhook handler      │   │
-│                           │  • ABCKit  (ABC→SVG)   │   │
-│                           │  • SVGPDFKit (SVG→PDF) │   │
-│                           │  • Binder builder UI   │   │
-│                           │  • Admin dashboard     │   │
-│                           │  • Box & Slack clients │   │
-│                           └─────────────────────────┘   │
+│  ┌──────────┐   HTTPS    ┌─────────────────────────┐    │
+│  │  Caddy   │ ◄────────► │      TNG Server         │    │
+│  │ (TLS +   │            │  (Swift / Vapor)        │    │
+│  │  proxy)  │            │                         │    │
+│  └──────────┘            │  • Webhook handler      │    │
+│                          │  • CeolKit (ABC→SVG)    │    │
+│                          │  • SVGPDFKit (SVG→PDF)  │    │
+│                          │  • Binder builder UI    │    │
+│                          │  • Admin dashboard      │    │
+│                          │  • Box & Slack clients  │    │
+│                          └─────────────────────────┘    │
 │                                                         │
 │  Named volume: /music-workspace (cloned repo + PDFs)    │
 └─────────────────────────────────────────────────────────┘
@@ -116,7 +115,7 @@ managed by TNG itself; identity is delegated entirely to the band's Slack worksp
 - Vapor is the most mature Swift web framework, with built-in async/await support, routing,
   middleware, and WebSockets.
 - Swift compiles to a single native binary; the final Docker image can be kept very small using
-  a multi-stage build (builder stage: `swift:6.2-noble`, runtime stage: `swift:6.2-noble-slim`).
+  a multi-stage build (builder stage: `swift:6.3-noble`, runtime stage: `swift:6.3-noble-slim`).
 - Vapor's structured concurrency model makes it straightforward to run background build jobs
   without blocking the HTTP server.
 
@@ -127,24 +126,39 @@ managed by TNG itself; identity is delegated entirely to the band's Slack worksp
 - Stores build history, logs, and the cached tune catalogue.
 - The database file lives on a Docker volume so it survives container restarts.
 
-**ABC → SVG Conversion:** [ABCKit](https://codeberg.org/sbeitzel/ABCKit)
+**ABC → SVG Conversion:** [CeolKit](https://github.com/sbeitzel/CeolKit)
 
-- Swift package that vendors the `abcm2ps` C library, so no external binary is needed.
-- Public API: `ABCConverter` actor; call `convert(_:includedFiles:)` with an ABC string and
-  receive SVG markup back as a `String`. Configured via `ABCConverter.Options` (output format,
-  page size, bagpipe format, etc.).
-- Output granularity: ABCKit is configured to emit **one SVG document per page**. This gives
-  SVGPDFKit a one-to-one mapping of SVG inputs to PDF pages, making `startingPageNumber`
-  injection precise and unambiguous.
-- The `Package.swift` platform declaration (`.macOS(.v13)`) does not exclude Linux; in Swift
-  Package Manager, specifying a minimum macOS version implies Linux compatibility for macOS ≥ 12.
-  No changes to the package manifest are required to use ABCKit in a Linux Docker image.
+- Pure-Swift ABC parser and engraver — no vendored C library and no external binary. Replaces
+  the `abcm2ps`-backed ABCKit used earlier in the project's life.
+- Consumed as two of its four library products: `CeolKitParser` (ABC text → `Score`) and
+  `CeolKitSVGRenderer` (`Score` → SVG). `CeolKitModel` is deliberately *not* a declared
+  dependency — its `Tune` type would shadow-clash with the Fluent `Tune` model, so score values
+  flow through the app without their types ever being named.
+- Public API is a two-step pipeline rather than a single `convert` call:
+  1. `CeolKitParser(for:fileResolver:).parse(_:options:)` returns a `ParseResult` carrying a
+     `Score` and an array of `Diagnostic` values. The `for:` base directory is what makes
+     `I:abc-include` references resolve, so it is set to the ABC file's own directory.
+  2. `SVGRenderer(config:).render(_:)` takes that `Score` and returns `[String]` — **one
+     complete SVG document per page**. This gives SVGPDFKit a one-to-one mapping of SVG inputs
+     to PDF pages, making `startingPageNumber` injection precise and unambiguous.
+- Configured via `SVGRenderConfig` (page size, margins, staff size, system/tune gaps, flag and
+  slur styling). Bagpipe-specific engraving is no longer a converter flag: it is driven from the
+  ABC source itself with `%%ceolkit:pipeformat true`, so the score files own that decision.
+- Diagnostics replace the stdout/stderr that `abcm2ps` used to emit. `BuildService` formats the
+  `error` and `warning` entries into the build log, which is what the admin UI shows for a
+  failed or suspicious conversion.
+- `CeolKitSVGRenderer` ships the Bravura (music) and Libertinus Serif (text) fonts as a SwiftPM
+  resource bundle loaded through `Bundle.module`. The bundle must be deployed **alongside the
+  executable** — see the staging step in the `Dockerfile`, without which every conversion throws.
+- CeolKit's manifest declares `swift-tools-version: 6.3`, which sets the floor for the Docker
+  build image (`swift:6.3-noble`). Its `platforms` declaration (`.macOS(.v14)`) does not exclude
+  Linux; in Swift Package Manager a minimum macOS version implies Linux compatibility.
 
 **SVG → PDF Conversion and Binder Assembly:** [SVGPDFKit](https://github.com/sbeitzel/SVGPDFKit)
 
 - Swift package built on SwiftDraw + CoreGraphics; supports both macOS and Linux.
 - Public API: `SVGPDFConverter` struct; call `convert(sources:)` with an array of `SVGSource`
-  values (`.data(Data)` accepts in-memory SVG output directly from ABCKit) and receive a `Data`
+  values (`.data(Data)` accepts in-memory SVG output directly from CeolKit) and receive a `Data`
   blob containing the finished PDF.
 - `ConversionOptions.startingPageNumber` is used directly for personal binder page numbering:
   each binder request calculates the correct offset and passes it in, so footer page numbers
@@ -294,8 +308,9 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 ### Phase 1 — Automated Build Pipeline (C1–C6) (3–5 days)
 
 - Implement `git pull` / `git clone` of `svpb-music` via `Foundation.Process` on webhook receipt.
-- For each ABC file in the working directory, call `ABCKit.ABCConverter` (configured for one SVG
-  per page) to produce an ordered sequence of per-page SVG strings. Pass them as `[SVGSource]`
+- For each ABC file in the working directory, parse it with `CeolKitParser` and render the
+  resulting `Score` with `CeolKitSVGRenderer.SVGRenderer`, which yields an ordered sequence of
+  per-page SVG strings. Pass them as `[SVGSource]`
   to `SVGPDFKit.SVGPDFConverter` to produce a single per-part PDF; write it to the named volume.
   Both conversions run in a Swift structured-concurrency task group so files are processed
   concurrently without blocking the HTTP server.
@@ -318,8 +333,9 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 
 ### Phase 2 — Tune Catalogue and Binder UI (B1–B6) (5–7 days)
 
-- ABC file parser (pure Swift) to extract tune titles and part names from `T:` and `V:` fields;
-  upsert `Branch`, `Tune`, and `Part` Fluent models after each successful build, keyed on
+- Tune titles and part names are taken from the `Score` that CeolKit already produced to render
+  the file — `CatalogueExtractor` maps them onto catalogue fields and the app parses no ABC
+  itself. Upsert `Branch`, `Tune`, and `Part` Fluent models after each successful build, keyed on
   `(branch, slug)` so that year-specific arrangements are stored and queried independently.
 - Shared tune-selection UI component (plain HTML + vanilla JavaScript, rendered via
   [Leaf](https://docs.vapor.codes/leaf/overview/) templates): browse/search tunes, select parts,
@@ -343,7 +359,7 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 - Retry logic for Box uploads and Slack notifications.
 - Admin dashboard: manual rebuild trigger, binder PDF cache cleanup.
 - Integration test suite covering the webhook → build → Box flow (using a local mock).
-- Operator runbook: how to deploy, how to rotate secrets, how to update ABCKit or SVGPDFKit dependencies.
+- Operator runbook: how to deploy, how to rotate secrets, how to update CeolKit or SVGPDFKit dependencies.
 - Migration notes from Gen.1 (what to decommission, how to redirect the GitHub webhook).
 
 ---
@@ -370,5 +386,5 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 ---
 
 [svpb-music]: https://github.com/SVPB/svpb-music
-[ABCKit]: https://codeberg.org/sbeitzel/ABCKit
+[CeolKit]: https://github.com/sbeitzel/CeolKit
 [SVGPDFKit]: https://github.com/sbeitzel/SVGPDFKit

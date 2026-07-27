@@ -10,13 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 #### Tune catalogue (B1)
 
-- `ABCParser` — pure-Swift parser that extracts `T:` (title) and `V:` (voice/part) fields from
-  ABC notation files. Returns a deduplicated, ordered list of part names; defaults to
-  `["Full Score"]` when no `V:` fields are present.
+- `CatalogueExtractor` — maps the `Score` that CeolKit produced while rendering a file onto the
+  catalogue's title and part-name fields. Returns a deduplicated, ordered list of part names;
+  defaults to `["Full Score"]` when the file declares no voices.
 - `AddSvgPathsToPart` migration — adds a nullable `svg_paths` TEXT column to the `parts` table.
   Stores a JSON-encoded `[String]` of absolute paths to the per-page SVG files produced during
   the build, so the binder pipeline can re-render them with a custom `startingPageNumber` without
-  re-running ABCKit.
+  re-running CeolKit.
 - `CatalogueController` — unauthenticated read-only JSON API:
   - `GET /branches` — lists all known branches (years), newest first.
   - `GET /branches/:branch/tunes` — lists all tunes for a branch, sorted by slug.
@@ -64,6 +64,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - In `box-auth` mode `configure()` skips env-var validation and service initialisation, so the
     command works when only the Box credentials are present.
   - Invoked as described in the README: `docker compose run --rm tng swift run TNG box-auth`.
+
+### Changed
+
+#### ABC → SVG engine: ABCKit replaced by CeolKit
+
+- The `abcm2ps`-backed [ABCKit](https://codeberg.org/sbeitzel/ABCKit) dependency is replaced by
+  the pure-Swift [CeolKit](https://github.com/sbeitzel/CeolKit). `Package.swift` now depends on
+  CeolKit's `CeolKitModel`, `CeolKitParser`, and `CeolKitSVGRenderer` products. No vendored C
+  library remains in the dependency graph.
+- `BuildService` conversion is now a two-step pipeline. Where it previously called a single
+  `ABCConverter.convert(_:)`, it now calls `CeolKitParser.parse(_:options:)` to obtain a `Score`
+  and then `SVGRenderer.render(_:)` to obtain the per-page SVG documents.
+- `SVGRenderer.render(_:)` returns `[String]` — one complete SVG document per page — so the
+  `splitSVGPages(_:)` helper that carved up ABCKit's concatenated return value is gone. The
+  string-splitting workaround described under *Fixed* below is no longer needed at all.
+- `I:abc-include` directives now resolve: the parser is constructed per file with the ABC file's
+  own directory as its base directory, replacing ABCKit's `includedFiles:` argument.
+- Bagpipe engraving is no longer a converter option. ABCKit took `bagpipeFormat: true` in its
+  configuration; CeolKit reads `%%ceolkit:pipeformat true` from the ABC source, so the score
+  files now own that decision.
+- Parse diagnostics replace `abcm2ps` stdout/stderr in the build log. `BuildService` formats
+  `error` and `warning` diagnostics with file, line, column, message, diagnostic code, and any
+  hint, so the admin UI log viewer still explains a bad conversion.
+- `Dockerfile`: the build and runtime images move from `swift:6.2-noble` to `swift:6.3-noble`,
+  because CeolKit's manifest declares `swift-tools-version: 6.3`. The build stage now also
+  stages every SwiftPM resource bundle next to the executable — `CeolKitSVGRenderer` loads the
+  Bravura and Libertinus Serif fonts through `Bundle.module`, and every conversion throws
+  without them. The stage asserts the CeolKit bundle is present so a packaging regression fails
+  the image build rather than the first webhook.
+- The app no longer parses ABC at all. The hand-rolled `ABCParser` — which scanned for `T:` and
+  `V:` lines to populate the catalogue — is deleted in favour of `CatalogueExtractor`, which
+  reads the `Score` CeolKit already produced to render the file. Each ABC file is now parsed
+  once per build instead of twice, and three behaviours change as a result:
+  - `V:2 nm="Harmony 1"` is now recognised. The old parser matched only the `name=` spelling,
+    so `nm=` used to fall through and label the part with its bare voice ID.
+  - A voice with `snm=` but no `nm=` is labelled with the short name rather than the voice ID.
+  - Part names are collected across *every* tune in a file. The old parser scanned `V:` lines
+    for the whole file without regard to which `X:` block they belonged to, which happened to
+    produce the same union — but by accident rather than design.
+- `Tune.title` for a multi-tune file (a medley) is documented as the first tune's title, which
+  is what the previous scan produced and what the catalogue UI shows.
+- `CeolKitModel` is no longer a declared dependency of the `App` target. Its `Tune` type would
+  shadow-clash with the Fluent `Tune` model, so score values flow through without being named.
+- `CatalogueExtractorTests` — covers title extraction, the `name=`/`nm=`/`snm=`/voice-ID
+  fallback chain, the "Full Score" default, and part collection across multi-tune files.
+- `ConversionPipelineTests` — first test coverage of the conversion pipeline. Exercises parse →
+  render → PDF on an inline tune, asserts the one-SVG-document-per-page contract SVGPDFKit
+  depends on, and checks that `I:abc-include` resolves against the parser's base directory. The
+  render test also fails if the CeolKit font bundle is missing, so the packaging regression is
+  caught in CI as well as in the image build.
 
 ### Fixed
 
@@ -116,7 +166,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 #### Catalogue sync — admin-triggered pull without Box upload
 
 - `BuildService.syncCatalogue(branch:db:logger:)` — new public method that runs the full
-  conversion pipeline (git pull → ABCKit → SVGPDFKit → Tune/Part upsert) but skips Box upload
+  conversion pipeline (git pull → CeolKit → SVGPDFKit → Tune/Part upsert) but skips Box upload
   and Slack notification. Produces PDFs on disk so the binder builder works immediately after
   a sync. Creates a `Build` record (visible in the build history log) with a note that external
   services were skipped.

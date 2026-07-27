@@ -11,7 +11,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.6.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.21.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "5.0.0"),
-        .package(url: "https://codeberg.org/sbeitzel/ABCKit.git", from: "0.2.0"),
+        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.0.0"),
         .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.2.0"),
     ],
     targets: [
@@ -25,7 +25,11 @@ let package = Package(
                 .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "ABCKit", package: "ABCKit"),
+                // CeolKitModel is deliberately not a dependency: its `Tune` type
+                // would shadow-clash with the Fluent `Tune` model. Score values
+                // flow through from CeolKitParser without being named.
+                .product(name: "CeolKitParser", package: "CeolKit"),
+                .product(name: "CeolKitSVGRenderer", package: "CeolKit"),
                 .product(name: "SVGPDFKit", package: "SVGPDFKit"),
             ],
             path: "Sources/App",
@@ -46,6 +50,9 @@ let package = Package(
                 .target(name: "App"),
                 .product(name: "XCTVapor", package: "vapor"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "CeolKitParser", package: "CeolKit"),
+                .product(name: "CeolKitSVGRenderer", package: "CeolKit"),
+                .product(name: "SVGPDFKit", package: "SVGPDFKit"),
             ],
             path: "Tests/AppTests",
             swiftSettings: swiftSettings

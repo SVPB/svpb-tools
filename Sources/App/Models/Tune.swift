@@ -25,6 +25,10 @@ final class Tune: Model, @unchecked Sendable {
     var slug: String
 
     /// Human-readable title from the ABC `T:` header field.
+    ///
+    /// One ABC file can hold several tunes (a medley is several `X:` blocks in
+    /// one file) but the catalogue keys on the filename and builds one PDF per
+    /// file, so this is the *first* tune's title.
     @OptionalField(key: "title")
     var title: String?
 

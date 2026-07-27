@@ -16,7 +16,7 @@ For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md
 1. A musician pushes a change to the `svpb-music` GitHub repository.
 2. GitHub sends a webhook to the TNG server.
 3. TNG pulls the repository, converts every changed ABC file to PDF in-process
-   (via ABCKit → SVGPDFKit), and uploads the results to Box.
+   (via CeolKit → SVGPDFKit), and uploads the results to Box.
 4. A summary is posted to the band's Slack channel.
 
 Band members can visit the server's web UI to build a personalised binder: select the tunes
@@ -29,6 +29,9 @@ band binder, which is then committed to `svpb-music`.
 ## Prerequisites
 
 - **Docker** and **Docker Compose** installed on the server host.
+- To build outside Docker: a **Swift 6.3 or newer** toolchain (required by the CeolKit
+  dependency). The Docker images pin `swift:6.3-noble`, so no host toolchain is needed for the
+  normal deployment path.
 - A domain name pointed at the server's public IP address (required for automatic TLS).
 - A GitHub webhook secret (any strong random string).
 - Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).

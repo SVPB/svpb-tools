@@ -32,7 +32,7 @@ final class Build: Model, @unchecked Sendable {
     @Field(key: "status")
     var status: BuildStatus
 
-    /// Full stdout/stderr captured from ABCKit and the build pipeline.
+    /// Full stdout/stderr captured from CeolKit and the build pipeline.
     /// Available in the admin UI for diagnosing failures.
     @OptionalField(key: "log")
     var log: String?
