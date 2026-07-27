@@ -1,4 +1,5 @@
 import AsyncHTTPClient
+import CeolKitSVGRenderer
 import Fluent
 import FluentSQLiteDriver
 import Leaf
@@ -53,6 +54,10 @@ public func configure(_ app: Application) async throws {
             }
         }
     }
+
+    // SVGKit resolves font-family against process-registered fonts, not the
+    // SVG's embedded @font-face data, so the bundled fonts must be registered.
+    CeolKitFonts.register()
 
     // ── Static file serving ────────────────────────────────────────────────
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))

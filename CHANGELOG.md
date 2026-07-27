@@ -73,6 +73,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the pure-Swift [CeolKit](https://github.com/sbeitzel/CeolKit). `Package.swift` now depends on
   CeolKit's `CeolKitModel`, `CeolKitParser`, and `CeolKitSVGRenderer` products. No vendored C
   library remains in the dependency graph.
+- The font used by `CeolKitSVGRenderer` gets loaded in `configure.swift`.
 - `BuildService` conversion is now a two-step pipeline. Where it previously called a single
   `ABCConverter.convert(_:)`, it now calls `CeolKitParser.parse(_:options:)` to obtain a `Score`
   and then `SVGRenderer.render(_:)` to obtain the per-page SVG documents.
