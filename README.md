@@ -19,6 +19,10 @@ For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md
    (via CeolKit → SVGPDFKit), and uploads the results to Box.
 4. A summary is posted to the band's Slack channel.
 
+> **Current status:** step 3's Box upload is not yet implemented — `BoxService` is a skeleton and
+> every upload attempt is logged as a failure in the build log. Conversion, the tune catalogue,
+> and the binder builder all work. See the open issues.
+
 Band members can visit the server's web UI to build a personalised binder: select the tunes
 and parts they need, and download a single PDF with page numbers specific to their selection.
 The pipe major can use the binder constructor page to generate the YAML for the canonical
@@ -28,10 +32,10 @@ band binder, which is then committed to `svpb-music`.
 
 ## Prerequisites
 
-- **Docker** and **Docker Compose** installed on the server host.
-- To build outside Docker: a **Swift 6.3 or newer** toolchain (required by the CeolKit
-  dependency). The Docker images pin `swift:6.3-noble`, so no host toolchain is needed for the
-  normal deployment path.
+- **Docker** and **Docker Compose** installed on the server host. Nothing else — the server pulls
+  a prebuilt image from the GitHub Container Registry and never compiles anything.
+- To build from source: a **Swift 6.3 or newer** toolchain (required by the CeolKit dependency),
+  or Docker with roughly 4 GB of RAM available. Neither is needed for the normal deployment path.
 - A domain name pointed at the server's public IP address (required for automatic TLS).
 - A GitHub webhook secret (any strong random string).
 - Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).
@@ -48,6 +52,7 @@ each value before starting the stack.
 | Variable | Description |
 |---|---|
 | `DOMAIN` | Public hostname, e.g. `musictools.siliconvalleypipeband.com` — used by Caddy for TLS |
+| `TNG_IMAGE_TAG` | Optional. Which published image to run: `develop`, a release version, or unset for `latest` |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
 | `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
@@ -89,67 +94,63 @@ docker compose down
 ## Deployment
 
 TNG is distributed as a `docker-compose.yml` that starts two containers — the TNG server and a
-Caddy reverse proxy — plus a named volume for the music workspace and database. Any host that
+Caddy reverse proxy — plus named volumes for the database and the music workspace. Any host that
 can run Docker Compose and is reachable on ports 80 and 443 will work.
 
-Two broad approaches are described below. See [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md) for a
-detailed comparison of specific cloud providers.
+Images are built by GitHub Actions and published to
+`ghcr.io/svpb/svpb-tools`. The server pulls them; it never compiles Swift. See
+[HOSTING_OPTIONS.md](HOSTING_OPTIONS.md) for a comparison of providers.
 
-### Option A — Keep the existing EC2 instance
+### Digital Ocean Droplet
 
-This is the lowest-effort migration path if the band already has an EC2 instance running the
-Gen.1 tools. The instance itself stays; only its software configuration changes.
+**1. Create the droplet.** Ubuntu 24.04 LTS, Basic / Regular SSD, 2 GB RAM / 1 vCPU. Authenticate
+with an SSH key rather than a password. Give it a hostname you will recognise later.
 
-**One-time setup** (replaces all of the Apache / certbot / Perl / make configuration):
+**2. Point DNS at it.** Create an `A` record for your hostname pointing at the droplet's public IP
+address. Do this *before* starting the stack — Caddy requests a certificate on first launch and
+that request fails if the name does not yet resolve. Verify with `dig +short <your-domain>`.
+
+**3. Open the firewall.** Create a Digital Ocean cloud firewall allowing inbound TCP on 22, 80,
+and 443, and attach it to the droplet.
+
+**4. Install Docker.**
 
 ```sh
-# Install Docker (Amazon Linux 2023)
-sudo dnf install -y docker
-sudo systemctl enable --now docker
-sudo usermod -aG docker ec2-user   # log out and back in after this
-
-# Install Docker Compose plugin
-sudo dnf install -y docker-compose-plugin
-
-# Clone this repository
-git clone https://github.com/SVPB/svpb-tools.git
-cd svpb-tools
+ssh root@<droplet-ip>
+apt-get update && apt-get install -y ca-certificates curl git
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  > /etc/apt/sources.list.d/docker.list
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-The Elastic IP address and the Route 53 DNS record pointing the domain at that IP can be left
-exactly as they are. The only change needed to the EC2 security group is to ensure ports 80
-and 443 are open inbound (they likely already are). Port 22 for SSH management can remain open.
-
-Apache, certbot, Perl, make, and GhostScript can be uninstalled once the new stack is
-confirmed working — they are no longer needed.
+**5. Add swap.** 2 GB of RAM is comfortable for normal operation, but rendering a full year of
+music in one sync can spike. Swap costs nothing and prevents an OOM kill.
 
 ```sh
+fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+**6. Deploy.**
+
+```sh
+git clone https://github.com/SVPB/svpb-tools.git
+cd svpb-tools
 cp .env.example .env
-# edit .env
+# edit .env — every value in the Configuration table above
 docker compose up -d
 ```
 
-Estimated monthly cost: whatever the EC2 instance already costs (a `t3.micro` is ~$8/month
-in us-west-2 with on-demand pricing; a Reserved Instance is cheaper still).
+**7. Verify.** `docker compose ps` should show both containers healthy, and
+`curl https://<your-domain>/health` should return JSON. If Caddy cannot get a certificate,
+`docker compose logs caddy` says why — almost always DNS not yet propagated or port 80 blocked.
 
-### Option B — Deploy to a container-oriented cloud service
-
-If the band is starting fresh, or wants to move away from managing an EC2 instance entirely,
-several cloud platforms are designed specifically for running Docker containers with minimal
-operational overhead. The deployment flow is broadly the same across all of them:
-
-1. Create an account and a new project/app.
-2. Point the platform at this repository (or push the Docker image directly).
-3. Set the environment variables in the platform's dashboard.
-4. Attach a persistent volume (for the SQLite database and built PDFs).
-5. Point your domain's DNS at the address the platform provides.
-
-The platform handles the underlying VM, OS updates, and (on most platforms) TLS automatically.
-
-See [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md) for a side-by-side comparison of
-[Fly.io](https://fly.io), [Render](https://render.com), [Railway](https://railway.app),
-[Digital Ocean App Platform](https://www.digitalocean.com/products/app-platform), and
-[Heroku](https://heroku.com), with estimated costs and a recommendation for this workload.
+Estimated cost: **$12/month** for the droplet. The cloud firewall is free.
 
 ---
 
@@ -242,7 +243,7 @@ Box OAuth2 requires completing an authorization flow once to obtain an access to
 refresh token. TNG includes a helper command for this:
 
 ```sh
-docker compose run --rm tng swift run TNG box-auth
+docker compose run --rm tng box-auth
 ```
 
 This prints an authorization URL. Open it in a browser, log in as the Box user who owns the
@@ -272,10 +273,18 @@ folder.
 
 ## Updating
 
+Pushing to `develop` or `main` publishes a new image automatically. To move the server onto it:
+
 ```sh
-git pull
-docker compose pull
-docker compose up -d
+git pull                # picks up compose/Caddyfile changes
+docker compose pull     # fetches the new image from GHCR
+docker compose up -d    # recreates the containers
 ```
 
-The named volume is preserved across updates; no data is lost.
+The named volumes are preserved across updates; no data is lost.
+
+To build the image on the server instead of pulling it — needs ~4 GB of RAM and 10–20 minutes:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```

@@ -66,8 +66,16 @@ public func configure(_ app: Application) async throws {
     app.views.use(.leaf)
 
     // ── Database ───────────────────────────────────────────────────────────
-    let dbPath = Environment.get("DATABASE_PATH") ?? "data/tng.sqlite"
-    app.databases.use(.sqlite(.file(dbPath)), as: .sqlite)
+    // Tests get a private in-memory database: running them against the
+    // developer's real data/tng.sqlite made assertions depend on whatever
+    // branches happened to be sitting in it, and CI has no data/ directory
+    // for SQLite to open in the first place.
+    if app.environment == .testing {
+        app.databases.use(.sqlite(.memory), as: .sqlite)
+    } else {
+        let dbPath = Environment.get("DATABASE_PATH") ?? "data/tng.sqlite"
+        app.databases.use(.sqlite(.file(dbPath)), as: .sqlite)
+    }
 
     // ── Migrations ─────────────────────────────────────────────────────────
     addMigrations(app)

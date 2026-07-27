@@ -41,6 +41,7 @@ FROM swift:6.3-noble-slim AS runtime
 #   - git: for cloning and pulling svpb-music on webhook events
 #   - ca-certificates: for TLS verification against Box and Slack APIs
 #   - librsvg2-bin: for converting SVG to PDF when we don't have CoreGraphics
+#   - curl: for the compose healthcheck against /health
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libssl3 \
@@ -48,6 +49,7 @@ RUN apt-get update \
       libxml2 \
       librsvg2-bin \
       ca-certificates \
+      curl \
       git \
  && rm -rf /var/lib/apt/lists/*
 

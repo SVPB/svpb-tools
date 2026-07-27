@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+    # Matches the Dockerfile build stage. CeolKit's manifest declares
+    # swift-tools-version: 6.3, which older toolchains refuse to parse.
+    container: swift:6.3-noble
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rsvg-convert is how SVGPDFKit rasterises on Linux; the conversion
+      # pipeline tests fail without it.
+      - name: Install runtime dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends librsvg2-bin
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test --skip-build

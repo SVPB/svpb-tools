@@ -1,23 +1,36 @@
 services:
 
   tng:
-    build: .
+    # Images are built and published by .github/workflows/publish.yml.
+    # Set TNG_IMAGE_TAG in .env to pin a branch ("develop") or release ("v0.2.0");
+    # it defaults to the latest build of the default branch.
+    image: ghcr.io/svpb/svpb-tools:${TNG_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
       - DATABASE_PATH=/app/data/tng.sqlite
+      # Set here rather than in .env so it can never drift out of sync with the
+      # music-workspace mount below. `environment` wins over `env_file`, so a
+      # stale value in .env is harmless.
+      - MUSIC_WORKSPACE_PATH=/app/music
     volumes:
       - tng-data:/app/data
-      - music-workspace:/workspace
+      - music-workspace:/app/music
     # TNG is not exposed directly — all traffic flows through Caddy.
     expose:
       - "8080"
-    depends_on:
-      - caddy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
 
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    depends_on:
+      - tng
     ports:
       - "80:80"
       - "443:443"

@@ -10,12 +10,6 @@ db.sqlite
 .vscode
 .idea
 
-# While it's generally good practice to check this in, it causes problems when
-# builds can happen in different environments with, consequentially, different
-# formats for Package.resolved. When in doubt, look at the Docker container to
-# see what it is actually using.
-Package.resolved
-
 # local dev scripts
 dev.sh
 ng_tunnel.sh
