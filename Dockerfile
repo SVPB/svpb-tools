@@ -41,6 +41,7 @@ FROM swift:6.3-noble-slim AS runtime
 #   - git: for cloning and pulling svpb-music on webhook events
 #   - ca-certificates: for TLS verification against Box and Slack APIs
 #   - librsvg2-bin: for converting SVG to PDF when we don't have CoreGraphics
+#   - fontconfig: for fc-cache, so rsvg-convert can resolve the bundled fonts
 #   - curl: for the compose healthcheck against /health
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -48,6 +49,7 @@ RUN apt-get update \
       libcurl4 \
       libxml2 \
       librsvg2-bin \
+      fontconfig \
       ca-certificates \
       curl \
       git \
@@ -59,6 +61,29 @@ WORKDIR /app
 COPY --from=build /staging/ ./
 COPY --from=build /build/Resources ./Resources
 COPY --from=build /build/Public ./Public
+
+# Install the bundled faces where fontconfig can find them.
+#
+# On Apple platforms SVGPDFKit rasterises in-process through CoreGraphics, and
+# `CeolKitFonts.register()` in configure.swift makes the faces resolvable there.
+# Neither applies here: this build shells out to /usr/bin/rsvg-convert, and
+# librsvg resolves font-family strictly through fontconfig — it ignores the
+# @font-face data URIs CeolKit embeds in every SVG. Process-scope registration
+# could not reach a separate process anyway. Without this, scores rasterise in
+# whatever fontconfig substitutes: staff lines and stems, but no noteheads,
+# clefs, rests, or accidentals.
+RUN set -eu; \
+    RES="$(find . -maxdepth 1 -name 'CeolKit_CeolKitSVGRenderer.*' -print -quit)"; \
+    install -d /usr/local/share/fonts/ceolkit; \
+    cp "$RES"/*.otf /usr/local/share/fonts/ceolkit/; \
+    fc-cache -f; \
+    for family in Bravura "Libertinus Serif"; do \
+      if ! fc-list : family | grep -qF "$family"; then \
+        echo "ERROR: $family is not resolvable through fontconfig." >&2; \
+        echo "Every score would rasterise in a substitute font." >&2; \
+        exit 1; \
+      fi; \
+    done
 
 # The database and built PDFs live on the named volume, not in the image.
 RUN mkdir -p data

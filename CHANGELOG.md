@@ -120,6 +120,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 #### SVG/PDF conversion pipeline
 
+- Scores rendered on Linux (i.e. every deployed build) came out with staff lines and stems but
+  no noteheads, clefs, rests, or accidentals, and with body text in the wrong face. The Dockerfile
+  now installs the bundled Bravura and Libertinus Serif faces into
+  `/usr/local/share/fonts/ceolkit` and runs `fc-cache`, failing the build if either family is
+  still unresolvable afterwards.
+
+  CeolKit embeds all three faces in every SVG as `@font-face` base64 data URIs, which is why the
+  output looks right on macOS — there SVGPDFKit rasterises in-process through CoreGraphics, and
+  `CeolKitFonts.register()` covers the rest. On Linux SVGPDFKit shells out to
+  `/usr/bin/rsvg-convert`, and librsvg ignores `@font-face` entirely, resolving `font-family`
+  only through fontconfig; `fc-match Bravura` in the old image returned DejaVu Sans, which has no
+  glyphs at the SMuFL codepoints. Process-scope font registration could not have helped either,
+  since rsvg-convert is a separate process.
+
 - Fixed a build/sync failure ("At least one SVGSource must be provided" / rsvg-convert XML
   parse error) caused by a fundamental misreading of the ABCKit return value, compounded by
   two secondary bugs:
