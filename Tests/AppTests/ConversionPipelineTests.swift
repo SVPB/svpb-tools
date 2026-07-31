@@ -9,9 +9,10 @@ import XCTest
 /// `BuildService` itself is not directly testable — it needs a git checkout, a
 /// database, and Box/Slack clients — so these tests exercise the same library
 /// calls it makes, in the same order, on an inline tune. They exist mainly to
-/// catch the two failure modes the CeolKit migration introduced: a renderer that
-/// cannot find its bundled fonts, and a page count that no longer maps one-to-one
-/// onto PDF pages.
+/// catch the failure modes the CeolKit migration introduced: a renderer that
+/// cannot find its bundled fonts, a page count that no longer maps one-to-one
+/// onto PDF pages, and a rasteriser that substitutes fonts instead of resolving
+/// them.
 final class ConversionPipelineTests: XCTestCase {
 
     /// A minimal two-tune pipe band source: a `%%ceolkit:pipeformat` directive
@@ -74,6 +75,66 @@ final class ConversionPipelineTests: XCTestCase {
 
         XCTAssertTrue(pdf.starts(with: Data("%PDF".utf8)), "Output is not a PDF")
         XCTAssertGreaterThan(pdf.count, 1_000, "PDF is implausibly small")
+    }
+
+    /// A PDF that converts cleanly can still be unreadable: if the rasteriser
+    /// silently substitutes a font, the output is a valid PDF of staff lines and
+    /// stems with no noteheads, clefs, rests, or accidentals. `%PDF` and a
+    /// plausible byte count do not catch that — this does.
+    ///
+    /// CeolKit embeds every face in the SVG as an `@font-face` base64 data URI,
+    /// but librsvg ignores `@font-face` entirely and resolves `font-family` only
+    /// through fontconfig. The faces must therefore be installed system-wide, as
+    /// the Dockerfile's runtime stage and this workflow's CI job both do. Without
+    /// that, `fc-match Bravura` returns DejaVu Sans, which has no glyphs at any of
+    /// the SMuFL codepoints the score uses.
+    func testConvertedPDFEmbedsTheBundledFontsRatherThanSubstitutes() throws {
+        #if canImport(CoreGraphics)
+        throw XCTSkip("""
+            Not applicable on Apple platforms: SVGPDFKit rasterises in-process \
+            through CoreGraphics, which converts every glyph to a vector outline. \
+            The PDF embeds no fonts at all, so there is nothing to assert. This \
+            failure mode belongs to the Linux rsvg-convert path.
+            """)
+        #else
+        let parsed = CeolKitParser().parse(sampleABC, options: .default)
+        let pages = try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score)
+        let pdf = try SVGPDFConverter().convert(sources: pages.map { SVGSource.data(Data($0.utf8)) })
+
+        // Latin-1 maps every byte to exactly one scalar and never fails, so the
+        // ASCII font dictionaries survive the binary content streams around them.
+        // librsvg's PDF backend writes those dictionaries uncompressed, so no
+        // stream has to be inflated to read them.
+        let text = String(data: pdf, encoding: .isoLatin1) ?? ""
+
+        // Embedded subsets are named "ABCDEF+Bravura"; drop the subset tag.
+        let fonts = text
+            .matches(of: /\/BaseFont\s*\/(?:[A-Z]{6}\+)?([A-Za-z0-9\-]+)/)
+            .map { String($0.1) }
+
+        XCTAssertFalse(fonts.isEmpty, "PDF embeds no fonts at all")
+
+        XCTAssertTrue(
+            fonts.contains("Bravura"),
+            "Bravura is not embedded — every notehead, clef, rest, and accidental "
+            + "in this PDF is missing or wrong. Embedded fonts: \(Set(fonts).sorted())"
+        )
+        XCTAssertTrue(
+            fonts.contains { $0.hasPrefix("LibertinusSerif") },
+            "Libertinus Serif is not embedded; titles and footers rasterised in "
+            + "some other face. Embedded fonts: \(Set(fonts).sorted())"
+        )
+
+        // Any other family means fontconfig substituted something.
+        let substituted = Set(fonts.filter {
+            $0 != "Bravura" && !$0.hasPrefix("LibertinusSerif")
+        })
+        XCTAssertTrue(
+            substituted.isEmpty,
+            "Fonts were substituted rather than resolved: \(substituted.sorted()). "
+            + "Install the CeolKit faces where fontconfig can find them."
+        )
+        #endif
     }
 
     /// `I:abc-include` is the replacement for ABCKit's `includedFiles:` argument,

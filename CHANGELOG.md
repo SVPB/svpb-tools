@@ -134,6 +134,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   glyphs at the SMuFL codepoints. Process-scope font registration could not have helped either,
   since rsvg-convert is a separate process.
 
+  `ConversionPipelineTests` could not have caught this: it asserted only that the output began
+  with `%PDF` and was over 1 kB, both true of a fontless render. It now also asserts that the
+  converted PDF embeds Bravura and Libertinus Serif and *no* other family, so a substitution
+  fails the build. The CI job installs the faces the same way the Dockerfile does, which is what
+  makes that assertion meaningful. The test skips on Apple platforms, where SVGPDFKit rasterises
+  through CoreGraphics and vectorises every glyph, leaving no fonts in the PDF to assert on.
+
 - Fixed a build/sync failure ("At least one SVGSource must be provided" / rsvg-convert XML
   parse error) caused by a fundamental misreading of the ABCKit return value, compounded by
   two secondary bugs:

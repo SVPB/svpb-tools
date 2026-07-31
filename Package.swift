@@ -13,7 +13,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "5.0.0"),
         // use the develop branch of CeolKit to test upcoming code releases
         // .package(url: "https://github.com/sbeitzel/CeolKit.git", branch: "develop"),
-        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.0.0"),
+        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.1.0"),
         .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.2.0"),
     ],
     targets: [

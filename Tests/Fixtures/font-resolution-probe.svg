@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Probe for verify-image-fonts.sh. Deliberately does NOT embed the faces as
+  @font-face data URIs, unlike the SVG CeolKit actually emits.
+
+  That difference is cosmetic for this purpose: librsvg ignores @font-face
+  entirely and resolves font-family only through fontconfig, so a probe carrying
+  1.5 MB of base64 would be tested exactly the same way. Leaving it out keeps the
+  fixture readable and makes the intent explicit — this file passes only when the
+  faces are installed system-wide in the image under test.
+
+  The glyphs below live in the SMuFL Private Use Area (U+E050 gClef, U+E0A4
+  noteheadBlack, U+E262 accidentalSharp, U+E4E5 rest8th). No general-purpose
+  fallback font has glyphs there, so a substitution cannot accidentally satisfy
+  the assertions in the script.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">
+  <text x="20" y="120" font-family="Bravura" font-size="80">&#xE050;</text>
+  <text x="90" y="120" font-family="Bravura" font-size="80">&#xE0A4;</text>
+  <text x="150" y="120" font-family="Bravura" font-size="80">&#xE262;</text>
+  <text x="210" y="120" font-family="Bravura" font-size="80">&#xE4E5;</text>
+  <text x="20" y="170" font-family="Libertinus Serif" font-size="24">The Green Hills of Tyrol</text>
+</svg>

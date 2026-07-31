@@ -18,14 +18,61 @@ jobs:
       - uses: actions/checkout@v4
 
       # rsvg-convert is how SVGPDFKit rasterises on Linux; the conversion
-      # pipeline tests fail without it.
+      # pipeline tests fail without it. fontconfig provides fc-cache, used below.
       - name: Install runtime dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends librsvg2-bin
+          apt-get install -y --no-install-recommends librsvg2-bin fontconfig
 
       - name: Build
         run: swift build --build-tests
 
+      # Mirrors the Dockerfile's runtime stage, and must match it: librsvg
+      # resolves font-family through fontconfig and ignores the @font-face data
+      # URIs CeolKit embeds in every SVG. Without this the conversion tests still
+      # produce a valid PDF, but one rasterised entirely in substitute fonts —
+      # which is the regression testConvertedPDFEmbedsTheBundledFonts… catches.
+      # Runs after the build because the resource bundle is a build product.
+      - name: Install bundled fonts
+        run: |
+          set -eu
+          BIN="$(swift build --build-tests --show-bin-path)"
+          RES="$(find "$BIN" -maxdepth 1 -name 'CeolKit_CeolKitSVGRenderer.*' -print -quit)"
+          install -d /usr/local/share/fonts/ceolkit
+          cp "$RES"/*.otf /usr/local/share/fonts/ceolkit/
+          fc-cache -f
+
       - name: Test
         run: swift test --skip-build
+
+  image:
+    name: Image conversion smoke test
+    # Deliberately not `container:` — this job drives the Docker daemon rather
+    # than running inside a Swift toolchain.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Shares the layer cache with the publish workflow, so on most pushes this
+      # is a cache hit rather than a second full Swift release build. `load`
+      # puts the image in the local daemon; nothing is pushed from CI.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ghcr.io/svpb/svpb-tools:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The unit tests prove the Swift code converts correctly on a correctly
+      # configured host. They never execute the Dockerfile's runtime stage, so
+      # they cannot catch a font installation that regressed in the image we
+      # actually ship. This converts a score inside that image.
+      - name: Verify the image can render a score
+        run: Scripts/verify-image-fonts.sh ghcr.io/svpb/svpb-tools:ci
