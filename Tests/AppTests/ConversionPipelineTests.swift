@@ -11,8 +11,8 @@ import XCTest
 /// calls it makes, in the same order, on an inline tune. They exist mainly to
 /// catch the failure modes the CeolKit migration introduced: a renderer that
 /// cannot find its bundled fonts, a page count that no longer maps one-to-one
-/// onto PDF pages, and a rasteriser that substitutes fonts instead of resolving
-/// them.
+/// onto PDF pages, and glyphs that reach the page as host-resolved text instead
+/// of geometry.
 final class ConversionPipelineTests: XCTestCase {
 
     /// A minimal two-tune pipe band source: a `%%ceolkit:pipeformat` directive
@@ -45,9 +45,10 @@ final class ConversionPipelineTests: XCTestCase {
         XCTAssertEqual(parsed.score.tunes.first?.titles.first?.value, "Test March")
     }
 
-    /// The renderer loads Bravura and Libertinus Serif via `Bundle.module`. If the
-    /// SwiftPM resource bundle is not deployed alongside the binary this throws,
-    /// which is precisely the packaging regression the Dockerfile guards against.
+    /// The renderer reads Bravura and Libertinus Serif from `Bundle.module` to
+    /// extract glyph outlines. If the SwiftPM resource bundle is not deployed
+    /// alongside the binary this throws, which is precisely the packaging
+    /// regression the Dockerfile guards against.
     func testRenderProducesOneCompleteSVGDocumentPerPage() throws {
         let parsed = CeolKitParser().parse(sampleABC, options: .default)
         let pages = try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score)
@@ -77,64 +78,109 @@ final class ConversionPipelineTests: XCTestCase {
         XCTAssertGreaterThan(pdf.count, 1_000, "PDF is implausibly small")
     }
 
-    /// A PDF that converts cleanly can still be unreadable: if the rasteriser
-    /// silently substitutes a font, the output is a valid PDF of staff lines and
-    /// stems with no noteheads, clefs, rests, or accidentals. `%PDF` and a
-    /// plausible byte count do not catch that — this does.
+    /// A page that converts cleanly can still be unreadable: a rasteriser that
+    /// cannot resolve the music face produces a valid PDF of staff lines and stems
+    /// with no noteheads, clefs, rests, or accidentals. `%PDF` and a plausible byte
+    /// count do not catch that — this does.
     ///
-    /// CeolKit embeds every face in the SVG as an `@font-face` base64 data URI,
-    /// but librsvg ignores `@font-face` entirely and resolves `font-family` only
-    /// through fontconfig. The faces must therefore be installed system-wide, as
-    /// the Dockerfile's runtime stage and this workflow's CI job both do. Without
-    /// that, `fc-match Bravura` returns DejaVu Sans, which has no glyphs at any of
-    /// the SMuFL codepoints the score uses.
-    func testConvertedPDFEmbedsTheBundledFontsRatherThanSubstitutes() throws {
+    /// As of CeolKit 1.2 the renderer defaults to `TextRendering.outlines`: every
+    /// glyph is written into the document as geometry — a `<path>` in `<defs>`, drawn
+    /// by a `<use>` — and no `@font-face` block or `<text>` element is emitted at all.
+    /// That is what makes the output host-independent, since no non-browser
+    /// rasteriser honours `@font-face` and each resolves `font-family` through a font
+    /// database the document cannot populate. The contract to defend is therefore
+    /// that the geometry is present and self-contained, not that some face got
+    /// embedded downstream.
+    func testGlyphsAreEmittedAsSelfContainedOutlines() throws {
+        let parsed = CeolKitParser().parse(sampleABC, options: .default)
+        let pages = try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score)
+        let page = try XCTUnwrap(pages.first, "Renderer returned no pages")
+
+        // Either of these means the renderer fell back to the font-face route, and
+        // the page is only correct on a host that installed the faces out of band.
+        XCTAssertFalse(
+            page.contains("@font-face"),
+            "Page carries an @font-face block; no non-browser rasteriser honours it"
+        )
+        XCTAssertFalse(
+            page.contains("<text"),
+            "Page paints <text>, which resolves through the host font database "
+            + "rather than the geometry in the document"
+        )
+
+        // Glyph outlines are defined once per glyph and referenced by id. The face
+        // prefix comes from `OutlineFontSet.FaceKey`. A non-empty `d` is part of the
+        // match: a defs entry with no path data draws nothing.
+        let defined = Set(
+            page.matches(of: /<path id="([A-Za-z]+-g\d+)" d="[^"]+"/).map { String($0.1) }
+        )
+        XCTAssertTrue(
+            defined.contains { $0.hasPrefix("bravura-") },
+            "No Bravura outlines defined — every notehead, clef, rest, and accidental "
+            + "on this page is missing. Defined faces: \(faceNames(of: defined))"
+        )
+        XCTAssertTrue(
+            defined.contains { $0.hasPrefix("libertinusSerif") },
+            "No Libertinus Serif outlines defined; the title and footer are missing. "
+            + "Defined faces: \(faceNames(of: defined))"
+        )
+
+        // A `<use>` pointing at an id that was never defined draws nothing, which is
+        // exactly the silent, still-a-valid-PDF failure this test exists to catch.
+        let drawn = page.matches(of: /<use href="#([^"]+)"/).map { String($0.1) }
+        XCTAssertFalse(drawn.isEmpty, "Outlines are defined but none are drawn")
+        XCTAssertTrue(
+            Set(drawn).subtracting(defined).isEmpty,
+            "Glyphs reference undefined outlines and will not be drawn: "
+            + "\(Set(drawn).subtracting(defined).sorted())"
+        )
+    }
+
+    /// The other half of the outlines contract, on the only platform where it can be
+    /// broken silently: nothing in the converted PDF may depend on a host font.
+    ///
+    /// On Apple platforms SVGPDFKit rasterises in-process through CoreGraphics, which
+    /// reduces glyphs to vector outlines whatever the input, so this would pass
+    /// without proving anything. On Linux it shells out to rsvg-convert, and a font
+    /// dictionary in the output means some run reached the page as text and was
+    /// resolved — or substituted — through fontconfig.
+    func testConvertedPDFDependsOnNoHostFont() throws {
         #if canImport(CoreGraphics)
         throw XCTSkip("""
-            Not applicable on Apple platforms: SVGPDFKit rasterises in-process \
-            through CoreGraphics, which converts every glyph to a vector outline. \
-            The PDF embeds no fonts at all, so there is nothing to assert. This \
-            failure mode belongs to the Linux rsvg-convert path.
+            Not applicable on Apple platforms: CoreGraphics converts every glyph to a \
+            vector outline regardless of how the SVG expressed it, so an empty font \
+            list here says nothing about the renderer. This belongs to the Linux \
+            rsvg-convert path.
             """)
         #else
         let parsed = CeolKitParser().parse(sampleABC, options: .default)
         let pages = try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score)
         let pdf = try SVGPDFConverter().convert(sources: pages.map { SVGSource.data(Data($0.utf8)) })
 
-        // Latin-1 maps every byte to exactly one scalar and never fails, so the
-        // ASCII font dictionaries survive the binary content streams around them.
-        // librsvg's PDF backend writes those dictionaries uncompressed, so no
-        // stream has to be inflated to read them.
+        // Latin-1 maps every byte to exactly one scalar and never fails, so the ASCII
+        // font dictionaries survive the binary content streams around them. librsvg's
+        // PDF backend writes those dictionaries uncompressed, so no stream has to be
+        // inflated to read them.
         let text = String(data: pdf, encoding: .isoLatin1) ?? ""
 
         // Embedded subsets are named "ABCDEF+Bravura"; drop the subset tag.
-        let fonts = text
-            .matches(of: /\/BaseFont\s*\/(?:[A-Z]{6}\+)?([A-Za-z0-9\-]+)/)
-            .map { String($0.1) }
-
-        XCTAssertFalse(fonts.isEmpty, "PDF embeds no fonts at all")
-
-        XCTAssertTrue(
-            fonts.contains("Bravura"),
-            "Bravura is not embedded — every notehead, clef, rest, and accidental "
-            + "in this PDF is missing or wrong. Embedded fonts: \(Set(fonts).sorted())"
-        )
-        XCTAssertTrue(
-            fonts.contains { $0.hasPrefix("LibertinusSerif") },
-            "Libertinus Serif is not embedded; titles and footers rasterised in "
-            + "some other face. Embedded fonts: \(Set(fonts).sorted())"
+        let fonts = Set(
+            text.matches(of: /\/BaseFont\s*\/(?:[A-Z]{6}\+)?([A-Za-z0-9\-]+)/).map { String($0.1) }
         )
 
-        // Any other family means fontconfig substituted something.
-        let substituted = Set(fonts.filter {
-            $0 != "Bravura" && !$0.hasPrefix("LibertinusSerif")
-        })
         XCTAssertTrue(
-            substituted.isEmpty,
-            "Fonts were substituted rather than resolved: \(substituted.sorted()). "
-            + "Install the CeolKit faces where fontconfig can find them."
+            fonts.isEmpty,
+            "PDF embeds fonts: \(fonts.sorted()). Glyphs reached the page as text "
+            + "rather than geometry, so this output is only correct on a host whose "
+            + "font database happens to match."
         )
         #endif
+    }
+
+    /// The distinct face prefixes among a set of `<defs>` glyph ids, for failure output.
+    private func faceNames(of ids: Set<String>) -> String {
+        let faces = Set(ids.compactMap { $0.split(separator: "-g").first.map(String.init) })
+        return faces.isEmpty ? "none" : faces.sorted().joined(separator: ", ")
     }
 
     /// `I:abc-include` is the replacement for ABCKit's `includedFiles:` argument,

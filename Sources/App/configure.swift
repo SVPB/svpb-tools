@@ -1,5 +1,4 @@
 import AsyncHTTPClient
-import CeolKitSVGRenderer
 import Fluent
 import FluentSQLiteDriver
 import Leaf
@@ -54,13 +53,6 @@ public func configure(_ app: Application) async throws {
             }
         }
     }
-
-    // On Apple platforms SVGPDFKit rasterises in-process through CoreGraphics,
-    // which resolves font-family against process-registered fonts rather than
-    // the SVG's embedded @font-face data, so the bundled faces must be
-    // registered here.
-    //
-    _ = CeolKitFonts.register()
 
     // ── Static file serving ────────────────────────────────────────────────
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))

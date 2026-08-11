@@ -18,29 +18,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # rsvg-convert is how SVGPDFKit rasterises on Linux; the conversion
-      # pipeline tests fail without it. fontconfig provides fc-cache, used below.
+      # pipeline tests fail without it. No font packages are needed: CeolKit
+      # writes glyph geometry into every SVG (TextRendering.outlines), so
+      # rsvg-convert never consults fontconfig for a face.
       - name: Install runtime dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends librsvg2-bin fontconfig
+          apt-get install -y --no-install-recommends librsvg2-bin
 
       - name: Build
         run: swift build --build-tests
-
-      # Mirrors the Dockerfile's runtime stage, and must match it: librsvg
-      # resolves font-family through fontconfig and ignores the @font-face data
-      # URIs CeolKit embeds in every SVG. Without this the conversion tests still
-      # produce a valid PDF, but one rasterised entirely in substitute fonts —
-      # which is the regression testConvertedPDFEmbedsTheBundledFonts… catches.
-      # Runs after the build because the resource bundle is a build product.
-      - name: Install bundled fonts
-        run: |
-          set -eu
-          BIN="$(swift build --build-tests --show-bin-path)"
-          RES="$(find "$BIN" -maxdepth 1 -name 'CeolKit_CeolKitSVGRenderer.*' -print -quit)"
-          install -d /usr/local/share/fonts/ceolkit
-          cp "$RES"/*.otf /usr/local/share/fonts/ceolkit/
-          fc-cache -f
 
       - name: Test
         run: swift test --skip-build
@@ -70,9 +57,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The unit tests prove the Swift code converts correctly on a correctly
-      # configured host. They never execute the Dockerfile's runtime stage, so
-      # they cannot catch a font installation that regressed in the image we
-      # actually ship. This converts a score inside that image.
+      # The unit tests prove the Swift code converts correctly on this host. They
+      # never execute the Dockerfile's runtime stage, so they cannot catch a
+      # rasteriser or a resource bundle that regressed in the image we actually
+      # ship. This draws glyph outlines inside that image.
       - name: Verify the image can render a score
-        run: Scripts/verify-image-fonts.sh ghcr.io/svpb/svpb-tools:ci
+        run: Scripts/verify-image-rendering.sh ghcr.io/svpb/svpb-tools:ci

@@ -73,7 +73,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the pure-Swift [CeolKit](https://github.com/sbeitzel/CeolKit). `Package.swift` now depends on
   CeolKit's `CeolKitModel`, `CeolKitParser`, and `CeolKitSVGRenderer` products. No vendored C
   library remains in the dependency graph.
-- The font used by `CeolKitSVGRenderer` gets loaded in `configure.swift`.
+- CeolKit is pinned to 1.2.1, whose renderer defaults to `TextRendering.outlines`: glyphs are
+  written into each SVG as `<path>` geometry in `<defs>`, drawn by `<use>`, with no `@font-face`
+  block and no `<text>` element. The output no longer depends on the host's font environment, so
+  the process-scope `CeolKitFonts.register()` call in `configure.swift` is gone.
 - `BuildService` conversion is now a two-step pipeline. Where it previously called a single
   `ABCConverter.convert(_:)`, it now calls `CeolKitParser.parse(_:options:)` to obtain a `Score`
   and then `SVGRenderer.render(_:)` to obtain the per-page SVG documents.
@@ -121,25 +124,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 #### SVG/PDF conversion pipeline
 
 - Scores rendered on Linux (i.e. every deployed build) came out with staff lines and stems but
-  no noteheads, clefs, rests, or accidentals, and with body text in the wrong face. The Dockerfile
-  now installs the bundled Bravura and Libertinus Serif faces into
-  `/usr/local/share/fonts/ceolkit` and runs `fc-cache`, failing the build if either family is
-  still unresolvable afterwards.
+  no noteheads, clefs, rests, or accidentals, and with body text in the wrong face.
 
-  CeolKit embeds all three faces in every SVG as `@font-face` base64 data URIs, which is why the
-  output looks right on macOS — there SVGPDFKit rasterises in-process through CoreGraphics, and
-  `CeolKitFonts.register()` covers the rest. On Linux SVGPDFKit shells out to
-  `/usr/bin/rsvg-convert`, and librsvg ignores `@font-face` entirely, resolving `font-family`
-  only through fontconfig; `fc-match Bravura` in the old image returned DejaVu Sans, which has no
-  glyphs at the SMuFL codepoints. Process-scope font registration could not have helped either,
-  since rsvg-convert is a separate process.
+  The cause was font resolution. CeolKit used to embed all three faces in every SVG as
+  `@font-face` base64 data URIs, which is why the output looked right on macOS — there SVGPDFKit
+  rasterises in-process through CoreGraphics against process-registered fonts. On Linux SVGPDFKit
+  shells out to `/usr/bin/rsvg-convert`, and librsvg ignores `@font-face` entirely, resolving
+  `font-family` only through fontconfig; `fc-match Bravura` in the old image returned DejaVu Sans,
+  which has no glyphs at the SMuFL codepoints.
 
-  `ConversionPipelineTests` could not have caught this: it asserted only that the output began
-  with `%PDF` and was over 1 kB, both true of a fontless render. It now also asserts that the
-  converted PDF embeds Bravura and Libertinus Serif and *no* other family, so a substitution
-  fails the build. The CI job installs the faces the same way the Dockerfile does, which is what
-  makes that assertion meaningful. The test skips on Apple platforms, where SVGPDFKit rasterises
-  through CoreGraphics and vectorises every glyph, leaving no fonts in the PDF to assert on.
+  Fixed upstream in CeolKit 1.2, and the fix removes the font environment from the problem rather
+  than configuring it: `TextRendering.outlines` writes the glyph geometry into the document, so
+  the same score rasterises identically everywhere. The interim workaround — installing the
+  bundled faces into `/usr/local/share/fonts/ceolkit` and running `fc-cache` in both the
+  Dockerfile and the CI job — is therefore gone, along with the `fontconfig` runtime package.
+  What the image still needs is the CeolKit resource bundle itself, since the renderer reads the
+  OTFs to extract outlines; the Dockerfile asserts all three faces shipped.
+
+  `ConversionPipelineTests` could not have caught the original bug: it asserted only that the
+  output began with `%PDF` and was over 1 kB, both true of a fontless render. It now asserts the
+  outlines contract directly — the page defines Bravura and Libertinus Serif glyph outlines, every
+  `<use>` resolves to one of them, and no `@font-face` or `<text>` is emitted. A companion test
+  asserts the converted PDF embeds *no* fonts at all, since anything else means a run reached the
+  page as host-resolved text; that one runs on Linux only, CoreGraphics vectorising every glyph
+  regardless of how the SVG expressed it.
 
 - Fixed a build/sync failure ("At least one SVGSource must be provided" / rsvg-convert XML
   parse error) caused by a fundamental misreading of the ABCKit return value, compounded by
