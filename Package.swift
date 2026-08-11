@@ -1,4 +1,4 @@
-// swift-tools-version:6.2
+// swift-tools-version:6.3
 import PackageDescription
 
 let package = Package(
@@ -11,9 +11,9 @@ let package = Package(
         .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.6.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.21.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "5.0.0"),
-        // use the develop branch of CeolKit to test upcoming code releases
-        // .package(url: "https://github.com/sbeitzel/CeolKit.git", branch: "develop"),
-        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.1.0"),
+        // use the main branch of CeolKit to test upcoming code releases
+        // .package(url: "https://github.com/sbeitzel/CeolKit.git", branch: "main"),
+        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.2.0"),
         .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.2.0"),
     ],
     targets: [
