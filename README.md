@@ -2,9 +2,10 @@
 
 A self-contained web service that automates sheet music distribution for the
 [Silicon Valley Pipe Band](https://siliconvalleypipeband.org). When a musician pushes updated ABC notation to
-GitHub, TNG converts it to PDF in-process and uploads the results to the band's Box folder, then
-notifies Slack. Band members can also use the built-in binder builder to generate a personalised
-PDF containing only the parts they need, with page numbers that reflect their own binder.
+GitHub, TNG converts it to PDF in-process, assembles the band's official binders, and uploads
+those to the band's Box folder, then notifies Slack. Band members can also use the built-in binder
+builder to generate a personalised PDF containing only the parts they need, with page numbers that
+reflect their own binder.
 
 For full architecture details, feature list, and implementation plan, see [PROJECT_PLAN.md](PROJECT_PLAN.md).
 For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md).
@@ -15,18 +16,76 @@ For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md
 
 1. A musician pushes a change to the `svpb-music` GitHub repository.
 2. GitHub sends a webhook to the TNG server.
-3. TNG pulls the repository, converts every changed ABC file to PDF in-process
-   (via CeolKit → SVGPDFKit), and uploads the results to Box.
-4. A summary is posted to the band's Slack channel.
+3. TNG pulls the repository and converts every changed ABC file to PDF in-process
+   (via CeolKit → SVGPDFKit). These per-tune PDFs are intermediates; they stay on the server.
+4. TNG reads `binders.yaml` from that branch, assembles each official binder it names, and
+   uploads **those PDFs only** to Box.
+5. A summary is posted to the band's Slack channel.
 
-> **Current status:** step 3's Box upload is not yet implemented — `BoxService` is a skeleton and
-> every upload attempt is logged as a failure in the build log. Conversion, the tune catalogue,
-> and the binder builder all work. See the open issues.
+> **Current status:** step 4's binder assembly and Box upload are not yet implemented —
+> `BoxService` is a skeleton, and `BuildService` currently attempts to upload each per-tune PDF
+> rather than the assembled binders. Conversion, the tune catalogue, and the binder builder all
+> work. See the open issues.
 
 Band members can visit the server's web UI to build a personalised binder: select the tunes
 and parts they need, and download a single PDF with page numbers specific to their selection.
-The pipe major can use the binder constructor page to generate the YAML for the canonical
-band binder, which is then committed to `svpb-music`.
+A personalised binder lives on the server and on the member's own computer — it is never pushed
+to Box.
+
+The pipe major can use the binder constructor page to generate the YAML for an official band
+binder, which is then committed to `binders.yaml` in `svpb-music`.
+
+---
+
+## The binder spec (`binders.yaml`)
+
+`binders.yaml` at the root of a branch of the music repository defines the band's official
+binders. It replaces the Gen.1 `Makefile`, which encoded the same information as `make` variables
+and targets. The branch it is committed to *is* the year, so the file carries no year of its own.
+
+```yaml
+# binders.yaml — the official binders for this branch (year).
+# Owned by the pipe major and committed to the music repository. TNG reads it
+# after every push and rebuilds the binders it names.
+
+binders:
+  - name: "2026 Band Binder"          # shown in the UI and the build log
+    output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
+    sections:
+      - title: "Grade 4 Tunes"        # rendered as a divider page ahead of the section
+        entries:
+          - tune: g4_medley_2026      # tune slug = the .abc filename without its extension
+          - tune: g4_msr_march_2026
+          - tune: g4_msr_2026
+      - title: "Parade Tunes"
+        entries:
+          - tune: banks_of_the_lossie
+          - tune: MarchOfTheRBL
+          - tune: Moonstar
+            parts: ["Melody", "Seconds"]   # optional; defaults to every part of the tune
+      - title: "Massed Bands / WUSPBA"
+        entries:
+          - tune: amazing_grace
+          - tune: scotland_the_brave
+
+  - name: "2026 Speculative"
+    output: 2026_spec.pdf
+    sections:
+      - title: "Grade 4 Speculative"
+        entries:
+          - tune: victoria_harbour
+          - tune: seonaidhs
+```
+
+- **Only the binders listed here are uploaded to Box**, each under its `output` filename, into
+  the year folder for the branch (`pipe_music/2026/2026_binder.pdf`).
+- `tune` is the tune's slug: the `.abc` filename without its extension.
+- `parts` is optional. Omit it to include every part of the tune, which is what the official
+  binder normally wants.
+- Each `title` is rendered as a divider page ahead of that section's tunes, and page footers
+  number pages within the binder.
+- The pipe major does not have to write this by hand: the binder constructor page
+  (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit.
 
 ---
 
@@ -264,10 +323,13 @@ folder that contains the year folders (e.g. `2025`, `2026`). The folder ID is th
 the end of the URL: `https://app.box.com/folder/`**`123456789`**. Set this as `BOX_FOLDER_ID`.
 
 TNG will automatically create a subfolder for each git branch (year) the first time it builds
-that branch, and will upload PDFs into the appropriate year folder. For example, after a push
-to the `2026` branch, PDFs appear at `pipe_music/2026/` in Box. The Gen.1 `full_band`, `g3`,
-and `g4` subdirectory structure is not used; all PDFs for a year sit directly in the year
-folder.
+that branch, and will upload the assembled binders into the appropriate year folder. For example,
+after a push to the `2026` branch, `pipe_music/2026/2026_binder.pdf` appears in Box. The Gen.1
+`full_band`, `g3`, and `g4` subdirectory structure is not used; the binders for a year sit
+directly in the year folder.
+
+Nothing else is uploaded: per-tune PDFs are build intermediates kept on the server for the binder
+builder, and personalised binders are downloaded straight from TNG.
 
 ---
 

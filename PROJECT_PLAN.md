@@ -24,7 +24,8 @@ The two headline improvements over Gen.1 are:
 - Conversion from ABC → SVG is handled in-process by [CeolKit] (a Swift library).
 - Conversion from SVG → PDF is handled in-process by [SVGPDFKit] (built on SwiftDraw +
   CoreGraphics).
-- Finished PDFs are distributed via a shared Box folder.
+- Finished **binder** PDFs are distributed via a shared Box folder. Per-tune PDFs are build
+  intermediates: they stay on the server and are never uploaded.
 - Band members are notified via Slack.
 - The operator of the server **should not** need to understand Apache, certbot, Perl, or make.
 
@@ -39,20 +40,21 @@ The two headline improvements over Gen.1 are:
 | C1 | GitHub webhook receiver | An HTTPS endpoint that accepts `push` events from GitHub. Validates the shared webhook secret before acting. |
 | C2 | Repository sync | On a valid webhook event, pull (or clone) the latest state of `svpb-music` into a working directory on the server. |
 | C3 | In-process conversion | For each changed ABC file, invoke `CeolKit` (configured for one SVG per page) to produce a sequence of per-page SVG documents, then pass them as an ordered list of `SVGSource` values to `SVGPDFKit` to produce a per-part PDF. Both steps run inside the server process — no external tools or containers required. |
-| C4 | Box upload | Walk the output directory for freshly-built PDFs and upload them to Box via the Box REST API. PDFs are placed in a year-named subfolder of `pipe_music` (e.g. `pipe_music/2026/`) matching the git branch. If the subfolder does not yet exist it is created automatically via the Box API before uploading. Replaces any previous version of the same file within that folder. |
-| C5 | Slack notification | Post a build-summary message to the configured Slack channel (success / failure, list of changed files, link to Box folder). |
-| C6 | Build log retention | Store the stdout/stderr of each build locally, accessible via the admin UI, so failures can be diagnosed without SSH access. |
+| C4 | Official binder assembly | After conversion, read `binders.yaml` from the root of the branch that was just built. For each binder it declares, concatenate the per-tune PDFs in the order given — inserting a generated title page ahead of each section — and write the assembled binder PDF to the output directory. Page footers number pages within that binder. This file replaces the Gen.1 `Makefile`, which encoded the same information as `make` variables and targets. |
+| C5 | Box upload | Upload the assembled official binders to Box via the Box REST API, into a year-named subfolder of `pipe_music` (e.g. `pipe_music/2026/`) matching the git branch. The subfolder is created automatically if it does not yet exist. Each binder is stored under the `output` filename its spec declares, replacing any previous version. **Only the binders named in `binders.yaml` are uploaded** — per-tune PDFs and personalised binders never reach Box. |
+| C6 | Slack notification | Post a build-summary message to the configured Slack channel (success / failure, binders rebuilt, list of changed tunes, link to Box folder). |
+| C7 | Build log retention | Store the stdout/stderr of each build locally, accessible via the admin UI, so failures can be diagnosed without SSH access. |
 
 ### Binder — Personalised PDF Assembly
 
 | # | Feature | Description |
 |---|---------|-------------|
 | B1 | Tune catalogue | The server parses the ABC source files after each build and maintains a SQLite catalogue of every tune and every named part/voice within it, scoped to the branch (year) that was just built. The same tune slug may appear in multiple branches with differing arrangements. |
-| B2 | Canonical binder definition | The pipe major defines the official band binder as a YAML file committed to the relevant branch of `svpb-music`. The repository is the sole source of truth; the server reads this file from the working directory during the build — after the repo is pulled but before conversion results are persisted — and stores the binder definition in SQLite alongside the tune catalogue. |
-| B3 | Binder constructor (UI) | A web page that lets the pipe major assemble a binder interactively — browsing the tune catalogue, selecting parts, and setting the order — and then displays the resulting YAML for copy-paste into the repository. The page never commits anything itself; the pipe major remains in control of what lands in source control. |
+| B2 | Canonical binder definitions | The pipe major defines the official band binders in `binders.yaml`, committed to the root of the relevant branch of `svpb-music`. One file declares one or more binders; each binder names its output PDF and an ordered list of sections, and each section carries a title (rendered as a divider page) and an ordered list of tunes. The repository is the sole source of truth: the server reads this file from the working directory during the build, assembles the binders it names (C4), and stores the definitions in SQLite alongside the tune catalogue. |
+| B3 | Binder constructor (UI) | A web page that lets the pipe major assemble a binder interactively — browsing the tune catalogue, selecting parts, grouping entries into titled sections, and setting the order — and then displays the resulting YAML for copy-paste into `binders.yaml`. This is how the contents of that file are authored. The page never commits anything itself; the pipe major remains in control of what lands in source control. |
 | B4 | Personal binder builder (UI) | A web page where any band member can browse the tune catalogue, select the specific parts they need, reorder them, name the binder, and request a PDF. No login required — a shareable URL encodes the binder definition. The binder constructor (B3) and the personal binder builder share the same tune-selection UI component; they differ only in their output (YAML vs. PDF). |
 | B5 | Personalised PDF generation | Given a binder definition, the server assembles the pre-built per-part PDFs for the selected entries and passes them to `SVGPDFKit` with a `startingPageNumber` offset, so footers reflect position within the *personal* binder rather than the master. No re-conversion from ABC is needed — the part PDFs produced during the build step are reused directly. |
-| B6 | Binder download link | The generated personalised PDF is served directly from the TNG server as a download. It is not pushed to Box (Box is for official band copies only). |
+| B6 | Binder download link | The generated personalised PDF is served directly from the TNG server as a download, and so exists only on the server and on the member's own computer. It is never pushed to Box: Box holds the official binders named in `binders.yaml` and nothing else. |
 | B7 | Binder URL sharing | A binder definition can be encoded in a URL so a band member can share their configuration with a section leader or print it later without re-selecting everything. |
 
 ### Authentication — Slack-based session login
@@ -105,7 +107,7 @@ managed by TNG itself; identity is delegated entirely to the band's Slack worksp
          │                        │
          ▼                        ▼
     Box Drive              Slack Channel
-  (official PDFs)         (build notices)
+ (official binders)       (build notices)
 ```
 
 ### Component Choices
@@ -246,11 +248,53 @@ LoginToken
   used_at         DATETIME            -- NULL until redeemed; single-use enforcement
 ```
 
-**Binder spec (JSON):**
+**Official binder spec (`binders.yaml`, in the music repository):**
 
-The `branch` field anchors the entire binder to a specific year's arrangements. Each entry
-identifies a tune by its slug (stable across years) and one or more parts by name. Together,
-`branch + tune_slug + part` uniquely identifies the exact PDF to include.
+This file replaces the Gen.1 `Makefile` as the definition of the band's official binders. It lives
+at the root of each branch of `svpb-music`, so the branch (year) is implicit — there is no `branch`
+field. Every binder it names is assembled on each build and uploaded to Box; nothing else is.
+
+```yaml
+# binders.yaml — the official binders for this branch (year).
+# Owned by the pipe major and committed to the music repository. TNG reads it
+# after every push and rebuilds the binders it names.
+
+binders:
+  - name: "2026 Band Binder"          # shown in the UI and the build log
+    output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
+    sections:
+      - title: "Grade 4 Tunes"        # rendered as a divider page ahead of the section
+        entries:
+          - tune: g4_medley_2026      # tune slug = the .abc filename without its extension
+          - tune: g4_msr_march_2026
+          - tune: g4_msr_2026
+      - title: "Parade Tunes"
+        entries:
+          - tune: banks_of_the_lossie
+          - tune: MarchOfTheRBL
+          - tune: Moonstar
+            parts: ["Melody", "Seconds"]   # optional; defaults to every part of the tune
+      - title: "Massed Bands / WUSPBA"
+        entries:
+          - tune: amazing_grace
+          - tune: scotland_the_brave
+
+  - name: "2026 Speculative"
+    output: 2026_spec.pdf
+    sections:
+      - title: "Grade 4 Speculative"
+        entries:
+          - tune: victoria_harbour
+          - tune: seonaidhs
+```
+
+**Personal binder spec (JSON):**
+
+This is the shape submitted by the personal binder builder and stored in `BinderRequest`. It is
+flat (no sections), and the resulting PDF is never uploaded to Box. The `branch` field anchors the
+entire binder to a specific year's arrangements. Each entry identifies a tune by its slug (stable
+across years) and one or more parts by name. Together, `branch + tune_slug + part` uniquely
+identifies the exact PDF to include.
 
 ```json
 {
@@ -278,7 +322,7 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 | `GET`  | `/branches` | List all known branches (years) |
 | `GET`  | `/branches/{branch}/tunes` | List all tunes in the catalogue for a given branch |
 | `GET`  | `/branches/{branch}/tunes/{slug}` | Tune detail including available parts for that branch/year |
-| `GET`  | `/binder-constructor` | Interactive YAML generator for the pipe major |
+| `GET`  | `/binder-constructor` | Interactive `binders.yaml` generator for the pipe major |
 | `POST` | `/binders` | Submit a binder spec; returns a binder ID |
 | `GET`  | `/binders/{id}` | Binder status (pending / ready) |
 | `GET`  | `/binders/{id}/download` | Download the generated PDF |
@@ -305,7 +349,7 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 - Environment variable loading and validation at startup (using Vapor's `Environment` API).
 - README with setup instructions (< 10 steps, no specialist knowledge required).
 
-### Phase 1 — Automated Build Pipeline (C1–C6) (3–5 days)
+### Phase 1 — Automated Build Pipeline (C1–C7) (3–5 days)
 
 - Implement `git pull` / `git clone` of `svpb-music` via `Foundation.Process` on webhook receipt.
 - For each ABC file in the working directory, parse it with `CeolKitParser` and render the
@@ -315,7 +359,9 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
   Both conversions run in a Swift structured-concurrency task group so files are processed
   concurrently without blocking the HTTP server.
 - Persist `Build` records and captured diagnostic output in SQLite via Fluent models.
-- Upload output PDFs to Box using direct REST API calls via AsyncHTTPClient.
+- Read `binders.yaml` from the freshly synced branch, assemble the official binder PDFs it names
+  (section title pages included), and upload **only those** to Box using direct REST API calls via
+  AsyncHTTPClient. Per-tune PDFs stay on the server as build intermediates.
 - Post Slack notification (success/failure summary) via Incoming Webhook.
 - Admin dashboard (Leaf templated HTML) with build history and log viewer.
 - Slack Events API handler (`POST /slack/events`): verify Slack request signature (HMAC-SHA256
@@ -342,7 +388,8 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
   drag to reorder, name the binder. Used by both pages below.
 - **Binder constructor page** (`/binder-constructor`): renders the shared component with a
   "Generate YAML" button. On click, the YAML is rendered in a read-only `<textarea>` for the
-  pipe major to copy and commit to the `svpb-music` branch. No server-side state is created.
+  pipe major to copy into `binders.yaml` and commit to the `svpb-music` branch. No server-side
+  state is created.
 - **Personal binder builder page** (`/binder-builder`): renders the same shared component with
   a "Generate PDF" button. Also produces a shareable URL (Base64-encoded binder spec) so the
   configuration can be bookmarked or sent to a section leader. Polls `GET /binders/{id}` for
@@ -376,8 +423,8 @@ identifies a tune by its slug (stable across years) and one or more parts by nam
 ## Success Criteria
 
 - A new operator can go from zero to a running TNG server in under 30 minutes following the README.
-- A push to `svpb-music` on GitHub results in updated PDFs in Box and a Slack message within
-  5 minutes, with no manual intervention.
+- A push to `svpb-music` on GitHub results in updated binder PDFs in Box and a Slack message
+  within 5 minutes, with no manual intervention.
 - A band member can generate and download a personalised binder PDF in under 2 minutes from a
   browser, without installing any software.
 - The system can be maintained (upgraded, restarted, debugged) by anyone comfortable with

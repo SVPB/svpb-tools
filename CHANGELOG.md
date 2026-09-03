@@ -67,6 +67,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### Box now receives official binders only (docs)
+
+- `PROJECT_PLAN.md` and `README.md` corrected: Box receives **only** the assembled official
+  binder PDFs named in `binders.yaml`, a specially-named spec file committed to the root of each
+  branch of the music repository. Per-tune PDFs are build intermediates that stay on the server,
+  and personalised binders are downloaded straight from TNG and never reach Box.
+- `binders.yaml` replaces the Gen.1 `Makefile` as the definition of the official binders. It
+  declares one or more binders, each with an `output` filename and an ordered list of titled
+  sections; the binder constructor page (`/binder-constructor`) is how its contents are authored.
+- Core feature list restructured accordingly: C4 is now official binder assembly, C5 is the Box
+  upload of those binders, and Slack notification / build log retention shift to C6 / C7.
+- No code changes yet — `BuildService` still uploads each per-tune PDF, which now contradicts the
+  plan.
+
 #### ABC → SVG engine: ABCKit replaced by CeolKit
 
 - The `abcm2ps`-backed [ABCKit](https://codeberg.org/sbeitzel/ABCKit) dependency is replaced by
