@@ -67,6 +67,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### CeolKit 1.2.1 → 1.3.0
+
+- `Package.swift` now requires CeolKit `from: "1.3.0"`. No application code changed; the build and
+  the full test suite pass against it unmodified.
+- 1.3.0 is CeolKit's polyphony release: `%%score` / `%%staves` staff plans are read and obeyed,
+  voices sharing a staff are engraved as two parts, lyrics are drawn, and voice state (key, unit
+  note length, accidental memory) is genuinely per-voice rather than leaking through a shared
+  cursor. Multi-voice ABC in the music repository will therefore engrave differently — and more
+  correctly — than it did under 1.2.1.
+- This does **not** deliver per-part PDFs. `SVGRenderConfig` still has no voice-selection option, so
+  a file is still rendered once, whole, and every `Part` row still points at that one score
+  (SVPB/svpb-tools#20, deferred past MVP 2026). The per-voice model 1.3.0 introduces is what would
+  make that feature feasible upstream.
+- Footer page numbering is unchanged and still unusable across an assembled binder: `$P` numbers
+  from the page's index within its own file, `%%ceolkit:pagenumber` is parsed but never applied
+  (sbeitzel/CeolKit#138), and under `.outlines` there is no `<text>` element for SVGPDFKit to
+  rewrite (sbeitzel/CeolKit#137, SVPB/svpb-tools#19).
+
 #### Box now receives official binders only (docs)
 
 - `PROJECT_PLAN.md` and `README.md` corrected: Box receives **only** the assembled official
@@ -87,7 +105,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the pure-Swift [CeolKit](https://github.com/sbeitzel/CeolKit). `Package.swift` now depends on
   CeolKit's `CeolKitModel`, `CeolKitParser`, and `CeolKitSVGRenderer` products. No vendored C
   library remains in the dependency graph.
-- CeolKit is pinned to 1.2.1, whose renderer defaults to `TextRendering.outlines`: glyphs are
+- CeolKit is pinned to 1.3.0, whose renderer defaults to `TextRendering.outlines`: glyphs are
   written into each SVG as `<path>` geometry in `<defs>`, drawn by `<use>`, with no `@font-face`
   block and no `<text>` element. The output no longer depends on the host's font environment, so
   the process-scope `CeolKitFonts.register()` call in `configure.swift` is gone.
