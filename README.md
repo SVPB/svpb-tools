@@ -217,17 +217,44 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin do
 
 **5. Attach a block storage volume.** In the Digital Ocean control panel, create a Volume in the
 droplet's region — 1 GiB is the minimum and is ample — name it `tng-state`, and attach it to the
-droplet. Digital Ocean offers to format and mount it for you; the commands below do the same thing
-explicitly. Use the `by-id` path rather than `/dev/sda`, which is not stable across reboots.
+droplet.
+
+Digital Ocean formats and mounts the volume for you at attach time. It mounts it at
+`/mnt/<volume-name>` with hyphens replaced by underscores, so a volume named `tng-state` arrives at
+**`/mnt/tng_state`**. What it does *not* do is add an `/etc/fstab` entry, so that mount is
+live-only and disappears on the next reboot. Check what you actually have before changing anything:
 
 ```sh
-DEV=/dev/disk/by-id/scsi-0DO_Volume_tng-state
-mkfs.ext4 -F "$DEV"                     # ONLY on a brand-new volume — this erases it
-mkdir -p /mnt/tng
-echo "$DEV /mnt/tng ext4 defaults,nofail,discard 0 2" >> /etc/fstab
-mount -a
-mkdir -p /mnt/tng/data /mnt/tng/caddy/data /mnt/tng/caddy/config
+lsblk -f                      # is there already an ext4 filesystem, and where is it mounted?
+cat /etc/fstab                # is there an entry for it?
+ls -l /dev/disk/by-id/ | grep -i volume
 ```
+
+If `lsblk -f` shows **no** filesystem on the volume, format it — and only then, because this
+erases whatever is there:
+
+```sh
+mkfs.ext4 -F /dev/disk/by-id/scsi-0DO_Volume_tng-state
+```
+
+Then persist the mount. Use the `by-id` path, never a bare `/dev/sda`: device letters are not
+stable across reboots, and a volume that comes back as `sdb` would leave the mountpoint an empty
+directory on the boot disk while the stack writes to it happily.
+
+```sh
+mkdir -p /mnt/tng_state
+echo '/dev/disk/by-id/scsi-0DO_Volume_tng-state /mnt/tng_state ext4 defaults,nofail,discard 0 2' \
+  >> /etc/fstab
+umount /mnt/tng_state 2>/dev/null    # drop Digital Ocean's ad-hoc mount, if it made one
+mount -a
+findmnt /mnt/tng_state
+mkdir -p /mnt/tng_state/data /mnt/tng_state/caddy/data /mnt/tng_state/caddy/config
+```
+
+The `umount` / `mount -a` round trip is the point of that sequence: it proves the fstab entry
+mounts the volume, rather than leaving you trusting that it will at boot. `findmnt` must print a
+row showing the device and `ext4`. If it prints nothing, the entry is wrong and `nofail` swallowed
+the error — fix it before going any further, because every later step would write to the boot disk.
 
 Volumes cost $0.10/GiB/month, can be resized up (never down), survive the droplet's destruction,
 and can be snapshotted independently of it.
@@ -248,11 +275,11 @@ recreating the droplet loses nothing but the checkout itself.
 ```sh
 git clone https://github.com/SVPB/svpb-tools.git
 cd svpb-tools
-cp .env.example /mnt/tng/.env
-chmod 600 /mnt/tng/.env
-# edit /mnt/tng/.env — every value in the Configuration table above,
-# and uncomment TNG_STATE_DIR=/mnt/tng
-ln -s /mnt/tng/.env .env
+cp .env.example /mnt/tng_state/.env
+chmod 600 /mnt/tng_state/.env
+# edit /mnt/tng_state/.env — every value in the Configuration table above,
+# and uncomment TNG_STATE_DIR=/mnt/tng_state
+ln -s /mnt/tng_state/.env .env
 docker compose up -d
 ```
 
@@ -267,32 +294,48 @@ firewall is free.
 
 If the stack is already running with its state in Docker `local` named volumes — that is, on the
 droplet's boot disk — move it onto the volume without losing the database. Do step 5 above first to
-create, format, and mount the volume, then, from the checkout:
+mount the volume durably, then, from the checkout:
 
 ```sh
 docker compose down                        # NOT -v: that would delete the volumes you are copying
 
 # The compose project name prefixes the volume names; it defaults to the
 # directory name, so these are usually svpb-tools_*. Confirm with `docker volume ls`.
-docker run --rm -v svpb-tools_tng-data:/from -v /mnt/tng/data:/to \
+docker run --rm -v svpb-tools_tng-data:/from -v /mnt/tng_state/data:/to \
   alpine sh -c 'cp -a /from/. /to/'
-docker run --rm -v svpb-tools_caddy-data:/from -v /mnt/tng/caddy/data:/to \
+docker run --rm -v svpb-tools_caddy-data:/from -v /mnt/tng_state/caddy/data:/to \
   alpine sh -c 'cp -a /from/. /to/'
-docker run --rm -v svpb-tools_caddy-config:/from -v /mnt/tng/caddy/config:/to \
+docker run --rm -v svpb-tools_caddy-config:/from -v /mnt/tng_state/caddy/config:/to \
   alpine sh -c 'cp -a /from/. /to/'
 
-mv .env /mnt/tng/.env
-chmod 600 /mnt/tng/.env
-ln -s /mnt/tng/.env .env
-echo 'TNG_STATE_DIR=/mnt/tng' >> /mnt/tng/.env
+# cp rather than mv, so there is a verified copy on the volume before the original goes
+cp .env /mnt/tng_state/.env
+chmod 600 /mnt/tng_state/.env
+echo 'TNG_STATE_DIR=/mnt/tng_state' >> /mnt/tng_state/.env
+diff <(grep -v TNG_STATE_DIR /mnt/tng_state/.env) .env && echo "identical apart from the new line"
+rm .env
+ln -s /mnt/tng_state/.env .env
 
 git pull                                   # picks up the bind-mount compose file
-docker compose up -d
+docker compose config | grep -A1 'type: bind'
 ```
 
-Verify before cleaning up: `ls -l /mnt/tng/data/tng.sqlite` should show the database at its
-previous size, and the admin dashboard should still list the prior build history rather than
-looking freshly initialised. Only once you are satisfied, reclaim the boot-disk copies:
+Check that output before starting: the three state binds must resolve to `/mnt/tng_state/data`,
+`/mnt/tng_state/caddy/data`, and `/mnt/tng_state/caddy/config`. If they resolve to `./state/...`,
+`TNG_STATE_DIR` is not reaching Compose through the symlinked `.env` and starting now would create
+an empty database on the boot disk. (The fourth bind, the `Caddyfile`, stays in the checkout by
+design — it is read-only config tracked in git.)
+
+```sh
+docker compose up -d           # up only: `docker compose pull` here would change the application
+                               # version at the same time and muddle what to blame if it breaks
+```
+
+Verify before cleaning up. `curl -fsS https://<your-domain>/health` is the most direct check: its
+`last_build` field comes straight from the database the running process has open, so a build you
+recognise proves the copy was opened rather than a new database created. `docker compose logs
+caddy` should also be quiet about obtaining certificates — it should load the copied one. Only once
+you are satisfied, reclaim the boot-disk copies:
 
 ```sh
 docker volume rm svpb-tools_tng-data svpb-tools_caddy-data svpb-tools_caddy-config
