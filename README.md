@@ -112,6 +112,7 @@ each value before starting the stack.
 |---|---|
 | `DOMAIN` | Public hostname, e.g. `musictools.siliconvalleypipeband.com` — used by Caddy for TLS |
 | `TNG_IMAGE_TAG` | Optional. Which published image to run: `develop`, a release version, or unset for `latest` |
+| `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
 | `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
@@ -153,12 +154,39 @@ docker compose down
 ## Deployment
 
 TNG is distributed as a `docker-compose.yml` that starts two containers — the TNG server and a
-Caddy reverse proxy — plus named volumes for the database and the music workspace. Any host that
-can run Docker Compose and is reachable on ports 80 and 443 will work.
+Caddy reverse proxy — plus a bind-mounted state directory and one named volume for the music
+workspace. Any host that can run Docker Compose and is reachable on ports 80 and 443 will work.
 
 Images are built by GitHub Actions and published to
 `ghcr.io/svpb/svpb-tools`. The server pulls them; it never compiles Swift. See
 [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md) for a comparison of providers.
+
+### Persistent state
+
+Everything TNG cannot regenerate lives under one directory, named by `TNG_STATE_DIR`:
+
+```
+$TNG_STATE_DIR/
+├── .env            # secrets and configuration; symlinked into the checkout
+├── data/           # SQLite database — users, build history, tune catalogue, binder requests
+└── caddy/
+    ├── data/       # ACME account key and issued TLS certificates
+    └── config/     # Caddy's autosaved config
+```
+
+`TNG_STATE_DIR` defaults to `./state` inside the checkout, which is what local development wants.
+On a server, point it at storage that survives the machine — the whole point being that a droplet's
+boot disk does not. The music workspace (the clone of the music repository and the rendered
+SVG/PDF output) deliberately stays a plain named Docker volume: it is reproducible from the next
+sync and expensive to store.
+
+Note the `.env` in that listing. It is a fifth piece of unreplaceable state, it cannot be committed,
+and it is not reconstructable without re-running `box-auth` and re-reading every credential out of
+Box, Slack, and GitHub — so it belongs on the same durable storage, symlinked back into the
+checkout where `docker compose` expects to find it.
+
+This protects against losing the machine. It does **not** protect against database corruption, a
+bad migration, or `docker compose down -v`; backups are a separate concern.
 
 ### Digital Ocean Droplet
 
@@ -187,7 +215,24 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-**5. Add swap.** 2 GB of RAM is comfortable for normal operation, but rendering a full year of
+**5. Attach a block storage volume.** In the Digital Ocean control panel, create a Volume in the
+droplet's region — 1 GiB is the minimum and is ample — name it `tng-state`, and attach it to the
+droplet. Digital Ocean offers to format and mount it for you; the commands below do the same thing
+explicitly. Use the `by-id` path rather than `/dev/sda`, which is not stable across reboots.
+
+```sh
+DEV=/dev/disk/by-id/scsi-0DO_Volume_tng-state
+mkfs.ext4 -F "$DEV"                     # ONLY on a brand-new volume — this erases it
+mkdir -p /mnt/tng
+echo "$DEV /mnt/tng ext4 defaults,nofail,discard 0 2" >> /etc/fstab
+mount -a
+mkdir -p /mnt/tng/data /mnt/tng/caddy/data /mnt/tng/caddy/config
+```
+
+Volumes cost $0.10/GiB/month, can be resized up (never down), survive the droplet's destruction,
+and can be snapshotted independently of it.
+
+**6. Add swap.** 2 GB of RAM is comfortable for normal operation, but rendering a full year of
 music in one sync can spike. Swap costs nothing and prevents an OOM kill.
 
 ```sh
@@ -195,21 +240,63 @@ fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 ```
 
-**6. Deploy.**
+**7. Deploy.**
+
+The `.env` lives on the volume and is symlinked into the checkout, so that destroying and
+recreating the droplet loses nothing but the checkout itself.
 
 ```sh
 git clone https://github.com/SVPB/svpb-tools.git
 cd svpb-tools
-cp .env.example .env
-# edit .env — every value in the Configuration table above
+cp .env.example /mnt/tng/.env
+chmod 600 /mnt/tng/.env
+# edit /mnt/tng/.env — every value in the Configuration table above,
+# and uncomment TNG_STATE_DIR=/mnt/tng
+ln -s /mnt/tng/.env .env
 docker compose up -d
 ```
 
-**7. Verify.** `docker compose ps` should show both containers healthy, and
+**8. Verify.** `docker compose ps` should show both containers healthy, and
 `curl https://<your-domain>/health` should return JSON. If Caddy cannot get a certificate,
 `docker compose logs caddy` says why — almost always DNS not yet propagated or port 80 blocked.
 
-Estimated cost: **$12/month** for the droplet. The cloud firewall is free.
+Estimated cost: **$12/month** for the droplet plus **$0.10/month** for a 1 GiB volume. The cloud
+firewall is free.
+
+#### Migrating an existing droplet onto a block volume
+
+If the stack is already running with its state in Docker `local` named volumes — that is, on the
+droplet's boot disk — move it onto the volume without losing the database. Do step 5 above first to
+create, format, and mount the volume, then, from the checkout:
+
+```sh
+docker compose down                        # NOT -v: that would delete the volumes you are copying
+
+# The compose project name prefixes the volume names; it defaults to the
+# directory name, so these are usually svpb-tools_*. Confirm with `docker volume ls`.
+docker run --rm -v svpb-tools_tng-data:/from -v /mnt/tng/data:/to \
+  alpine sh -c 'cp -a /from/. /to/'
+docker run --rm -v svpb-tools_caddy-data:/from -v /mnt/tng/caddy/data:/to \
+  alpine sh -c 'cp -a /from/. /to/'
+docker run --rm -v svpb-tools_caddy-config:/from -v /mnt/tng/caddy/config:/to \
+  alpine sh -c 'cp -a /from/. /to/'
+
+mv .env /mnt/tng/.env
+chmod 600 /mnt/tng/.env
+ln -s /mnt/tng/.env .env
+echo 'TNG_STATE_DIR=/mnt/tng' >> /mnt/tng/.env
+
+git pull                                   # picks up the bind-mount compose file
+docker compose up -d
+```
+
+Verify before cleaning up: `ls -l /mnt/tng/data/tng.sqlite` should show the database at its
+previous size, and the admin dashboard should still list the prior build history rather than
+looking freshly initialised. Only once you are satisfied, reclaim the boot-disk copies:
+
+```sh
+docker volume rm svpb-tools_tng-data svpb-tools_caddy-data svpb-tools_caddy-config
+```
 
 ---
 

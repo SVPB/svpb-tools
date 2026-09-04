@@ -67,6 +67,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### Persistent state on a detachable volume (#3)
+
+- `docker-compose.yml` no longer keeps the database or Caddy's certificates in Docker `local`
+  named volumes. Those live under `/var/lib/docker/volumes` on the host's boot disk, and a
+  Digital Ocean droplet's boot disk cannot be detached — it is destroyed with the droplet. They
+  are now bind mounts under `${TNG_STATE_DIR:-./state}`: `data/`, `caddy/data/`, and
+  `caddy/config/`.
+- `TNG_STATE_DIR` is a new optional setting. Unset, it resolves to `./state` in the checkout and
+  local development is unaffected; on the droplet it is set to `/mnt/tng`, a Block Storage volume
+  that survives the droplet.
+- `music-workspace` remains a named volume. It holds the clone of the music repository and the
+  rendered SVG/PDF output, all of which the next sync reproduces, and it is the bulky one.
+- `README.md` gains a *Persistent state* section describing the layout — including `.env`, which
+  now lives on the volume and is symlinked into the checkout — a volume-provisioning step in the
+  Digital Ocean walkthrough, and a procedure for migrating an already-running droplet off its
+  named volumes without losing the database.
+
 #### CeolKit 1.2.1 → 1.3.0
 
 - `Package.swift` now requires CeolKit `from: "1.3.0"`. No application code changed; the build and

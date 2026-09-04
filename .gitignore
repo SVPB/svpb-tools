@@ -18,4 +18,5 @@ dev.dockerfile
 run_server.sh
 .env.development
 data
+state
 box_auth.sh
