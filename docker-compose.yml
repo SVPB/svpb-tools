@@ -14,7 +14,13 @@ services:
       # stale value in .env is harmless.
       - MUSIC_WORKSPACE_PATH=/app/music
     volumes:
-      - tng-data:/app/data
+      # Persistent state lives under TNG_STATE_DIR so it can be pointed at a
+      # detachable block volume in production (see README § Persistent state).
+      # Unset, it falls back to ./state in the checkout, which is what local
+      # development wants.
+      - ${TNG_STATE_DIR:-./state}/data:/app/data
+      # The workspace is a clone of the music repo plus rendered output: both
+      # are reproducible from the next sync, so it stays a plain named volume.
       - music-workspace:/app/music
     # TNG is not exposed directly — all traffic flows through Caddy.
     expose:
@@ -37,13 +43,12 @@ services:
       - "443:443/udp"   # HTTP/3
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      # The ACME account key and issued certificates: replaceable in principle,
+      # but re-issuing on every rebuild burns Let's Encrypt rate limits.
+      - ${TNG_STATE_DIR:-./state}/caddy/data:/data
+      - ${TNG_STATE_DIR:-./state}/caddy/config:/config
     environment:
       - DOMAIN=${DOMAIN}
 
 volumes:
-  tng-data:
   music-workspace:
-  caddy-data:
-  caddy-config:
