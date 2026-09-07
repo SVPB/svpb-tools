@@ -83,6 +83,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now lives on the volume and is symlinked into the checkout — a volume-provisioning step in the
   Digital Ocean walkthrough, and a procedure for migrating an already-running droplet off its
   named volumes without losing the database.
+- The Digital Ocean walkthrough now describes what actually happens on attach: Digital Ocean
+  formats and mounts the volume at `/mnt/<volume-name>` (hyphens become underscores, so `tng-state`
+  arrives at `/mnt/tng_state`) but writes **no** `/etc/fstab` entry, leaving a live-only mount that
+  vanishes on the next reboot — after which the stack would create a fresh database on the boot
+  disk and look perfectly healthy doing it. The steps check `lsblk -f` and `/etc/fstab` before
+  touching anything, make `mkfs` conditional on there being no filesystem, and prove the fstab
+  entry with an unmount/remount cycle rather than trusting it.
 
 #### CeolKit 1.2.1 → 1.3.0
 
