@@ -67,6 +67,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### Shared tune-selection component (#30)
+
+- The binder constructor and the personal binder builder no longer carry two copies of the
+  tune-selection UI. `PROJECT_PLAN.md` (B4) claimed they shared a component; in fact it had been
+  copy-pasted and the copies had drifted. The shared parts now live in one place:
+  - `Public/js/tune-selector.js` — the `TuneSelector` module: catalogue load, search filter,
+    the selection list, part tags, and the reorder/remove controls. Pages supply two hooks —
+    `setStatus` (the constructor has one status style and ignores the severity argument, the
+    builder styles it) and `onClear` (each page resets its own output) — plus an optional
+    `restore` hook, which the builder uses to seed the selection from a shared `?spec=` URL.
+  - `Resources/Views/partials/tune-catalogue.leaf`, `partials/binder-entries.leaf`, and
+    `partials/tune-selector-styles.leaf` — the shared markup and CSS. Each page imports the
+    two strings that genuinely differ (the binder-name label and the entries heading).
+- Output generation stays with the page that owns it: `generateYAML` on the constructor,
+  `requestPDF` / `buildSpec` / `shareURL` on the builder.
+- `BinderPageTests` renders both pages and asserts the shared element IDs, headings, and styles
+  survive the partials.
+
 #### Persistent state on a detachable volume (#3)
 
 - `docker-compose.yml` no longer keeps the database or Caddy's certificates in Docker `local`
@@ -176,6 +194,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   caught in CI as well as in the image build.
 
 ### Fixed
+
+- **Personal binder builder:** "Clear" left the tune catalogue showing "Added ✓" on every tune
+  that had just been removed. The constructor refreshed the catalogue after clearing and the
+  builder's copy did not; the shared component now always does (#30).
 
 #### SVG/PDF conversion pipeline
 

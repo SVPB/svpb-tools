@@ -1,0 +1,20 @@
+<!-- Branch picker, binder name, and the searchable tune catalogue.
+     Driven by Public/js/tune-selector.js; the element IDs below are that
+     module's contract with the page. -->
+<div class="card" style="margin-bottom:1rem;">
+  <h2>Binder Settings</h2>
+  <label for="sel-branch">Year (branch)</label>
+  <select id="sel-branch">
+    <option value="">Loading…</option>
+  </select>
+  <label for="binder-name">#import("binder-name-label")</label>
+  <input type="text" id="binder-name" placeholder="#import("binder-name-placeholder")" value="">
+</div>
+
+<div class="card">
+  <h2>Tune Catalogue</h2>
+  <input type="text" id="search-tunes" placeholder="Search tunes…" style="margin-bottom:0.5rem;">
+  <ul class="tune-list" id="tune-list">
+    <li style="color:#888;">Select a year above to load tunes.</li>
+  </ul>
+</div>

@@ -1,0 +1,6 @@
+<!-- The ordered list of selected tunes. The page supplies the heading and
+     wraps this in its own card alongside whatever it builds from the
+     selection. -->
+<h2>#import("entries-heading")</h2>
+<p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
+<ul class="binder-entries" id="binder-entries"></ul>
