@@ -1,0 +1,33 @@
+<style>
+  /* Styles shared by the binder constructor and the personal binder builder.
+     Anything that belongs to only one of them stays in that page's own
+     styles export. (Leaf parses a literal hash-tag in here as a tag, so this
+     comment spells the name out instead.) */
+  main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  h2     { font-size: 1.05rem; margin: 0 0 0.75rem; }
+  .card  { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .full-width { grid-column: 1 / -1; }
+  label  { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
+  select, input[type=text] {
+    width: 100%; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px;
+    font-size: 0.9rem; margin-bottom: 0.75rem;
+  }
+  .tune-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 4px; }
+  .tune-list li { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; }
+  .tune-list li:last-child { border-bottom: none; }
+  .tune-list li.added { background: #f0fdf4; }
+  .tune-list li button { font-size: 0.75rem; padding: 2px 8px; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
+  .tune-list li button:hover { background: #eee; }
+  .binder-entries { list-style: none; margin: 0; padding: 0; }
+  .binder-entries li { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; background: #f9f9f9; border-radius: 4px; margin-bottom: 4px; }
+  .binder-entries li button { font-size: 0.75rem; padding: 2px 8px; border: 1px solid #f99; border-radius: 3px; cursor: pointer; background: #fff; color: #c00; }
+  .binder-entries li button:hover { background: #fee; }
+  .move-btn { background: none!important; border: none!important; color: #888!important; cursor: pointer; font-size: 1rem; padding: 0 4px!important; }
+  .part-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .part-tag  { background: #e0e7ff; color: #3730a3; border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; cursor: pointer; }
+  .part-tag.selected { background: #3730a3; color: #fff; }
+  .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+  .btn-primary { background: #1a1a2e; color: #fff; }
+  .btn-primary:hover { background: #2a2a4e; }
+</style>
