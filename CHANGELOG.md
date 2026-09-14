@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Sections in personal binders (#29)
+
+- A personal binder built on `/binder-builder` can now be divided into titled sections, and each
+  titled section gets a divider page ahead of it in the generated PDF. Before this a personal
+  binder was one undifferentiated run of tunes.
+- `BinderSpec` carries `sections` (each an optional `title` and ordered `entries`) in place of the
+  flat `entries` list. The nesting matches `binders.yaml`. The flat shape still decodes, as a
+  single untitled section, so existing `binder_requests` rows and URLs shared before this change
+  keep working; encoding always writes `sections`. `BinderSpec.entries` remains as a read-only
+  view across all sections.
+- `DividerPageRenderer` — renders a divider page as one Letter SVG page. The title is engraved by
+  CeolKit as a title-only tune, so it is drawn as Libertinus Serif glyph outlines exactly like the
+  tune pages, never as `<text>` resolved through a host font; the title is then moved to the
+  upper-middle of the page and scaled up, or down to fit when long. Line breaks in a title are
+  collapsed so they cannot inject ABC. A `%` is spelled out as "percent", because CeolKit ends a
+  field at `%` and ignores the standard's `\%` escape (sbeitzel/CeolKit#145). Official binder
+  assembly (#18) is meant to reuse it.
+- `BinderService` inserts the divider ahead of a titled section's first page. A section that ends
+  up with no pages (empty, or every tune missing from the catalogue) gets no divider, and a binder
+  that would contain only dividers is not produced.
+- The shared `TuneSelector` component models its selection as sections. Pages opt in with
+  `sections: true`; the builder does, and gets section headers with an editable title, section
+  reorder and remove (a removed section's tunes join its neighbour), a highlighted section that
+  catalogue additions go into, per-tune arrows that carry a tune across a section boundary, and a
+  move-to-section menu. The constructor does not opt in yet and behaves as before; its YAML
+  output gains sections under #21.
+- Share URLs now Base64-encode the spec's UTF-8 bytes, so titles and binder names outside
+  Latin-1 no longer make `btoa` throw. URLs produced the old way still restore.
+
 #### Tune catalogue (B1)
 
 - `CatalogueExtractor` — maps the `Score` that CeolKit produced while rendering a file onto the

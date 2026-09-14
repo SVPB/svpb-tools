@@ -171,13 +171,35 @@ components:
           description: One or more part names to include from this tune.
           example: ["Harmony 1"]
 
+    BinderSection:
+      type: object
+      required: [entries]
+      properties:
+        title:
+          type: string
+          nullable: true
+          description: |
+            Title printed on a divider page ahead of this section. Null, empty,
+            or whitespace-only means no divider page.
+          example: Parade Set
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinderEntry'
+          description: Ordered list of tune/part selections in this section.
+
     BinderSpec:
       type: object
       description: |
-        The complete definition of a binder. Submitted by the client to request
-        PDF generation. Also the format produced by the binder constructor page
-        for commit to svpb-music.
-      required: [name, branch, entries]
+        The complete definition of a personal binder. Submitted by the client
+        to request PDF generation.
+
+        Tunes are grouped into ordered `sections`. For compatibility with
+        binders created before sections existed, a spec may instead carry a
+        flat `entries` array, which is treated as a single untitled section.
+        When both are present, `sections` wins. Responses always use
+        `sections`.
+      required: [name, branch]
       properties:
         name:
           type: string
@@ -189,12 +211,19 @@ components:
             Branch (year) from which all tunes will be drawn. A binder is
             scoped to a single branch.
           example: "2026"
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinderSection'
+          description: Ordered sections of the binder.
         entries:
           type: array
-          minItems: 1
+          deprecated: true
           items:
             $ref: '#/components/schemas/BinderEntry'
-          description: Ordered list of tune/part selections.
+          description: |
+            Legacy flat shape. Accepted on input as one untitled section;
+            never returned.
 
     BinderStatus:
       type: string
@@ -501,11 +530,17 @@ paths:
             example:
               name: "Alice's Binder - March 2026"
               branch: "2026"
-              entries:
-                - tune_slug: archie_beag
-                  parts: ["Harmony 1"]
-                - tune_slug: scotland_the_brave
-                  parts: ["Melody", "Harmony 1"]
+              sections:
+                - title: null
+                  entries:
+                    - tune_slug: amazing_grace
+                      parts: ["Melody"]
+                - title: Parade Set
+                  entries:
+                    - tune_slug: archie_beag
+                      parts: ["Harmony 1"]
+                    - tune_slug: scotland_the_brave
+                      parts: ["Melody", "Harmony 1"]
       responses:
         '202':
           description: |

@@ -71,6 +71,7 @@ let pollTimer = null;
 const INITIAL_SPEC = '#if(encodedSpec):#(encodedSpec)#endif';
 
 TuneSelector.init({
+  sections: true,
   setStatus,
   onClear: () => {
     document.getElementById('download-section').style.display = 'none';
@@ -80,23 +81,19 @@ TuneSelector.init({
   restore: async (branches, sel) => {
     if (!INITIAL_SPEC) return false;
     try {
-      const spec = JSON.parse(atob(INITIAL_SPEC));
-      if (spec.branch && sel.querySelector(`option[value="${spec.branch}"]`)) {
+      const spec = decodeSpec(INITIAL_SPEC);
+      if (spec.branch && branches.some(b => b.name === spec.branch)) {
         sel.value = spec.branch;
         document.getElementById('binder-name').value = spec.name || '';
         await TuneSelector.loadTunes(spec.branch);
-        for (const entry of (spec.entries || [])) {
-          const tune = TuneSelector.tunes().find(t => t.slug === entry.tune_slug);
-          if (tune) {
-            const detail = await TuneSelector.getTuneDetail(entry.tune_slug);
-            TuneSelector.entries().push({
-              tuneSlug: entry.tune_slug,
-              title: tune.title || tune.slug,
-              parts: entry.parts || detail.parts.map(p => p.name),
-            });
-          }
-        }
-        TuneSelector.render();
+        // URLs shared before sections existed carry a flat `entries` list.
+        const saved = Array.isArray(spec.sections)
+          ? spec.sections
+          : [{ title: '', entries: spec.entries || [] }];
+        await TuneSelector.load(saved.map(s => ({
+          title: s.title || '',
+          entries: (s.entries || []).map(e => ({ tuneSlug: e.tune_slug, parts: e.parts })),
+        })));
       }
     } catch (_) { /* ignore malformed spec */ }
     return true;
@@ -160,7 +157,7 @@ function shareURL() {
     return;
   }
   const spec = buildSpec(branch, name);
-  const encoded = btoa(JSON.stringify(spec));
+  const encoded = encodeSpec(spec);
   const url = `${location.origin}/binder-builder?spec=${encodeURIComponent(encoded)}`;
   document.getElementById('share-url-text').textContent = url;
   document.getElementById('share-section').style.display = '';
@@ -175,8 +172,34 @@ function buildSpec(branch, name) {
   return {
     name,
     branch,
-    entries: TuneSelector.entries().map(e => ({ tune_slug: e.tuneSlug, parts: e.parts })),
+    sections: TuneSelector.sections().map(s => ({
+      title: s.title.trim() || null,
+      entries: s.entries.map(e => ({ tune_slug: e.tuneSlug, parts: e.parts })),
+    })),
   };
+}
+
+// `btoa` accepts only Latin-1, and section titles are free text ("Sìne Bhàn"),
+// so the spec goes through UTF-8 bytes first.
+function encodeSpec(spec) {
+  const bytes = new TextEncoder().encode(JSON.stringify(spec));
+  let binary = '';
+  bytes.forEach(b => { binary += String.fromCharCode(b); });
+  return btoa(binary);
+}
+
+// URLs shared before the UTF-8 step were plain `btoa` of the JSON, so bytes
+// that are not valid UTF-8 are read back as the Latin-1 they were written as.
+function decodeSpec(encoded) {
+  const binary = atob(encoded);
+  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+  let json;
+  try {
+    json = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (_) {
+    json = binary;
+  }
+  return JSON.parse(json);
 }
 
 function setStatus(msg, cls) {

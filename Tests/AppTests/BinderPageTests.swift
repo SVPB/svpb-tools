@@ -24,7 +24,7 @@ final class BinderPageTests: XCTestCase {
     /// Element IDs the shared component looks up by name.
     private let sharedElementIDs = [
         "sel-branch", "binder-name", "search-tunes",
-        "tune-list", "binder-entries", "empty-msg",
+        "tune-list", "binder-entries", "empty-msg", "add-section",
     ]
 
     func testConstructorPageRenders() async throws {
@@ -66,6 +66,18 @@ final class BinderPageTests: XCTestCase {
             try await app.test(.GET, path) { res async in
                 XCTAssertTrue(res.body.string.contains(".part-tag.selected"), "\(path) lost the shared styles")
             }
+        }
+    }
+
+    /// Sections are on for the personal builder (#29). The constructor keeps a
+    /// flat selection until its YAML can carry sections (#21).
+    func testOnlyTheBuilderTurnsSectionsOn() async throws {
+        try await app.test(.GET, "binder-builder") { res async in
+            XCTAssertTrue(res.body.string.contains("sections: true"))
+            XCTAssertTrue(res.body.string.contains(".section-header"), "Section styles missing")
+        }
+        try await app.test(.GET, "binder-constructor") { res async in
+            XCTAssertFalse(res.body.string.contains("sections: true"))
         }
     }
 

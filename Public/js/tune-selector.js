@@ -5,20 +5,27 @@
  * binder builder.
  *
  * The component owns everything the two pages have in common: the branch
- * picker, the tune catalogue with its search filter, and the ordered list of
- * selected entries with their part tags. What each page *does* with the
- * selection — YAML on the constructor, a PDF request on the builder — stays in
- * the page.
+ * picker, the tune catalogue with its search filter, and the ordered selection
+ * with its part tags. What each page *does* with the selection — YAML on the
+ * constructor, a PDF request on the builder — stays in the page.
  *
- * Two things the component cannot decide for itself are supplied as hooks to
- * `init`: how the page reports status, and what else the page has to reset when
- * the selection is cleared.
+ * The selection is always a list of sections, each an ordered list of entries.
+ * A section's title becomes a divider page ahead of it; a section with no title
+ * gets no divider. A page that has not opted in to sections (`sections: false`)
+ * sees exactly one untitled section and none of the controls for adding,
+ * naming, or reordering sections, so its selection behaves as a flat list.
+ *
+ * Things the component cannot decide for itself are supplied as hooks to
+ * `init`: how the page reports status, what else the page has to reset when the
+ * selection is cleared, and how a page restores a saved selection.
  */
 const TuneSelector = (() => {
   // ── State ────────────────────────────────────────────────────────────────
-  // `entries` is never reassigned: callers hold on to the array returned by
-  // `TuneSelector.entries()`, so clearing has to mutate it in place.
-  const entries = [];      // [{tuneSlug, title, parts: [string]}]
+  // `sections` is never reassigned: callers hold on to the array returned by
+  // `TuneSelector.sections()`, so resetting has to mutate it in place.
+  const sections = [];     // [{title: string, entries: [{tuneSlug, title, parts: [string]}]}]
+  let active = 0;          // index of the section the catalogue adds tunes to
+  let sectionsEnabled = false;
   let allTunes = [];       // [{id, slug, title}]
   let tuneDetails = {};    // slug → {id, slug, title, parts: [{id, name}]}
 
@@ -29,6 +36,15 @@ const TuneSelector = (() => {
 
   const el = id => document.getElementById(id);
   const currentFilter = () => el('search-tunes').value.toLowerCase();
+  const allEntries = () => sections.flatMap(s => s.entries);
+  const sectionLabel = idx => sections[idx].title.trim() || `Section ${idx + 1} (no divider)`;
+
+  function resetSections() {
+    sections.length = 0;
+    sections.push({ title: '', entries: [] });
+    active = 0;
+  }
+  resetSections();
 
   // ── Data loading ─────────────────────────────────────────────────────────
   async function loadTunes(branch) {
@@ -61,12 +77,13 @@ const TuneSelector = (() => {
       list.innerHTML = '<li style="color:#888;">No tunes found.</li>';
       return;
     }
+    const selected = allEntries();
     const visible = filter
       ? allTunes.filter(t => (t.title || t.slug).toLowerCase().includes(filter))
       : allTunes;
     list.innerHTML = '';
     visible.forEach(tune => {
-      const added = entries.some(e => e.tuneSlug === tune.slug);
+      const added = selected.some(e => e.tuneSlug === tune.slug);
       const li = document.createElement('li');
       if (added) li.className = 'added';
       const label = document.createElement('span');
@@ -81,64 +98,137 @@ const TuneSelector = (() => {
     });
   }
 
+  function button(text, title, className, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    b.title = title;
+    if (className) b.className = className;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function renderSectionHeader(section, sIdx) {
+    const li = document.createElement('li');
+    li.className = 'section-header' + (sIdx === active ? ' active' : '');
+    li.title = 'Tunes you add from the catalogue go into the highlighted section';
+    li.addEventListener('click', e => {
+      // Buttons act for themselves, and re-rendering under the title input would take its focus.
+      if (e.target.closest('button, input')) return;
+      if (active !== sIdx) { active = sIdx; renderBinder(); }
+    });
+
+    li.appendChild(button('↑', 'Move section up', 'move-btn', () => moveSection(sIdx, -1)));
+    li.appendChild(button('↓', 'Move section down', 'move-btn', () => moveSection(sIdx, 1)));
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'section-title';
+    input.maxLength = 60;
+    input.value = section.title;
+    input.placeholder = 'Section title (blank: no divider)';
+    input.setAttribute('aria-label', `Title of section ${sIdx + 1}`);
+    // Update state without re-rendering, so typing keeps focus.
+    input.addEventListener('input', () => { section.title = input.value; refreshSectionLabels(); });
+    input.addEventListener('focus', () => {
+      if (active !== sIdx) {
+        active = sIdx;
+        el('binder-entries').querySelectorAll('li.section-header')
+          .forEach((h, i) => h.classList.toggle('active', i === active));
+      }
+    });
+    li.appendChild(input);
+
+    if (sections.length > 1) {
+      const receiver = sIdx > 0 ? 'above' : 'below';
+      li.appendChild(button('✕', `Remove section — its tunes join the section ${receiver}`, '', () => removeSection(sIdx)));
+    }
+    return li;
+  }
+
+  function renderEntry(entry, sIdx, eIdx) {
+    const section = sections[sIdx];
+    const li = document.createElement('li');
+
+    // Reorder buttons. At a section boundary they carry the tune across it.
+    li.appendChild(button('↑', 'Move up', 'move-btn', () => moveEntry(sIdx, eIdx, -1)));
+    li.appendChild(button('↓', 'Move down', 'move-btn', () => moveEntry(sIdx, eIdx, 1)));
+
+    // Info
+    const info = document.createElement('div');
+    info.style.flex = '1';
+    info.style.marginLeft = '4px';
+    const title = document.createElement('div');
+    title.textContent = entry.title;
+    // Part tags
+    const tags = document.createElement('div');
+    tags.className = 'part-tags';
+    if (tuneDetails[entry.tuneSlug]) {
+      tuneDetails[entry.tuneSlug].parts.forEach(p => {
+        const tag = document.createElement('span');
+        tag.className = 'part-tag' + (entry.parts.includes(p.name) ? ' selected' : '');
+        tag.textContent = p.name;
+        tag.addEventListener('click', () => togglePart(entry.tuneSlug, p.name));
+        tags.appendChild(tag);
+      });
+    }
+    info.appendChild(title);
+    info.appendChild(tags);
+    li.appendChild(info);
+
+    // Jump straight to another section, for moves the arrows would take a while over.
+    if (sectionsEnabled && sections.length > 1) {
+      const sel = document.createElement('select');
+      sel.className = 'section-move';
+      sel.title = 'Move to section';
+      sel.setAttribute('aria-label', `Section for ${entry.title}`);
+      sections.forEach((_, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = sectionLabel(i);
+        opt.selected = i === sIdx;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => moveEntryToSection(sIdx, eIdx, Number(sel.value)));
+      li.appendChild(sel);
+    }
+
+    // Remove
+    li.appendChild(button('✕', 'Remove', '', () => {
+      section.entries.splice(eIdx, 1);
+      renderBinder();
+    }));
+    return li;
+  }
+
   function renderBinder() {
     const ul = el('binder-entries');
     const empty = el('empty-msg');
+    const total = allEntries().length;
     ul.innerHTML = '';
-    empty.style.display = entries.length === 0 ? '' : 'none';
-    if (entries.length === 0) return;
-    entries.forEach((entry, idx) => {
-      const li = document.createElement('li');
-      // Reorder buttons
-      const up = document.createElement('button');
-      up.className = 'move-btn'; up.textContent = '↑'; up.title = 'Move up';
-      up.addEventListener('click', () => { if (idx > 0) { [entries[idx-1], entries[idx]] = [entries[idx], entries[idx-1]]; renderBinder(); } });
-      const dn = document.createElement('button');
-      dn.className = 'move-btn'; dn.textContent = '↓'; dn.title = 'Move down';
-      dn.addEventListener('click', () => { if (idx < entries.length-1) { [entries[idx], entries[idx+1]] = [entries[idx+1], entries[idx]]; renderBinder(); } });
-      // Info
-      const info = document.createElement('div');
-      info.style.flex = '1';
-      info.style.marginLeft = '4px';
-      const title = document.createElement('div');
-      title.textContent = entry.title;
-      // Part tags
-      const tags = document.createElement('div');
-      tags.className = 'part-tags';
-      if (tuneDetails[entry.tuneSlug]) {
-        tuneDetails[entry.tuneSlug].parts.forEach(p => {
-          const tag = document.createElement('span');
-          tag.className = 'part-tag' + (entry.parts.includes(p.name) ? ' selected' : '');
-          tag.textContent = p.name;
-          tag.addEventListener('click', () => togglePart(entry.tuneSlug, p.name));
-          tags.appendChild(tag);
-        });
-      }
-      info.appendChild(title);
-      info.appendChild(tags);
-      // Remove
-      const rm = document.createElement('button');
-      rm.textContent = '✕'; rm.title = 'Remove';
-      rm.addEventListener('click', () => {
-        entries.splice(idx, 1);
-        renderBinder();
-        renderTuneList(currentFilter());
-      });
-      li.appendChild(up);
-      li.appendChild(dn);
-      li.appendChild(info);
-      li.appendChild(rm);
-      ul.appendChild(li);
+    empty.style.display = total === 0 ? '' : 'none';
+    el('add-section').hidden = !sectionsEnabled;
+
+    sections.forEach((section, sIdx) => {
+      if (sectionsEnabled) ul.appendChild(renderSectionHeader(section, sIdx));
+      section.entries.forEach((entry, eIdx) => ul.appendChild(renderEntry(entry, sIdx, eIdx)));
     });
     renderTuneList(currentFilter());
   }
 
+  /** Relabels the move-to-section menus after a title edit, without re-rendering. */
+  function refreshSectionLabels() {
+    el('binder-entries').querySelectorAll('select.section-move').forEach(sel => {
+      Array.from(sel.options).forEach((opt, i) => { opt.textContent = sectionLabel(i); });
+    });
+  }
+
   // ── Actions ──────────────────────────────────────────────────────────────
   async function addTune(slug, title) {
-    if (entries.some(e => e.tuneSlug === slug)) return;
+    if (allEntries().some(e => e.tuneSlug === slug)) return;
     try {
       const detail = await getTuneDetail(slug);
-      entries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
+      sections[active].entries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
       renderBinder();
     } catch (e) {
       setStatus('Failed to load tune detail: ' + e.message, 'error');
@@ -146,7 +236,7 @@ const TuneSelector = (() => {
   }
 
   function togglePart(slug, partName) {
-    const entry = entries.find(e => e.tuneSlug === slug);
+    const entry = allEntries().find(e => e.tuneSlug === slug);
     if (!entry) return;
     const idx = entry.parts.indexOf(partName);
     if (idx >= 0) {
@@ -158,12 +248,90 @@ const TuneSelector = (() => {
     renderBinder();
   }
 
+  /** Moves an entry one place; off either end of a section it joins the neighbouring one. */
+  function moveEntry(sIdx, eIdx, delta) {
+    const list = sections[sIdx].entries;
+    const target = eIdx + delta;
+    if (target >= 0 && target < list.length) {
+      [list[eIdx], list[target]] = [list[target], list[eIdx]];
+    } else if (delta < 0 && sIdx > 0) {
+      sections[sIdx - 1].entries.push(list.splice(eIdx, 1)[0]);
+    } else if (delta > 0 && sIdx < sections.length - 1) {
+      sections[sIdx + 1].entries.unshift(list.splice(eIdx, 1)[0]);
+    } else {
+      return;
+    }
+    renderBinder();
+  }
+
+  function moveEntryToSection(sIdx, eIdx, targetIdx) {
+    if (targetIdx === sIdx || !sections[targetIdx]) return;
+    sections[targetIdx].entries.push(sections[sIdx].entries.splice(eIdx, 1)[0]);
+    renderBinder();
+  }
+
+  function addSection() {
+    sections.push({ title: '', entries: [] });
+    active = sections.length - 1;
+    renderBinder();
+    const inputs = el('binder-entries').querySelectorAll('input.section-title');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  }
+
+  function moveSection(sIdx, delta) {
+    const target = sIdx + delta;
+    if (target < 0 || target >= sections.length) return;
+    [sections[sIdx], sections[target]] = [sections[target], sections[sIdx]];
+    if (active === sIdx) active = target;
+    else if (active === target) active = sIdx;
+    renderBinder();
+  }
+
+  /** Removes a section's divider, keeping its tunes: they join the section above (or below, for the first). */
+  function removeSection(sIdx) {
+    if (sections.length < 2) return;
+    const [removed] = sections.splice(sIdx, 1);
+    if (sIdx > 0) sections[sIdx - 1].entries.push(...removed.entries);
+    else sections[0].entries.unshift(...removed.entries);
+    // Follow the tunes: a removed active section hands over to the one that took them.
+    if (active > sIdx || (active === sIdx && sIdx > 0)) active -= 1;
+    renderBinder();
+  }
+
+  /**
+   * Replaces the selection with `saved`, a list of
+   * `{title, entries: [{tuneSlug, parts?}]}` in binder order. Tunes missing from
+   * the current branch's catalogue are dropped. The branch must already be
+   * selected and its tunes loaded.
+   */
+  async function load(saved) {
+    sections.length = 0;
+    for (const s of saved) {
+      const section = { title: sectionsEnabled ? (s.title || '') : '', entries: [] };
+      for (const e of (s.entries || [])) {
+        const tune = allTunes.find(t => t.slug === e.tuneSlug);
+        const seen = x => x.tuneSlug === e.tuneSlug;
+        if (!tune || allEntries().some(seen) || section.entries.some(seen)) continue;
+        const detail = await getTuneDetail(e.tuneSlug);
+        section.entries.push({
+          tuneSlug: e.tuneSlug,
+          title: tune.title || tune.slug,
+          parts: (e.parts && e.parts.length) ? e.parts : detail.parts.map(p => p.name),
+        });
+      }
+      if (sectionsEnabled || sections.length === 0) sections.push(section);
+      else sections[0].entries.push(...section.entries);
+    }
+    if (sections.length === 0) resetSections();
+    active = sections.length - 1;
+    renderBinder();
+  }
+
   function clear() {
-    entries.length = 0;
+    resetSections();
     onClear();
     setStatus('');
     renderBinder();
-    renderTuneList(currentFilter());
   }
 
   // ── Initialise ───────────────────────────────────────────────────────────
@@ -171,6 +339,9 @@ const TuneSelector = (() => {
    * Wires up the component and loads the branch list.
    *
    * @param {object} hooks
+   * @param {boolean} [hooks.sections]
+   *        Shows the controls for adding, naming, and reordering sections.
+   *        Without it the selection is a single untitled section.
    * @param {(msg: string, severity?: string) => void} [hooks.setStatus]
    *        Reports progress and errors. Pages that do not distinguish
    *        severities simply ignore the second argument.
@@ -179,17 +350,21 @@ const TuneSelector = (() => {
    *        is re-rendered.
    * @param {(branches: object[], select: HTMLSelectElement) => Promise<boolean>} [hooks.restore]
    *        Gives the page a chance to pick the branch and seed the selection
-   *        itself (the builder restores a shared spec this way). Returning
-   *        `true` suppresses the default single-branch auto-selection.
+   *        itself (the builder restores a shared spec this way, via `load`).
+   *        Returning `true` suppresses the default single-branch auto-selection.
    */
   async function init(hooks) {
     hooks = hooks || {};
+    sectionsEnabled = !!hooks.sections;
     if (hooks.setStatus) setStatus = hooks.setStatus;
     if (hooks.onClear) onClear = hooks.onClear;
     if (hooks.restore) restore = hooks.restore;
 
+    el('add-section').addEventListener('click', addSection);
+    renderBinder();
+
     el('sel-branch').addEventListener('change', async e => {
-      entries.length = 0;
+      resetSections();
       renderBinder();
       if (e.target.value) await loadTunes(e.target.value);
     });
@@ -222,13 +397,17 @@ const TuneSelector = (() => {
   return {
     init,
     clear,
+    load,
     addTune,
+    addSection,
     togglePart,
     loadTunes,
     getTuneDetail,
     render: renderBinder,
-    /** The live selection array — mutate it, never replace it. */
-    entries: () => entries,
+    /** The live sections array — mutate it, never replace it. */
+    sections: () => sections,
+    /** Every selected entry in binder order, across sections (a fresh array). */
+    entries: allEntries,
     /** The catalogue for the currently selected branch. */
     tunes: () => allTunes,
     /** The selected branch name, or '' when none is chosen. */
