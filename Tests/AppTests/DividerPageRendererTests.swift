@@ -70,27 +70,24 @@ final class DividerPageRendererTests: XCTestCase {
         XCTAssertEqual(DividerPageRenderer.abcSafe("Sìne Bhàn\nX:2\r\n\tT:x"), "Sìne Bhàn X:2 T:x")
     }
 
-    /// CeolKit ends a field at `%` whatever precedes it (sbeitzel/CeolKit#145).
-    func testPercentSignSurvivesAsAWord() throws {
-        XCTAssertEqual(DividerPageRenderer.abcSafe("100% Pipes"), "100 percent Pipes")
+    /// `%` would otherwise start a comment and cut the title short.
+    func testPercentSignIsEscaped() throws {
+        XCTAssertEqual(DividerPageRenderer.abcSafe("100% Pipes"), #"100\% Pipes"#)
 
         let page = try renderer.render(title: "100% Pipes")
-        XCTAssertEqual(page.matches(of: /<use\s/).count, "100percentPipes".count, "Title was truncated at the %")
+        let drawn = page.matches(of: /<use href="#([^"]+)"/).map { String($0.1) }
+        XCTAssertEqual(drawn.count, "100%Pipes".count, "Title was truncated at the %")
+        XCTAssertFalse(drawn.contains { $0.hasSuffix("-g0") }, "% fell back to .notdef")
     }
 
-    /// Canary for sbeitzel/CeolKit#145. `abcSafe` spells `%` out only because
-    /// CeolKit ignores the standard's `\%` escape and ends the field anyway. When
-    /// this fails, CeolKit has started honouring the escape: change `abcSafe` to
-    /// escape `%` as `\%` (and `\` as `\\`, if that is decoded too), update
-    /// `testPercentSignSurvivesAsAWord`, raise the CeolKit minimum in
-    /// `Package.swift`, and delete this test.
-    func testCeolKitStillIgnoresTheEscapedPercent() {
-        let parsed = CeolKitParser().parse("X:1\nT:100\\% Pipes\nK:none\n", options: .default)
-        XCTAssertEqual(
-            parsed.score.tunes.first?.titles.first?.value, "100\\",
-            "CeolKit now handles \\% (sbeitzel/CeolKit#145). Replace the percent workaround "
-            + "in DividerPageRenderer.abcSafe with a real escape."
-        )
+    /// Escaped titles have to come back out of the parser as they went in,
+    /// including a backslash right before a `%`.
+    func testEscapedTitleParsesBackToTheOriginal() {
+        for title in ["100% Pipes", #"Back\slash"#, #"Ends in \% sign"#, #"trailing\"#] {
+            let parsed = CeolKitParser().parse(
+                "X:1\nT:\(DividerPageRenderer.abcSafe(title))\nK:none\n", options: .default)
+            XCTAssertEqual(parsed.score.tunes.first?.titles.first?.value, title)
+        }
     }
 
     func testBlankTitleIsRejected() {

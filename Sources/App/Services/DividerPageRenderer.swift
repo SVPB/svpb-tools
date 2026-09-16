@@ -75,18 +75,15 @@ struct DividerPageRenderer: Sendable {
     /// - Line breaks and other control characters would end the field and let the
     ///   rest of the title be read as ABC, so every run of whitespace collapses to
     ///   one space.
-    /// - `%` starts a comment. ABC 2.2 escapes it as `\%`, but CeolKit (1.4.0)
-    ///   honours no escape and ends the field at the first `%` regardless, and
-    ///   Libertinus Serif has no look-alike to substitute (the full-width and
-    ///   Arabic percent signs both come out as `.notdef`). It is spelled out
-    ///   instead, which is the one form that reaches the page intact. Revisit
-    ///   when sbeitzel/CeolKit#145 is fixed; `testCeolKitStillIgnoresTheEscapedPercent`
-    ///   fails once it is.
+    /// - `%` starts a comment, so it is escaped as `\%`. A backslash is escaped
+    ///   as `\\` first, so a title ending in `\` can't swallow the escape (and
+    ///   no `\` sequence in a title is read as an ABC text escape).
     static func abcSafe(_ title: String) -> String {
         title
             .replacing(/[\s\p{Cc}]+/, with: " ")
-            .replacing(/\s*%/, with: " percent")
             .trimmingCharacters(in: .whitespaces)
+            .replacing("\\", with: "\\\\")
+            .replacing("%", with: "\\%")
     }
 
     // MARK: - Layout
