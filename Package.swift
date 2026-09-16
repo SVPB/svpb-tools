@@ -15,6 +15,7 @@ let package = Package(
         // .package(url: "https://github.com/sbeitzel/CeolKit.git", branch: "main"),
         .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.5.0"),
         .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.2.0"),
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
     ],
     targets: [
         // Library target — imported by both the executable and the test target.
@@ -33,6 +34,7 @@ let package = Package(
                 .product(name: "CeolKitParser", package: "CeolKit"),
                 .product(name: "CeolKitSVGRenderer", package: "CeolKit"),
                 .product(name: "SVGPDFKit", package: "SVGPDFKit"),
+                .product(name: "Yams", package: "Yams"),
             ],
             path: "Sources/App",
             swiftSettings: swiftSettings

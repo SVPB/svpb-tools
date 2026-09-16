@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Official binder definitions read from `binders.yaml` (#10)
+
+- Every build, and every catalogue sync, now reads `binders.yaml` from the root of the branch after
+  conversion and stores its binders as `BinderDefinition` records (new `binder_definitions` table),
+  replacing the branch's previous set in one transaction. This is the reading-and-persisting half
+  of B2; assembling the binders is #18.
+- `BindersFile` / `OfficialBinder` / `OfficialBinderSection` / `OfficialBinderEntry` decode the
+  file with Yams (new dependency). Entries use `tune:`; `parts:` is optional and is kept through
+  decoding and storage even though assembly will ignore it until per-part rendering lands (#20).
+- A branch with no `binders.yaml` logs that and builds as before, with no official binders.
+- A file that cannot be used marks the build partial and leaves the branch with no stored
+  definitions rather than stale ones. The build log names the problem: YAML syntax errors by line
+  and column, a wrong shape by key path (`binders[0].sections[1].entries[2]: missing key 'tune'`),
+  and binders with a blank name, an `output` that is not a bare `.pdf` filename, or an `output`
+  another binder already uses (compared case-insensitively).
+- Entries naming a tune missing from the branch's catalogue are each logged with their binder and
+  section, and mark the build partial, so a typo cannot silently drop a tune from a printed binder.
+  The definition is still stored as written.
+
 #### Sections in personal binders (#29)
 
 - A personal binder built on `/binder-builder` can now be divided into titled sections, and each

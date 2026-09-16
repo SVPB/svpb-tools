@@ -116,6 +116,7 @@ private func addMigrations(_ app: Application) {
     //   4. Build         — FK → Branch
     //   5. BinderRequest — no external FKs
     //   6. LoginToken    — no FK (Slack user ID stored as plain TEXT)
+    //   7. BinderDefinition — FK → Branch
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(CreateBranch())
     app.migrations.add(CreateUser())
@@ -126,6 +127,7 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(CreateLoginToken())
     // Phase 2
     app.migrations.add(AddSvgPathsToPart())
+    app.migrations.add(CreateBinderDefinition())
 }
 
 // MARK: - Service initialisation

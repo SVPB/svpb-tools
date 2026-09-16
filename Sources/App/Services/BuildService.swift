@@ -15,8 +15,9 @@ import Vapor
 ///   4. For each file: convert ABC → per-page SVGs (CeolKit) → PDF (SVGPDFKit).
 ///   5. Optionally upload each PDF to Box (via `BoxService`).
 ///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records.
-///   7. Optionally post a Slack notification (via `SlackService`).
-///   8. Update the `Build` record (status, log, files).
+///   7. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
+///   8. Optionally post a Slack notification (via `SlackService`).
+///   9. Update the `Build` record (status, log, files).
 ///
 /// Status is `.failure` when the pipeline threw, `.partial` when it finished but
 /// any per-file or distribution step failed, and `.success` only when nothing did.
@@ -215,6 +216,11 @@ actor BuildService {
                 }
             }
 
+            // ── official binder definitions ─────────────────────────────────
+            // After conversion, so entries are checked against this build's catalogue.
+            failedSteps += await refreshBinderDefinitions(
+                branch: branch, branchDir: branchDir, db: db, log: &log, logger: logger)
+
             // ── update Branch record timestamps ─────────────────────────────
             branchRecord.lastBuilt = Date()
             branchRecord.headSha = sha
@@ -327,6 +333,67 @@ actor BuildService {
                 try await part.save(on: db)
             }
         }
+    }
+
+    // MARK: - Official binder definitions
+
+    /// Reads `binders.yaml`, logs any entries the catalogue cannot resolve, and
+    /// replaces the branch's stored `BinderDefinition` records with the file's.
+    ///
+    /// A branch with no `binders.yaml` is not an error: it has no official binders
+    /// yet. A file that cannot be used is a failed step, and — since the repository
+    /// is the source of truth — leaves the branch with no stored definitions rather
+    /// than stale ones.
+    ///
+    /// - Returns: The number of failed steps (0 or more) to add to the build's count.
+    private func refreshBinderDefinitions(
+        branch: String,
+        branchDir: URL,
+        db: Database,
+        log: inout String,
+        logger: Logger
+    ) async -> Int {
+        let fileName = BinderDefinitionLoader.fileName
+        var failures = 0
+        var binders: [OfficialBinder] = []
+
+        do {
+            if let file = try BinderDefinitionLoader.load(from: branchDir) {
+                binders = file.binders
+                log += "[binders] Read \(binders.count) binder definition(s) from \(fileName)\n"
+
+                let slugs = try await Tune.query(on: db)
+                    .filter(\.$branch.$id == branch)
+                    .all()
+                    .map(\.slug)
+                let unresolved = BinderDefinitionLoader.unresolvedEntries(
+                    in: file, catalogueSlugs: Set(slugs))
+                for entry in unresolved {
+                    log += "[binders]   ⚠ \"\(entry.binder)\" › \"\(entry.section)\": "
+                    log += "no tune '\(entry.tune)' in the catalogue\n"
+                }
+                if !unresolved.isEmpty {
+                    logger.warning("[BuildService] \(unresolved.count) unresolved tune(s) in \(fileName) on '\(branch)'")
+                    failures += 1
+                }
+            } else {
+                log += "[binders] No \(fileName) on '\(branch)'; no official binders defined\n"
+            }
+        } catch {
+            log += "[binders] ✗ \(fileName) rejected: \(error)\n"
+            logger.warning("[BuildService] \(fileName) rejected on '\(branch)': \(error)")
+            failures += 1
+        }
+
+        do {
+            try await BinderDefinitionLoader.replaceDefinitions(for: branch, with: binders, on: db)
+            log += "[db] Stored \(binders.count) binder definition(s) for '\(branch)'\n"
+        } catch {
+            log += "[db] Storing binder definitions failed: \(error)\n"
+            logger.warning("[BuildService] Storing binder definitions failed: \(error)")
+            failures += 1
+        }
+        return failures
     }
 
     // MARK: - File discovery
