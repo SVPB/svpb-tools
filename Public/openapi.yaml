@@ -255,7 +255,7 @@ components:
 
     BuildStatus:
       type: string
-      enum: [running, success, failure]
+      enum: [running, success, partial, failure]
 
     BuildSummary:
       type: object

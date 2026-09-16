@@ -9,6 +9,7 @@
   .meta-grid dt { font-weight: 600; color: #555; }
   .status-running { color: #b45309; font-weight: 600; }
   .status-success { color: #166534; font-weight: 600; }
+  .status-partial { color: #c2410c; font-weight: 600; }
   .status-failure { color: #991b1b; font-weight: 600; }
   h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
   pre { background: #1a1a2e; color: #d4d4d4; padding: 1rem; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }

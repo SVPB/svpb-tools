@@ -51,21 +51,37 @@ actor SlackService {
 
     /// Posts a build notification to the configured channel via Incoming Webhook.
     func postBuildNotification(branch: String, status: BuildStatus, files: [String]) async throws {
-        let emoji = status == .success ? "✅" : "❌"
-        let fileList = files.isEmpty
-            ? "_(no files)_"
-            : files.map { "• \($0)" }.joined(separator: "\n")
-        let text = "\(emoji) *Build \(status.rawValue)* — branch `\(branch)`\n\(fileList)"
-
         struct WebhookBody: Encodable {
             let text: String
         }
         try await postJSON(
             to: webhookURL,
-            body: WebhookBody(text: text),
+            body: WebhookBody(text: Self.buildNotificationText(branch: branch, status: status, files: files)),
             authorizationHeader: nil
         )
         logger.info("[Slack] Notification posted for branch '\(branch)' (\(status.rawValue))")
+    }
+
+    /// The message body for a build notification.
+    ///
+    /// A `partial` build must not read as a success: the channel is where band
+    /// members without dashboard habits find out whether the new PDFs are real.
+    static func buildNotificationText(branch: String, status: BuildStatus, files: [String]) -> String {
+        let emoji: String
+        switch status {
+        case .success: emoji = "✅"
+        case .partial: emoji = "⚠️"
+        case .failure: emoji = "❌"
+        case .running: emoji = "⏳"
+        }
+        var text = "\(emoji) *Build \(status.rawValue)* — branch `\(branch)`\n"
+        if status == .partial {
+            text += "_Some steps failed; see the build log on the admin dashboard._\n"
+        }
+        text += files.isEmpty
+            ? "_(no files)_"
+            : files.map { "• \($0)" }.joined(separator: "\n")
+        return text
     }
 
     /// Fetches the display name for a Slack user via `users.info`.

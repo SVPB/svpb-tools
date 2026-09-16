@@ -23,6 +23,7 @@
   tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
   .status-running { color: #b45309; }
   .status-success { color: #166534; }
+  .status-partial { color: #c2410c; font-weight: 600; }
   .status-failure { color: #991b1b; }
   a { color: #1a1a2e; }
 </style>
@@ -124,6 +125,11 @@ function pollBuildStatus(branch, btn) {
       if (dto.status === 'success') {
         clearInterval(timer);
         status.textContent = 'Sync complete for "' + branch + '"! Reloading…';
+        setTimeout(() => location.reload(), 800);
+      } else if (dto.status === 'partial') {
+        clearInterval(timer);
+        status.textContent = 'Sync finished for "' + branch + '", but some steps failed. See the build log for details.';
+        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
         setTimeout(() => location.reload(), 800);
       } else if (dto.status === 'failure') {
         clearInterval(timer);
