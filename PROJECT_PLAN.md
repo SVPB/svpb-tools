@@ -226,6 +226,16 @@ Build
   log         TEXT
   files       TEXT                -- JSON list of output PDF filenames
 
+BinderDefinition                  -- one official binder from a branch's binders.yaml
+  id          TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
+  branch      TEXT  NOT NULL      -- FK → Branch.name
+  position    INTEGER NOT NULL    -- order within binders.yaml
+  name        TEXT  NOT NULL      -- display name
+  output      TEXT  NOT NULL      -- output PDF filename, e.g. "2026_binder.pdf"
+  sections    TEXT  NOT NULL      -- JSON-encoded titled sections and their entries
+  created_at  DATETIME
+  UNIQUE (branch, output)         -- replaced wholesale on every build of the branch
+
 BinderRequest
   id          TEXT  PRIMARY KEY   -- UUID, stored as TEXT in SQLite
   definition  TEXT                -- JSON-encoded binder spec (see below)
