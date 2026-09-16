@@ -9,6 +9,7 @@ struct BinderController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         // HTML pages (no auth required)
         routes.get("binder-constructor", use: binderConstructorPage)
+        routes.post("binder-constructor", "check", use: checkBindersYAML)
         routes.get("binder-builder", use: binderBuilderPage)
 
         // REST API
@@ -61,6 +62,60 @@ struct BinderController: RouteCollection {
             encodedSpec: req.query[String.self, at: "spec"]
         )
         return try await req.view.render("binder-builder", ctx)
+    }
+
+    // MARK: - binders.yaml checking
+
+    /// The body of `POST /binder-constructor/check`.
+    struct BindersYAMLCheckRequest: Content {
+        /// The branch whose catalogue the entries are checked against.
+        let branch: String
+        /// The YAML to check, in `binders.yaml` shape.
+        let yaml: String
+    }
+
+    /// The outcome of `POST /binder-constructor/check`.
+    struct BindersYAMLCheckResult: Content {
+        /// Whether the build would accept the file. Unresolved tunes do not make
+        /// it invalid, just as they do not stop a build storing it.
+        let valid: Bool
+        /// Why the file was rejected, in the words the build log would use.
+        let problem: String?
+        /// Entries naming tunes the branch's catalogue does not contain.
+        let unresolved: [UnresolvedTune]
+
+        struct UnresolvedTune: Content {
+            let binder: String
+            let section: String
+            let tune: String
+        }
+    }
+
+    /// `POST /binder-constructor/check` — runs YAML through the same decoder and
+    /// checks the build applies to `binders.yaml`, so the constructor can say
+    /// "this parses" instead of leaving it to the next push to find out.
+    ///
+    /// Always answers 200 with the verdict; a rejected file is a result, not an
+    /// error. Nothing is stored.
+    @Sendable
+    func checkBindersYAML(req: Request) async throws -> BindersYAMLCheckResult {
+        let body = try req.content.decode(BindersYAMLCheckRequest.self)
+
+        let file: BindersFile
+        do {
+            file = try BinderDefinitionLoader.decode(body.yaml)
+        } catch {
+            return BindersYAMLCheckResult(valid: false, problem: "\(error)", unresolved: [])
+        }
+
+        let slugs = try await Tune.query(on: req.db)
+            .filter(\.$branch.$id == body.branch)
+            .all()
+            .map(\.slug)
+        let unresolved = BinderDefinitionLoader
+            .unresolvedEntries(in: file, catalogueSlugs: Set(slugs))
+            .map { BindersYAMLCheckResult.UnresolvedTune(binder: $0.binder, section: $0.section, tune: $0.tune) }
+        return BindersYAMLCheckResult(valid: true, problem: nil, unresolved: unresolved)
     }
 
     // MARK: - REST API

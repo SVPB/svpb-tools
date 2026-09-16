@@ -26,6 +26,8 @@ const TuneSelector = (() => {
   const sections = [];     // [{title: string, entries: [{tuneSlug, title, parts: [string]}]}]
   let active = 0;          // index of the section the catalogue adds tunes to
   let sectionsEnabled = false;
+  let partsEnabled = true;       // show part tags for choosing parts per tune
+  let untitledSections = true;   // a blank section title is allowed, and means no divider
   let allTunes = [];       // [{id, slug, title}]
   let tuneDetails = {};    // slug → {id, slug, title, parts: [{id, name}]}
 
@@ -37,7 +39,8 @@ const TuneSelector = (() => {
   const el = id => document.getElementById(id);
   const currentFilter = () => el('search-tunes').value.toLowerCase();
   const allEntries = () => sections.flatMap(s => s.entries);
-  const sectionLabel = idx => sections[idx].title.trim() || `Section ${idx + 1} (no divider)`;
+  const sectionLabel = idx => sections[idx].title.trim()
+    || `Section ${idx + 1} (${untitledSections ? 'no divider' : 'untitled'})`;
 
   function resetSections() {
     sections.length = 0;
@@ -126,7 +129,7 @@ const TuneSelector = (() => {
     input.className = 'section-title';
     input.maxLength = 60;
     input.value = section.title;
-    input.placeholder = 'Section title (blank: no divider)';
+    input.placeholder = untitledSections ? 'Section title (blank: no divider)' : 'Section title';
     input.setAttribute('aria-label', `Title of section ${sIdx + 1}`);
     // Update state without re-rendering, so typing keeps focus.
     input.addEventListener('input', () => { section.title = input.value; refreshSectionLabels(); });
@@ -163,7 +166,7 @@ const TuneSelector = (() => {
     // Part tags
     const tags = document.createElement('div');
     tags.className = 'part-tags';
-    if (tuneDetails[entry.tuneSlug]) {
+    if (partsEnabled && tuneDetails[entry.tuneSlug]) {
       tuneDetails[entry.tuneSlug].parts.forEach(p => {
         const tag = document.createElement('span');
         tag.className = 'part-tag' + (entry.parts.includes(p.name) ? ' selected' : '');
@@ -342,6 +345,14 @@ const TuneSelector = (() => {
    * @param {boolean} [hooks.sections]
    *        Shows the controls for adding, naming, and reordering sections.
    *        Without it the selection is a single untitled section.
+   * @param {boolean} [hooks.parts=true]
+   *        Shows the part tags. Without them every entry keeps all of its
+   *        tune's parts: pick a tune and it goes in whole.
+   * @param {boolean} [hooks.untitledSections=true]
+   *        Whether a blank section title is meaningful (no divider). Pages
+   *        that need every section titled turn this off, and the controls
+   *        stop suggesting that a blank title is an option; enforcing it is
+   *        still the page's job.
    * @param {(msg: string, severity?: string) => void} [hooks.setStatus]
    *        Reports progress and errors. Pages that do not distinguish
    *        severities simply ignore the second argument.
@@ -356,6 +367,8 @@ const TuneSelector = (() => {
   async function init(hooks) {
     hooks = hooks || {};
     sectionsEnabled = !!hooks.sections;
+    partsEnabled = hooks.parts !== false;
+    untitledSections = hooks.untitledSections !== false;
     if (hooks.setStatus) setStatus = hooks.setStatus;
     if (hooks.onClear) onClear = hooks.onClear;
     if (hooks.restore) restore = hooks.restore;
