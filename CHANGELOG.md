@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Scripted deploys (#6)
+
+- `Scripts/deploy.sh` replaces the manual `git pull && docker compose pull && docker compose up -d`
+  on the server. It waits for the publish workflow for the image tag's commit to succeed before
+  pulling (pulling `develop` mid-publish silently fetches the old build), waits for the `tng`
+  healthcheck after recreating and fails loudly if it does not pass, reports the running revision
+  from the image's OCI label and fails if it is not the expected commit, and runs
+  `docker image prune -f` so superseded builds do not fill the disk. `--no-wait` skips the build
+  gate. README § Updating now points at the script.
+
 #### Sections in personal binders (#29)
 
 - A personal binder built on `/binder-builder` can now be divided into titled sections, and each
