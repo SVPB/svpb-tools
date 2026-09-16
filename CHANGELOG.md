@@ -124,6 +124,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### Binder constructor writes `binders.yaml` (#21)
+
+- `/binder-constructor` now emits the `binders.yaml` shape — a `binders:` root, `name`, `output`,
+  titled `sections`, and entries keyed `tune:` — instead of the personal binder spec, which the
+  build could not read. It writes a complete one-binder file; everything after its first line
+  pastes onto the end of an existing file's list. Scalars are double-quoted, so slugs such as
+  `yes` or `1990` stay strings.
+- Sections are turned on for the constructor, and every section with tunes must be titled. Empty
+  sections are left out.
+- New output filename field, suggested from the binder name until edited, and checked as a bare
+  filename ending in `.pdf`.
+- Part tags are hidden and `parts:` is never emitted: an official binder takes each tune whole
+  until per-part rendering lands (#20). `TuneSelector.init` gains `parts` and `untitledSections`
+  options; the personal builder is unchanged (#24).
+- New `POST /binder-constructor/check` runs YAML through the build's own decoder and catalogue
+  check without storing anything. The page calls it after generating, and a **Check** button
+  checks whatever is in the (now editable) text area, so a pasted `binders.yaml` can be checked too.
+
 #### Shared tune-selection component (#30)
 
 - The binder constructor and the personal binder builder no longer carry two copies of the

@@ -69,15 +69,35 @@ final class BinderPageTests: XCTestCase {
         }
     }
 
-    /// Sections are on for the personal builder (#29). The constructor keeps a
-    /// flat selection until its YAML can carry sections (#21).
-    func testOnlyTheBuilderTurnsSectionsOn() async throws {
+    /// Both pages have sections (#29, #21). The constructor also hides part
+    /// tags, since an official binder takes each tune whole (#20), and needs
+    /// every section titled, since `binders.yaml` has no untitled sections.
+    func testSectionAndPartOptionsPerPage() async throws {
         try await app.test(.GET, "binder-builder") { res async in
-            XCTAssertTrue(res.body.string.contains("sections: true"))
-            XCTAssertTrue(res.body.string.contains(".section-header"), "Section styles missing")
+            let html = res.body.string
+            XCTAssertTrue(html.contains("sections: true"))
+            XCTAssertTrue(html.contains(".section-header"), "Section styles missing")
+            XCTAssertFalse(html.contains("parts: false"))
+            XCTAssertFalse(html.contains("untitledSections: false"))
         }
         try await app.test(.GET, "binder-constructor") { res async in
-            XCTAssertFalse(res.body.string.contains("sections: true"))
+            let html = res.body.string
+            XCTAssertTrue(html.contains("sections: true"))
+            XCTAssertTrue(html.contains("parts: false"))
+            XCTAssertTrue(html.contains("untitledSections: false"))
+        }
+    }
+
+    /// The constructor writes the `binders.yaml` shape, not the personal spec.
+    func testConstructorEmitsBindersYAMLShape() async throws {
+        try await app.test(.GET, "binder-constructor") { res async in
+            let html = res.body.string
+            XCTAssertTrue(html.contains("id=\"binder-output\""))
+            XCTAssertTrue(html.contains("'binders:'"))
+            XCTAssertTrue(html.contains("- tune: "))
+            XCTAssertFalse(html.contains("tune_slug"))
+            XCTAssertFalse(html.contains("parts:`"), "the constructor must not emit parts")
+            XCTAssertTrue(html.contains("/binder-constructor/check"))
         }
     }
 
