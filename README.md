@@ -465,15 +465,33 @@ builder, and personalised binders are downloaded straight from TNG.
 
 ## Updating
 
-Pushing to `develop` or `main` publishes a new image automatically. To move the server onto it:
+Pushing to `develop` or `main` publishes a new image automatically. To move the server onto it,
+run from the checkout on the server:
 
 ```sh
-git pull                # picks up compose/Caddyfile changes
-docker compose pull     # fetches the new image from GHCR
-docker compose up -d    # recreates the containers
+Scripts/deploy.sh
 ```
 
-The named volumes are preserved across updates; no data is lost.
+It waits for the publish workflow for the tag's commit to succeed — pulling a mutable tag like
+`develop` before then silently fetches the previous build — then pulls, recreates the containers,
+waits for the healthcheck, prints the commit now running, and prunes the superseded image. It exits
+non-zero if any of that fails. `Scripts/deploy.sh --no-wait` skips the build gate.
+
+To see what is running at any other time:
+
+```sh
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+  $(docker compose ps -q tng)
+```
+
+Persistent state lives under `TNG_STATE_DIR` and is preserved across updates; no data is lost.
+
+To roll back, set `TNG_IMAGE_TAG` in `.env` to a release version and run the script again.
+Superseded images are pruned on every deploy, so the local image cache is never a rollback target.
+
+The restart takes a few seconds, during which Caddy has nothing to proxy to. GitHub does not retry
+failed webhook deliveries, so if the music repository was pushed during a deploy, redeliver it from
+the webhook's *Recent Deliveries* tab.
 
 To build the image on the server instead of pulling it — needs ~4 GB of RAM and 10–20 minutes:
 
