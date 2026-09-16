@@ -22,9 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   CeolKit as a title-only tune, so it is drawn as Libertinus Serif glyph outlines exactly like the
   tune pages, never as `<text>` resolved through a host font; the title is then moved to the
   upper-middle of the page and scaled up, or down to fit when long. Line breaks in a title are
-  collapsed so they cannot inject ABC. A `%` is spelled out as "percent", because CeolKit ends a
-  field at `%` and ignores the standard's `\%` escape (sbeitzel/CeolKit#145). Official binder
-  assembly (#18) is meant to reuse it.
+  collapsed so they cannot inject ABC, and `%` and `\` are escaped as `\%` and `\\`, which CeolKit
+  decodes from 1.5.0 (sbeitzel/CeolKit#145). Official binder assembly (#18) is meant to reuse it.
 - `BinderService` inserts the divider ahead of a titled section's first page. A section that ends
   up with no pages (empty, or every tune missing from the catalogue) gets no divider, and a binder
   that would contain only dividers is not produced.
