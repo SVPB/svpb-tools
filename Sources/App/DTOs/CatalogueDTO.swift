@@ -32,11 +32,16 @@ struct TuneListItemDTO: Content {
     let id: UUID
     let slug: String
     let title: String?
+    let subtitle: String?
+    /// Shown alongside the title so a musician knows which file to edit.
+    let abcPath: String?
 
     init(from tune: Tune) throws {
         self.id = try tune.requireID()
         self.slug = tune.slug
         self.title = tune.title
+        self.subtitle = tune.subtitle
+        self.abcPath = tune.abcPath
     }
 }
 
@@ -46,6 +51,7 @@ struct TuneDetailDTO: Content {
     let id: UUID
     let slug: String
     let title: String?
+    let subtitle: String?
     let abcPath: String?
     let parts: [PartDTO]
 
@@ -53,6 +59,7 @@ struct TuneDetailDTO: Content {
         self.id = try tune.requireID()
         self.slug = tune.slug
         self.title = tune.title
+        self.subtitle = tune.subtitle
         self.abcPath = tune.abcPath
         self.parts = try parts.map { try PartDTO(from: $0) }
     }

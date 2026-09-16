@@ -35,7 +35,10 @@ struct CatalogueController: RouteCollection {
             .filter(\.$branch.$id == branchName)
             .all()
         return try tunes
-            .sorted { sortKey($0.title ?? $0.slug) < sortKey($1.title ?? $1.slug) }
+            .sorted {
+                (sortKey($0.title ?? $0.slug), $0.subtitle ?? "")
+                    < (sortKey($1.title ?? $1.slug), $1.subtitle ?? "")
+            }
             .map { try TuneListItemDTO(from: $0) }
     }
 

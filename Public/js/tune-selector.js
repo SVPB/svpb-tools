@@ -28,8 +28,8 @@ const TuneSelector = (() => {
   let sectionsEnabled = false;
   let partsEnabled = true;       // show part tags for choosing parts per tune
   let untitledSections = true;   // a blank section title is allowed, and means no divider
-  let allTunes = [];       // [{id, slug, title}]
-  let tuneDetails = {};    // slug → {id, slug, title, parts: [{id, name}]}
+  let allTunes = [];       // [{id, slug, title, subtitle, abcPath}]
+  let tuneDetails = {};    // slug → {id, slug, title, subtitle, parts: [{id, name}]}
 
   // ── Page hooks ───────────────────────────────────────────────────────────
   let setStatus = () => {};
@@ -39,8 +39,29 @@ const TuneSelector = (() => {
   const el = id => document.getElementById(id);
   const currentFilter = () => el('search-tunes').value.toLowerCase();
   const allEntries = () => sections.flatMap(s => s.entries);
+  // Variants of one tune share a title, so the subtitle ("Harmony 1") is part of the label.
+  const tuneLabel = t => t.title
+    ? (t.subtitle ? `${t.title} — ${t.subtitle}` : t.title)
+    : t.slug;
+  // The file behind the label: variants are separate files, and it is the file that gets edited.
+  const tuneFile = t => t.abcPath || `${t.slug}.abc`;
   const sectionLabel = idx => sections[idx].title.trim()
     || `Section ${idx + 1} (${untitledSections ? 'no divider' : 'untitled'})`;
+
+  /** Title over file path, as shown in both the catalogue and the binder. */
+  function tuneNameBlock(title, file) {
+    const block = document.createElement('div');
+    const name = document.createElement('div');
+    name.textContent = title;
+    block.appendChild(name);
+    if (file) {
+      const path = document.createElement('div');
+      path.className = 'tune-file';
+      path.textContent = file;
+      block.appendChild(path);
+    }
+    return block;
+  }
 
   function resetSections() {
     sections.length = 0;
@@ -82,19 +103,18 @@ const TuneSelector = (() => {
     }
     const selected = allEntries();
     const visible = filter
-      ? allTunes.filter(t => (t.title || t.slug).toLowerCase().includes(filter))
+      ? allTunes.filter(t => `${tuneLabel(t)} ${tuneFile(t)}`.toLowerCase().includes(filter))
       : allTunes;
     list.innerHTML = '';
     visible.forEach(tune => {
       const added = selected.some(e => e.tuneSlug === tune.slug);
       const li = document.createElement('li');
       if (added) li.className = 'added';
-      const label = document.createElement('span');
-      label.textContent = tune.title || tune.slug;
+      const label = tuneNameBlock(tuneLabel(tune), tuneFile(tune));
       const btn = document.createElement('button');
       btn.textContent = added ? 'Added ✓' : '+ Add';
       btn.disabled = added;
-      btn.addEventListener('click', () => addTune(tune.slug, tune.title || tune.slug));
+      btn.addEventListener('click', () => addTune(tune.slug, tuneLabel(tune)));
       li.appendChild(label);
       li.appendChild(btn);
       list.appendChild(li);
@@ -161,8 +181,8 @@ const TuneSelector = (() => {
     const info = document.createElement('div');
     info.style.flex = '1';
     info.style.marginLeft = '4px';
-    const title = document.createElement('div');
-    title.textContent = entry.title;
+    const tune = allTunes.find(t => t.slug === entry.tuneSlug);
+    const title = tuneNameBlock(entry.title, tune && tuneFile(tune));
     // Part tags
     const tags = document.createElement('div');
     tags.className = 'part-tags';
@@ -318,7 +338,7 @@ const TuneSelector = (() => {
         const detail = await getTuneDetail(e.tuneSlug);
         section.entries.push({
           tuneSlug: e.tuneSlug,
-          title: tune.title || tune.slug,
+          title: tuneLabel(tune),
           parts: (e.parts && e.parts.length) ? e.parts : detail.parts.map(p => p.name),
         });
       }

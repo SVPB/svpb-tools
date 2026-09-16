@@ -60,6 +60,72 @@ final class CatalogueExtractorTests: XCTestCase {
         """)
 
         XCTAssertEqual(entry.title, "First Tune")
+        XCTAssertNil(entry.subtitle)
+    }
+
+    func testSubtitleIsNilWithASingleTitle() {
+        let entry = extract("""
+        X:1
+        T:The Parting Glass
+        M:3/4
+        L:1/8
+        K:G
+        D2 G2 A2 |]
+        """)
+
+        XCTAssertEqual(entry.title, "The Parting Glass")
+        XCTAssertNil(entry.subtitle)
+    }
+
+    /// A harmony setting repeats the tune's title and adds its own, so the
+    /// second `T:` is what tells it apart from the melody file.
+    func testSubtitleComesFromLaterTitleFields() {
+        let entry = extract("""
+        X:1
+        T:The Parting Glass
+        T:Harmony 1
+        M:3/4
+        L:1/8
+        K:G
+        D2 G2 A2 |]
+        """)
+
+        XCTAssertEqual(entry.title, "The Parting Glass")
+        XCTAssertEqual(entry.subtitle, "Harmony 1")
+    }
+
+    func testSubtitleJoinsSeveralLaterTitlesAndSkipsBlanks() {
+        let entry = extract("""
+        X:1
+        T:The Parting Glass
+        T:
+        T:Harmony 1
+        T:Low
+        M:3/4
+        L:1/8
+        K:G
+        D2 G2 A2 |]
+        """)
+
+        XCTAssertEqual(entry.title, "The Parting Glass")
+        XCTAssertEqual(entry.subtitle, "Harmony 1 — Low")
+    }
+
+    /// A `T:` in the tune body titles a section of the music, not the tune.
+    func testBodyTitleFieldIsNotASubtitle() {
+        let entry = extract("""
+        X:1
+        T:The Parting Glass
+        M:3/4
+        L:1/8
+        K:G
+        D2 G2 A2 |
+        T:Chorus
+        B2 A2 G2 |]
+        """)
+
+        XCTAssertEqual(entry.title, "The Parting Glass")
+        XCTAssertNil(entry.subtitle)
     }
 
     // MARK: - Parts

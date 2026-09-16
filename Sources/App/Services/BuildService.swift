@@ -300,6 +300,7 @@ actor BuildService {
             .filter(\.$slug == stem)
             .first() {
             existing.title = entry.title
+            existing.subtitle = entry.subtitle
             existing.abcPath = abcPath
             try await existing.save(on: db)
             tune = existing
@@ -308,6 +309,7 @@ actor BuildService {
             fresh.$branch.id = branch
             fresh.slug = stem
             fresh.title = entry.title
+            fresh.subtitle = entry.subtitle
             fresh.abcPath = abcPath
             try await fresh.save(on: db)
             tune = fresh

@@ -19,6 +19,7 @@
   .tune-list li.added { background: #f0fdf4; }
   .tune-list li button { font-size: 0.75rem; padding: 2px 8px; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; background: #fff; }
   .tune-list li button:hover { background: #eee; }
+  .tune-file { font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; color: #777; overflow-wrap: anywhere; }
   .binder-entries { list-style: none; margin: 0; padding: 0; }
   .binder-entries li { padding: 0.4rem 0.75rem; display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; background: #f9f9f9; border-radius: 4px; margin-bottom: 4px; }
   .binder-entries li button { font-size: 0.75rem; padding: 2px 8px; border: 1px solid #f99; border-radius: 3px; cursor: pointer; background: #fff; color: #c00; }
