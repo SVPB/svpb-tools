@@ -3,7 +3,7 @@ import Vapor
 
 /// A record of a single build job triggered by a GitHub push event.
 ///
-/// `status` transitions:  running → success | failure
+/// `status` transitions:  running → success | partial | failure
 /// `files` is a JSON-encoded list of output PDF filenames; Fluent serialises it
 /// automatically via `Codable` when stored as a TEXT column in SQLite.
 final class Build: Model, @unchecked Sendable {

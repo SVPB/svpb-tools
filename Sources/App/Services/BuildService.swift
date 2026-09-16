@@ -16,7 +16,10 @@ import Vapor
 ///   5. Optionally upload each PDF to Box (via `BoxService`).
 ///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records.
 ///   7. Optionally post a Slack notification (via `SlackService`).
-///   8. Update the `Build` record (status: .success or .failure, log, files).
+///   8. Update the `Build` record (status, log, files).
+///
+/// Status is `.failure` when the pipeline threw, `.partial` when it finished but
+/// any per-file or distribution step failed, and `.success` only when nothing did.
 actor BuildService {
 
     private let gitService: GitService
@@ -107,6 +110,8 @@ actor BuildService {
 
         var log = uploadToBox ? "" : "[catalogue-sync] Box upload and Slack notification skipped.\n"
         var producedFiles: [String] = []
+        // Steps that failed without aborting the build; any makes it `.partial`.
+        var failedSteps = 0
 
         do {
             // ── git sync ────────────────────────────────────────────────────
@@ -163,6 +168,7 @@ actor BuildService {
                 guard !pageStrings.isEmpty else {
                     log += "[convert]   ⚠ No SVG output for \(stem).abc — skipping PDF\n"
                     logger.warning("[BuildService] No SVG output for \(stem).abc; skipping")
+                    failedSteps += 1
                     continue
                 }
 
@@ -186,6 +192,7 @@ actor BuildService {
                     } catch {
                         log += "[box] Upload failed for \(stem).pdf: \(error)\n"
                         logger.warning("[BuildService] Box upload failed for \(stem).pdf: \(error)")
+                        failedSteps += 1
                     }
                 }
 
@@ -204,6 +211,7 @@ actor BuildService {
                 } catch {
                     log += "[catalogue] Upsert failed for \(stem): \(error)\n"
                     logger.warning("[BuildService] Catalogue upsert failed for \(stem): \(error)")
+                    failedSteps += 1
                 }
             }
 
@@ -214,22 +222,32 @@ actor BuildService {
             log += "[db] Branch '\(branch)' updated\n"
 
             // ── Slack notification (skipped for catalogue sync) ──────────────
+            // Sent with the status as it stands; a failed post can't report
+            // itself to Slack, but it still downgrades the recorded status.
             if notifySlack {
                 do {
                     try await slackService.postBuildNotification(
-                        branch: branch, status: .success, files: producedFiles)
+                        branch: branch,
+                        status: failedSteps == 0 ? .success : .partial,
+                        files: producedFiles)
                 } catch {
                     log += "[slack] Notification failed: \(error)\n"
                     logger.warning("[BuildService] Slack notification failed: \(error)")
+                    failedSteps += 1
                 }
             }
 
-            // ── mark success ────────────────────────────────────────────────
-            build.status = .success
+            // ── record outcome ──────────────────────────────────────────────
+            if failedSteps == 0 {
+                build.status = .success
+            } else {
+                build.status = .partial
+                log += "[build] \(failedSteps) step(s) failed; build marked partial\n"
+            }
             build.files = producedFiles
             build.log = log
             try await build.save(on: db)
-            logger.info("[BuildService] Build \(build.id!) succeeded (\(producedFiles.count) files)")
+            logger.info("[BuildService] Build \(build.id!) finished \(build.status.rawValue) (\(producedFiles.count) files, \(failedSteps) failed step(s))")
 
         } catch {
             log += "[error] \(error)\n"
@@ -241,8 +259,12 @@ actor BuildService {
             try? await build.save(on: db)
 
             if notifySlack {
-                try? await slackService.postBuildNotification(
-                    branch: branch, status: .failure, files: [])
+                do {
+                    try await slackService.postBuildNotification(
+                        branch: branch, status: .failure, files: [])
+                } catch {
+                    logger.warning("[BuildService] Slack failure notification failed: \(error)")
+                }
             }
         }
     }

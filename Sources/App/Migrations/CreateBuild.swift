@@ -9,7 +9,7 @@ struct CreateBuild: AsyncMigration {
             // Set by Fluent's @Timestamp(on: .create) when the Build record is inserted.
             .field("triggered", .datetime)
             .field("commit_sha", .string)
-            // TEXT column; values are "running" | "success" | "failure"
+            // TEXT column; values are "running" | "success" | "partial" | "failure"
             .field("status", .string, .required)
             // Full captured log; may be large.
             .field("log", .string)

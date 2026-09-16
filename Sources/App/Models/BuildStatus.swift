@@ -6,5 +6,9 @@
 public enum BuildStatus: String, Codable, Sendable {
     case running
     case success
+    /// The conversion finished, but at least one per-file or distribution step
+    /// (a tune with no output, a Box upload, a catalogue upsert, the Slack
+    /// notification) failed. The build log names each one.
+    case partial
     case failure
 }
