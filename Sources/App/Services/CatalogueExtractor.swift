@@ -21,6 +21,10 @@ enum CatalogueExtractor {
     struct Entry: Sendable {
         /// Title of the first tune in the file, or nil if it declares none.
         let title: String?
+        /// The first tune's remaining `T:` values joined with " — ", or nil if
+        /// it has only one. Tells apart files that engrave variants of the same
+        /// tune, e.g. `T:The Parting Glass` + `T:Harmony 1`.
+        let subtitle: String?
         /// Ordered, deduplicated part names across every tune in the file.
         /// Never empty.
         let parts: [String]
@@ -35,20 +39,25 @@ enum CatalogueExtractor {
     private static let defaultVoiceID = "1"
 
     static func extract(from parsed: ParseResult) -> Entry {
-        Entry(title: title(from: parsed), parts: partNames(from: parsed))
+        let titles = titles(from: parsed)
+        return Entry(
+            title: titles.first,
+            subtitle: titles.count > 1 ? titles.dropFirst().joined(separator: " — ") : nil,
+            parts: partNames(from: parsed)
+        )
     }
 
     // MARK: - Title
 
-    /// The first `T:` value in the file.
+    /// The first tune's non-blank `T:` values, in order.
     ///
     /// A file may hold several tunes (a medley is one ABC file with several `X:`
     /// blocks); the catalogue keys on the filename and builds one PDF per file,
-    /// so the first tune's title is what names the entry.
-    private static func title(from parsed: ParseResult) -> String? {
-        guard let raw = parsed.score.tunes.first?.titles.first?.value else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? nil : trimmed
+    /// so the first tune's titles are what name the entry.
+    private static func titles(from parsed: ParseResult) -> [String] {
+        (parsed.score.tunes.first?.titles ?? [])
+            .map { $0.value.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     // MARK: - Parts

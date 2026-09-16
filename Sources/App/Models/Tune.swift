@@ -32,6 +32,11 @@ final class Tune: Model, @unchecked Sendable {
     @OptionalField(key: "title")
     var title: String?
 
+    /// The first tune's further `T:` values joined with " — ", e.g. "Harmony 1".
+    /// Distinguishes files holding variants of the same tune.
+    @OptionalField(key: "subtitle")
+    var subtitle: String?
+
     /// Path to the `.abc` source file within the repository, relative to the
     /// repo root, e.g. "tunes/highland/archie_beag.abc".
     @OptionalField(key: "abc_path")
@@ -55,12 +60,14 @@ final class Tune: Model, @unchecked Sendable {
         branch: Branch,
         slug: String,
         title: String? = nil,
+        subtitle: String? = nil,
         abcPath: String? = nil
     ) throws {
         self.id = id
         self.$branch.id = try branch.requireID()
         self.slug = slug
         self.title = title
+        self.subtitle = subtitle
         self.abcPath = abcPath
     }
 }

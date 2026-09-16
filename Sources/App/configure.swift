@@ -128,6 +128,7 @@ private func addMigrations(_ app: Application) {
     // Phase 2
     app.migrations.add(AddSvgPathsToPart())
     app.migrations.add(CreateBinderDefinition())
+    app.migrations.add(AddSubtitleToTune())
 }
 
 // MARK: - Service initialisation
