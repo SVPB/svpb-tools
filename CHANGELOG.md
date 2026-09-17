@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Admins can remove a branch (#33)
+
+- `DELETE /admin/branches/:branch` (admin session required) and a **✕ Remove** button beside each
+  branch on `/admin`, behind a confirmation that names the branch. It removes the branch's
+  `binder_definitions`, `parts`, `tunes`, `builds` (including their logs) and `branches` rows in
+  one transaction, then `<workspace>/<branch>/` and `<workspace>/output/<branch>/`. The response
+  and the dashboard report the row counts and bytes freed; the server logs the same, with who asked.
+- Box is not touched, and personalised binders (`<workspace>/binders/`) are left alone. Everything
+  removed is derived, so syncing the branch again rebuilds it from the repository.
+- Rows without directories, or directories without rows, remove cleanly; a branch with neither is
+  `404`.
+- A name that could escape the music workspace (empty, `.`, `..`, empty or absolute components,
+  backslashes) or that collides with `output` or `binders` is rejected with `400` before anything
+  is deleted.
+- Builds and removals of the same branch now exclude each other in `BuildService`: removal is
+  `409` while a build of that branch is running in this process, and a build that arrives mid-removal
+  is logged and not started. This is tracked in memory rather than from `builds.status`, so a build
+  left `running` by a crash does not block removal forever.
+
 #### Official binder definitions read from `binders.yaml` (#10)
 
 - Every build, and every catalogue sync, now reads `binders.yaml` from the root of the branch after

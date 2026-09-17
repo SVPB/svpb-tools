@@ -11,6 +11,8 @@
   .sync-btn { font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(0,0,0,.2); background: none; color: #1a1a2e; cursor: pointer; margin-left: 4px; vertical-align: middle; }
   .sync-btn:hover { background: rgba(0,0,0,.06); }
   .sync-btn:disabled { opacity: 0.5; cursor: default; }
+  .delete-btn { color: #991b1b; border-color: rgba(153,27,27,.35); }
+  .delete-btn:hover { background: rgba(153,27,27,.08); }
   .branch-item { display: inline-flex; align-items: center; margin-bottom: 4px; }
   .sync-form { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
   .sync-form input { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.88rem; width: 160px; }
@@ -38,6 +40,7 @@
       <span class="branch-item">
         <span class="badge">#(branch)</span>
         <button class="sync-btn" onclick="syncBranch('#(branch)', this)" title="Sync catalogue for #(branch)">↻ Sync</button>
+        <button class="sync-btn delete-btn" onclick="deleteBranch('#(branch)', this)" title="Remove #(branch) from the server">✕ Remove</button>
       </span>
     #endfor
     #if(branchNames.isEmpty):
@@ -139,6 +142,41 @@ function pollBuildStatus(branch, btn) {
       }
     } catch (_) { /* keep polling */ }
   }, 5000);
+}
+
+async function deleteBranch(branch, btn) {
+  const question = 'Remove branch "' + branch + '" from the server?\n\n'
+    + 'This deletes its tune catalogue, build history and logs, binder definitions, '
+    + 'git checkout, and generated SVG/PDF files. Nothing in Box is touched. '
+    + 'Syncing "' + branch + '" again rebuilds it from the repository.';
+  if (!confirm(question)) return;
+
+  const status = document.getElementById('sync-status');
+  btn.disabled = true;
+  btn.textContent = '✕ Removing…';
+  status.textContent = 'Removing branch "' + branch + '"…';
+
+  try {
+    const res = await fetch('/admin/branches/' + encodeURIComponent(branch), { method: 'DELETE' });
+    if (res.ok) {
+      const s = await res.json();
+      const mb = (s.bytes / (1024 * 1024)).toFixed(1);
+      status.textContent = 'Removed "' + branch + '": ' + s.tunes + ' tune(s), ' + s.parts + ' part(s), '
+        + s.builds + ' build(s), ' + s.binder_definitions + ' binder definition(s), '
+        + mb + ' MB on disk. Reloading…';
+      setTimeout(() => location.reload(), 2500);
+    } else {
+      let reason = await res.text();
+      try { reason = JSON.parse(reason).reason || reason; } catch (_) {}
+      status.textContent = 'Could not remove "' + branch + '": ' + reason;
+      btn.disabled = false;
+      btn.textContent = '✕ Remove';
+    }
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = '✕ Remove';
+  }
 }
 
 function syncNewBranch() {

@@ -21,12 +21,22 @@ import Vapor
 ///
 /// Status is `.failure` when the pipeline threw, `.partial` when it finished but
 /// any per-file or distribution step failed, and `.success` only when nothing did.
+///
+/// The service also removes branches (`removeBranch`). Builds and removals of the
+/// same branch exclude each other, so a removal cannot race a build into recreating
+/// the directories it just deleted.
 actor BuildService {
 
     private let gitService: GitService
     private let boxService: BoxService
     private let slackService: SlackService
     private let musicWorkspaceURL: URL
+
+    /// Builds currently running in this process, per branch. Webhook and manual
+    /// syncs can overlap, hence a count rather than a set.
+    private var buildsInFlight: [String: Int] = [:]
+    /// Branches whose removal is in progress; builds for them are refused.
+    private var removalsInFlight: Set<String> = []
 
     init(
         gitService: GitService,
@@ -80,6 +90,12 @@ actor BuildService {
         uploadToBox: Bool,
         notifySlack: Bool
     ) async {
+        guard beginBuild(branch: branch) else {
+            logger.warning("[BuildService] Branch '\(branch)' is being removed; build not started")
+            return
+        }
+        defer { endBuild(branch: branch) }
+
         // Ensure the Branch record exists before creating the Build (FK constraint).
         let branchRecord: Branch
         do {
@@ -135,9 +151,7 @@ actor BuildService {
             logger.info("[BuildService] Cleared catalogue for '\(branch)'")
 
             // ── convert each file ───────────────────────────────────────────
-            let outputDir = musicWorkspaceURL
-                .appendingPathComponent("output", isDirectory: true)
-                .appendingPathComponent(branch, isDirectory: true)
+            let outputDir = outputDirectory(for: branch)
             try FileManager.default.createDirectory(at: outputDir,
                                                     withIntermediateDirectories: true)
 
@@ -273,6 +287,145 @@ actor BuildService {
                 }
             }
         }
+    }
+
+    // MARK: - Build/removal exclusion
+
+    /// Records a build of `branch` as started, unless the branch is being removed.
+    /// Synchronous, so the check and the claim cannot be split by a suspension.
+    func beginBuild(branch: String) -> Bool {
+        guard !removalsInFlight.contains(branch) else { return false }
+        buildsInFlight[branch, default: 0] += 1
+        return true
+    }
+
+    func endBuild(branch: String) {
+        if let count = buildsInFlight[branch], count > 1 {
+            buildsInFlight[branch] = count - 1
+        } else {
+            buildsInFlight[branch] = nil
+        }
+    }
+
+    // MARK: - Branch removal
+
+    /// Top-level workspace directories that belong to no branch. A branch with one
+    /// of these names would have its checkout directory collide with them.
+    static let reservedWorkspaceNames: Set<String> = ["output", "binders"]
+
+    /// Deletes everything the server derived from `branch`: its `binder_definitions`,
+    /// `parts`, `tunes`, `builds` and `branches` rows (in one transaction), then its
+    /// git checkout and its SVG/PDF output directory.
+    ///
+    /// Box is never touched. Removing rows without directories, or directories
+    /// without rows, succeeds; a branch with neither is `404`.
+    ///
+    /// - Throws: `Abort(.badRequest)` for a name that could escape the workspace,
+    ///   `Abort(.conflict)` while the branch is being built or already being removed.
+    func removeBranch(_ branch: String, db: any Database, logger: Logger) async throws -> BranchRemovalSummary {
+        let directories = try branchDirectories(for: branch)
+
+        guard buildsInFlight[branch] == nil else {
+            throw Abort(.conflict, reason: "A build of branch '\(branch)' is running. Try again when it finishes.")
+        }
+        guard removalsInFlight.insert(branch).inserted else {
+            throw Abort(.conflict, reason: "Branch '\(branch)' is already being removed.")
+        }
+        defer { removalsInFlight.remove(branch) }
+
+        let rows = try await db.transaction { tx in
+            let tuneIDs = try await Tune.query(on: tx)
+                .filter(\.$branch.$id == branch)
+                .all(\.$id)
+            // Parts would cascade from tunes, but deleting them explicitly gives the count.
+            let parts = try await Part.query(on: tx).filter(\.$tune.$id ~~ tuneIDs).count()
+            try await Part.query(on: tx).filter(\.$tune.$id ~~ tuneIDs).delete()
+
+            let tunes = tuneIDs.count
+            try await Tune.query(on: tx).filter(\.$branch.$id == branch).delete()
+
+            let builds = try await Build.query(on: tx).filter(\.$branch.$id == branch).count()
+            try await Build.query(on: tx).filter(\.$branch.$id == branch).delete()
+
+            let binders = try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).count()
+            try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).delete()
+
+            let branchRow = try await Branch.find(branch, on: tx)
+            try await branchRow?.delete(on: tx)
+
+            return (tunes: tunes, parts: parts, builds: builds, binders: binders,
+                    hadBranch: branchRow != nil)
+        }
+
+        let fm = FileManager.default
+        var removed: [String] = []
+        var bytes: Int64 = 0
+        for (relative, url) in directories where fm.fileExists(atPath: url.path) {
+            bytes += Self.regularFileBytes(under: url)
+            try fm.removeItem(at: url)
+            removed.append(relative)
+        }
+
+        guard rows.hadBranch || rows.tunes + rows.builds + rows.binders > 0 || !removed.isEmpty else {
+            throw Abort(.notFound, reason: "No branch '\(branch)' in the database or the workspace.")
+        }
+
+        let summary = BranchRemovalSummary(
+            branch: branch, tunes: rows.tunes, parts: rows.parts, builds: rows.builds,
+            binderDefinitions: rows.binders, directories: removed, bytes: bytes)
+        logger.notice("[BuildService] Removed branch '\(branch)': \(summary.tunes) tune(s), \(summary.parts) part(s), \(summary.builds) build(s), \(summary.binderDefinitions) binder definition(s); deleted \(removed.isEmpty ? "no directories" : removed.joined(separator: ", ")) (\(bytes) bytes)")
+        return summary
+    }
+
+    /// The per-page SVGs and per-tune PDFs for `branch`.
+    private func outputDirectory(for branch: String) -> URL {
+        musicWorkspaceURL
+            .appendingPathComponent("output", isDirectory: true)
+            .appendingPathComponent(branch, isDirectory: true)
+    }
+
+    /// The checkout and output directories for `branch`, keyed by workspace-relative
+    /// path, after checking the name cannot reach anything outside them.
+    ///
+    /// The name comes from a URL and is about to be handed to `removeItem`, so it
+    /// must be one or more ordinary path components, must not collide with a
+    /// reserved workspace directory, and must resolve strictly inside the workspace.
+    func branchDirectories(for branch: String) throws -> [(String, URL)] {
+        let components = branch.split(separator: "/", omittingEmptySubsequences: false)
+        let unsafe = branch.isEmpty
+            || branch.contains("\0")
+            || branch.contains("\\")
+            || components.contains { $0.isEmpty || $0 == "." || $0 == ".." }
+            || Self.reservedWorkspaceNames.contains(String(components[0]))
+        guard !unsafe else {
+            throw Abort(.badRequest, reason: "'\(branch)' is not a removable branch name.")
+        }
+
+        let candidates = [
+            (branch, musicWorkspaceURL.appendingPathComponent(branch, isDirectory: true)),
+            ("output/\(branch)", outputDirectory(for: branch)),
+        ]
+        // Belt and braces: the component checks above should already guarantee this.
+        let workspacePath = musicWorkspaceURL.standardizedFileURL.path
+        for (_, url) in candidates {
+            guard url.standardizedFileURL.path.hasPrefix(workspacePath + "/") else {
+                throw Abort(.badRequest, reason: "'\(branch)' resolves outside the music workspace.")
+            }
+        }
+        return candidates
+    }
+
+    private static func regularFileBytes(under directory: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else { continue }
+            total += Int64(values.fileSize ?? 0)
+        }
+        return total
     }
 
     // MARK: - Catalogue population

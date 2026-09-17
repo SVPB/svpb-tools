@@ -9,6 +9,11 @@ import Vapor
 ///   `GET  /admin/builds/{id}`  — full build log
 ///   `POST /admin/logout`       — destroy session and redirect
 ///
+/// Branch routes (admin-only):
+///   `POST   /admin/branches/:branch/sync`         — start a catalogue sync
+///   `GET    /admin/branches/:branch/latest-build` — status of its newest build
+///   `DELETE /admin/branches/:branch`              — remove its rows and on-disk artifacts
+///
 /// JSON API routes (admin-only, all require a valid session):
 ///   `GET    /admin/users`          — list all users
 ///   `POST   /admin/users`          — create a new user
@@ -30,6 +35,7 @@ struct AdminController: RouteCollection {
         // Catalogue sync.
         admin.post("admin", "branches", ":branch", "sync", use: syncBranch)
         admin.get("admin", "branches", ":branch", "latest-build", use: latestBuildStatus)
+        admin.delete("admin", "branches", ":branch", use: deleteBranch)
 
         // User management API.
         let users = admin.grouped("admin", "users")
@@ -198,6 +204,22 @@ struct AdminController: RouteCollection {
         return Response(status: .ok,
                         headers: ["Content-Type": "application/json"],
                         body: .init(data: data))
+    }
+
+    /// `DELETE /admin/branches/:branch`
+    ///
+    /// Removes the branch's catalogue, build history and binder definitions from the
+    /// database, and its checkout and output directories from the music workspace.
+    /// Box is not touched. Everything removed is derived, so re-syncing the branch
+    /// rebuilds it. `409` while the branch is being built.
+    @Sendable
+    func deleteBranch(_ req: Request) async throws -> BranchRemovalSummary {
+        guard let branch = req.parameters.get("branch") else {
+            throw Abort(.badRequest, reason: "Branch name is required.")
+        }
+        let user = req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "unknown"
+        req.logger.notice("[admin] \(user) requested removal of branch '\(branch)'")
+        return try await req.application.buildService.removeBranch(branch, db: req.db, logger: req.logger)
     }
 
     // MARK: - User management
