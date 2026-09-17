@@ -1,0 +1,190 @@
+#extend("layouts/public"):
+
+#export("title"):Binder Constructor — SVPB TNG#endexport
+
+#export("styles"):
+#extend("partials/tune-selector-styles")
+<style>
+  textarea   { width: 100%; min-height: 200px; font-family: monospace; font-size: 0.82rem; padding: 0.6rem; border: 1px solid #ccc; border-radius: 4px; resize: vertical; box-sizing: border-box; }
+  .btn-danger  { background: #fee; color: #c00; border: 1px solid #f99; }
+  .hint { font-size: 0.8rem; color: #666; margin: -0.4rem 0 0.75rem; }
+  .hint code, #status-msg code { font-size: 0.78rem; }
+  input[type=text].invalid { border-color: #c00; }
+  #status-msg { font-size: 0.85rem; color: #666; margin-top: 0.5rem; min-height: 1.2em; white-space: pre-line; }
+  #status-msg.error { color: #c00; }
+  #status-msg.info  { color: #166534; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+
+  <!-- Left column: tune catalogue -->
+  <div>
+    #extend("partials/tune-catalogue"):
+      #export("binder-name-label"):Binder name#endexport
+      #export("binder-name-placeholder"):e.g. 2026 Band Binder#endexport
+    #endextend
+  </div>
+
+  <!-- Right column: selected entries -->
+  <div>
+    <div class="card">
+      #extend("partials/binder-entries"):
+        #export("entries-heading"):Selected Entries#endexport
+      #endextend
+    </div>
+
+    <div class="card" style="margin-top:1rem;">
+      <h2>Generated YAML</h2>
+      <label for="binder-output">Output filename</label>
+      <input type="text" id="binder-output" placeholder="e.g. 2026_binder.pdf" value="">
+      <p class="hint">The PDF the build writes and uploads to Box. A plain filename ending in <code>.pdf</code>, different from every other binder in the file.</p>
+
+      <textarea id="yaml-output" spellcheck="false" placeholder="Click &quot;Generate YAML&quot; to see the binder definition, or paste a binders.yaml here and click &quot;Check&quot;."></textarea>
+      <p class="hint" style="margin-top:0.25rem;">This is a complete <code>binders.yaml</code> declaring one binder. To add it to an existing file, paste everything after the first line (<code>binders:</code>) at the end of that file.</p>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="generateYAML()">Generate YAML</button>
+        <button class="btn" onclick="checkYAML()">Check</button>
+        <button class="btn" onclick="copyYAML()">Copy</button>
+        <button class="btn" onclick="TuneSelector.clear()">Clear</button>
+      </div>
+      <div id="status-msg"></div>
+    </div>
+  </div>
+
+</main>
+#endexport
+
+#export("scripts"):
+<script src="/js/tune-selector.js"></script>
+<script>
+'use strict';
+
+// Official binders are whole tunes in titled sections: per-part rendering is
+// deferred (#20), and binders.yaml gives every section a divider.
+TuneSelector.init({
+  sections: true,
+  parts: false,
+  untitledSections: false,
+  setStatus,
+  onClear: () => { document.getElementById('yaml-output').value = ''; },
+});
+
+// ── Output filename ────────────────────────────────────────────────────────
+// Follows the binder name until the pipe major types a filename of their own.
+const outputInput = document.getElementById('binder-output');
+let outputEdited = false;
+
+outputInput.addEventListener('input', () => {
+  outputEdited = outputInput.value.trim() !== '';
+  outputInput.classList.toggle('invalid', outputEdited && outputProblem(outputInput.value.trim()) !== null);
+});
+document.getElementById('binder-name').addEventListener('input', e => {
+  if (!outputEdited) outputInput.value = suggestedOutput(e.target.value);
+});
+
+function suggestedOutput(name) {
+  const stem = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return stem ? `${stem}.pdf` : '';
+}
+
+/** Mirrors the build's check in BinderDefinitionLoader: a bare filename ending in .pdf. */
+function outputProblem(output) {
+  if (!output) return 'Please give the binder an output filename.';
+  if (output.startsWith('.') || output.includes('/') || output.includes('\\')) {
+    return `Output "${output}" must be a plain filename, not a path or a hidden file.`;
+  }
+  if (!output.toLowerCase().endsWith('.pdf')) return `Output "${output}" must end in .pdf.`;
+  return null;
+}
+
+// ── Output ─────────────────────────────────────────────────────────────────
+// Every scalar is written double-quoted. A JSON string is a valid YAML
+// double-quoted scalar, and quoting keeps a slug like `yes` or `1990` a string.
+const q = JSON.stringify;
+
+async function generateYAML() {
+  const branch = TuneSelector.branch();
+  const name = TuneSelector.binderName('');
+  const output = outputInput.value.trim();
+  if (!branch) { setStatus('Please select a year first.', 'error'); return; }
+  if (!name) { setStatus('Please give the binder a name.', 'error'); return; }
+  const problem = outputProblem(output);
+  if (problem) { setStatus(problem, 'error'); outputInput.classList.add('invalid'); return; }
+
+  // Empty sections have nothing to divide, so they are left out.
+  const sections = TuneSelector.sections().filter(s => s.entries.length > 0);
+  if (sections.length === 0) { setStatus('No tunes selected.', 'error'); return; }
+  const untitled = sections.findIndex(s => !s.title.trim());
+  if (untitled >= 0) {
+    setStatus(`Every section needs a title in binders.yaml — section ${untitled + 1} with tunes has none.`, 'error');
+    return;
+  }
+
+  // No parts key: an official binder takes each tune whole (#20).
+  const lines = [
+    'binders:',
+    `  - name: ${q(name)}`,
+    `    output: ${q(output)}`,
+    '    sections:',
+  ];
+  sections.forEach(section => {
+    lines.push(`      - title: ${q(section.title.trim())}`);
+    lines.push('        entries:');
+    section.entries.forEach(entry => lines.push(`          - tune: ${q(entry.tuneSlug)}`));
+  });
+
+  document.getElementById('yaml-output').value = lines.join('\n') + '\n';
+  await checkYAML('YAML generated.');
+}
+
+/**
+ * Runs the textarea through the server's binders.yaml decoder, so the page can
+ * say whether the build will accept it.
+ */
+async function checkYAML(prefix) {
+  const lead = typeof prefix === 'string' ? prefix + ' ' : '';
+  const yaml = document.getElementById('yaml-output').value;
+  const branch = TuneSelector.branch();
+  if (!yaml.trim()) { setStatus('Nothing to check yet.', 'error'); return; }
+  if (!branch) { setStatus('Please select a year to check the tunes against.', 'error'); return; }
+
+  try {
+    const res = await fetch('/binder-constructor/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch, yaml }),
+    });
+    if (!res.ok) { setStatus(`${lead}Could not check it: ${await res.text()}`, 'error'); return; }
+    const result = await res.json();
+    if (!result.valid) {
+      setStatus(`${lead}The build would reject this file: ${result.problem}`, 'error');
+    } else if (result.unresolved.length > 0) {
+      const missing = result.unresolved.map(u => `  "${u.binder}" › "${u.section}": ${u.tune}`);
+      setStatus(`${lead}This parses, but these tunes are not in the ${branch} catalogue:\n${missing.join('\n')}`, 'error');
+    } else {
+      setStatus(`${lead}✓ This parses as binders.yaml. Copy it into binders.yaml at the root of the ${branch} branch of the music repository and commit it.`, 'info');
+    }
+  } catch (e) {
+    setStatus(`${lead}Could not check it: ${e.message}`, 'error');
+  }
+}
+
+function copyYAML() {
+  const text = document.getElementById('yaml-output').value;
+  if (!text) { setStatus('Nothing to copy yet.', 'error'); return; }
+  navigator.clipboard.writeText(text).then(
+    () => setStatus('YAML copied.', 'info'),
+    () => setStatus('Could not copy — select the text and copy it by hand.', 'error'));
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = cls ? cls : '';
+}
+</script>
+#endexport
+
+#endextend

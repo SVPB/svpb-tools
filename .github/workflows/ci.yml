@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build and test (Linux)
+    runs-on: ubuntu-latest
+    # Matches the Dockerfile build stage. CeolKit's manifest declares
+    # swift-tools-version: 6.3, which older toolchains refuse to parse.
+    container: swift:6.3-noble
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rsvg-convert is how SVGPDFKit rasterises on Linux; the conversion
+      # pipeline tests fail without it. No font packages are needed: CeolKit
+      # writes glyph geometry into every SVG (TextRendering.outlines), so
+      # rsvg-convert never consults fontconfig for a face.
+      - name: Install runtime dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends librsvg2-bin
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test --skip-build
+
+  image:
+    name: Image conversion smoke test
+    # Deliberately not `container:` — this job drives the Docker daemon rather
+    # than running inside a Swift toolchain.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Shares the layer cache with the publish workflow, so on most pushes this
+      # is a cache hit rather than a second full Swift release build. `load`
+      # puts the image in the local daemon; nothing is pushed from CI.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ghcr.io/svpb/svpb-tools:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The unit tests prove the Swift code converts correctly on this host. They
+      # never execute the Dockerfile's runtime stage, so they cannot catch a
+      # rasteriser or a resource bundle that regressed in the image we actually
+      # ship. This draws glyph outlines inside that image.
+      - name: Verify the image can render a score
+        run: Scripts/verify-image-rendering.sh ghcr.io/svpb/svpb-tools:ci

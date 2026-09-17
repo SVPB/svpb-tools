@@ -1,0 +1,154 @@
+#extend("layouts/public"):
+
+#export("title"):Users — SVPB TNG#endexport
+
+#export("styles"):
+<style>
+  main   { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+  h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
+  table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 2rem; }
+  th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
+  th     { background: #eee; font-weight: 600; }
+  tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 0.78rem; font-weight: 600; }
+  .badge-admin  { background: #1a1a2e; color: #fff; }
+  .badge-member { background: #e5e7eb; color: #374151; }
+  .btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; font-size: 0.82rem; background: #fff; }
+  .btn:hover { background: #f5f5f5; }
+  .btn-danger { color: #c00; border-color: #f99; }
+  .btn-danger:hover { background: #fee; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .add-card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .add-card h2 { margin-top: 0; }
+  .field-row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+  label  { font-size: 0.85rem; font-weight: 600; }
+  input[type=text], select { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+  .btn-primary { background: #1a1a2e; color: #fff; border-color: #1a1a2e; padding: 6px 16px; }
+  .btn-primary:hover { background: #2a2a4e; }
+  #add-msg { font-size: 0.85rem; margin-top: 0.5rem; min-height: 1.2em; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+
+  <h2>Users</h2>
+  <table id="users-table">
+    <thead>
+      <tr>
+        <th>Name / Slack ID</th>
+        <th>Role</th>
+        <th>Created</th>
+        <th>Last login</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      #for(user in users):
+      <tr id="row-#(user.id)">
+        <td>
+          <strong>#(user.displayName)</strong><br>
+          <span style="font-size:0.8rem;color:#666;">#(user.slackUserId)</span>
+        </td>
+        <td>
+          <span class="badge badge-#(user.role)" id="badge-#(user.id)">#(user.role)</span>
+        </td>
+        <td style="font-size:0.82rem;color:#555;">#(user.createdAt)</td>
+        <td style="font-size:0.82rem;color:#555;">#(user.lastLoginAt)</td>
+        <td style="white-space:nowrap;">
+          #if(!user.isSelf):
+          <button class="btn" onclick="toggleRole('#(user.id)', '#(user.role)')">Toggle role</button>
+          <button class="btn btn-danger" onclick="deleteUser('#(user.id)', '#(user.displayName)')">Delete</button>
+          #else:
+          <span style="font-size:0.8rem;color:#888;">(you)</span>
+          #endif
+        </td>
+      </tr>
+      #endfor
+    </tbody>
+  </table>
+
+  <div class="add-card">
+    <h2>Add user</h2>
+    <div class="field-row">
+      <div>
+        <label for="new-slack-id">Slack user ID</label><br>
+        <input type="text" id="new-slack-id" placeholder="U012AB3CD" style="width:160px;">
+      </div>
+      <div>
+        <label for="new-role">Role</label><br>
+        <select id="new-role">
+          <option value="member">member</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="addUser()">Add</button>
+    </div>
+    <div id="add-msg"></div>
+  </div>
+
+</main>
+#endexport
+
+#export("scripts"):
+<script>
+'use strict';
+
+async function toggleRole(id, currentRole) {
+  const newRole = currentRole === 'admin' ? 'member' : 'admin';
+  const res = await fetch(`/admin/users/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: newRole }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    alert('Failed to update role: ' + text);
+    return;
+  }
+  const badge = document.getElementById('badge-' + id);
+  badge.textContent = newRole;
+  badge.className = 'badge badge-' + newRole;
+  const btn = badge.closest('tr').querySelector('button');
+  btn.setAttribute('onclick', `toggleRole('${id}', '${newRole}')`);
+}
+
+async function deleteUser(id, name) {
+  if (!confirm(`Delete user "${name}"? This cannot be undone.`)) return;
+  const res = await fetch(`/admin/users/${id}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const text = await res.text();
+    alert('Failed to delete user: ' + text);
+    return;
+  }
+  document.getElementById('row-' + id)?.remove();
+}
+
+async function addUser() {
+  const slackId = document.getElementById('new-slack-id').value.trim();
+  const role    = document.getElementById('new-role').value;
+  const msg     = document.getElementById('add-msg');
+
+  if (!slackId) { msg.textContent = 'Please enter a Slack user ID.'; return; }
+
+  const res = await fetch('/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slack_user_id: slackId, role }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    msg.style.color = '#c00';
+    msg.textContent = 'Error: ' + text;
+    return;
+  }
+
+  msg.style.color = '#166534';
+  msg.textContent = `User ${slackId} added. Reload to see the updated list.`;
+  document.getElementById('new-slack-id').value = '';
+}
+</script>
+#endexport
+
+#endextend

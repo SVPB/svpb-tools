@@ -1,0 +1,59 @@
+name: Publish image
+
+# Builds the deployment image and pushes it to the GitHub Container Registry.
+# The droplet pulls from there — it never compiles Swift itself.
+#
+# Resulting tags:
+#   ghcr.io/svpb/svpb-tools:develop    every push to develop
+#   ghcr.io/svpb/svpb-tools:main       every push to main
+#   ghcr.io/svpb/svpb-tools:latest     pushes to the default branch only
+#   ghcr.io/svpb/svpb-tools:0.2.0      pushes of a v0.2.0 tag
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Droplets are x86_64. Building arm64 as well would double the job
+          # time for an image nothing runs.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

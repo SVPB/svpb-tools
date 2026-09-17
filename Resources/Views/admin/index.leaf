@@ -1,0 +1,195 @@
+#extend("layouts/public"):
+
+#export("title"):Admin — SVPB TNG#endexport
+
+#export("styles"):
+<style>
+  main   { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+  h2     { font-size: 1.1rem; margin-bottom: 0.75rem; }
+  .branches { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 2rem; }
+  .badge { background: #1a1a2e; color: #fff; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; }
+  .sync-btn { font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(0,0,0,.2); background: none; color: #1a1a2e; cursor: pointer; margin-left: 4px; vertical-align: middle; }
+  .sync-btn:hover { background: rgba(0,0,0,.06); }
+  .sync-btn:disabled { opacity: 0.5; cursor: default; }
+  .delete-btn { color: #991b1b; border-color: rgba(153,27,27,.35); }
+  .delete-btn:hover { background: rgba(153,27,27,.08); }
+  .branch-item { display: inline-flex; align-items: center; margin-bottom: 4px; }
+  .sync-form { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
+  .sync-form input { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.88rem; width: 160px; }
+  .sync-form button { padding: 4px 12px; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; font-size: 0.88rem; }
+  .sync-form button:hover { background: #f0f0f0; }
+  #sync-status { font-size: 0.83rem; color: #555; margin-top: 0.4rem; min-height: 1.2em; }
+  table  { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  th, td { padding: 0.65rem 1rem; text-align: left; font-size: 0.9rem; }
+  th     { background: #eee; font-weight: 600; }
+  tr:not(:last-child) td { border-bottom: 1px solid #f0f0f0; }
+  .status-running { color: #b45309; }
+  .status-success { color: #166534; }
+  .status-partial { color: #c2410c; font-weight: 600; }
+  .status-failure { color: #991b1b; }
+  a { color: #1a1a2e; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+
+  <h2>Known Branches</h2>
+  <div class="branches">
+    #for(branch in branchNames):
+      <span class="branch-item">
+        <span class="badge">#(branch)</span>
+        <button class="sync-btn" onclick="syncBranch('#(branch)', this)" title="Sync catalogue for #(branch)">↻ Sync</button>
+        <button class="sync-btn delete-btn" onclick="deleteBranch('#(branch)', this)" title="Remove #(branch) from the server">✕ Remove</button>
+      </span>
+    #endfor
+    #if(branchNames.isEmpty):
+      <em style="color:#888">No builds yet.</em>
+    #endif
+  </div>
+  <div class="sync-form">
+    <input type="text" id="new-branch" placeholder="Branch name, e.g. 2026">
+    <button onclick="syncNewBranch()">↻ Sync branch…</button>
+  </div>
+  <div id="sync-status"></div>
+
+  <h2>Recent Builds</h2>
+  #if(builds.isEmpty):
+    <p style="color:#888">No builds recorded yet. Push to <code>svpb-music</code> to trigger the first build.</p>
+  #else:
+  <table>
+    <thead>
+      <tr>
+        <th>Branch</th>
+        <th>Triggered</th>
+        <th>Status</th>
+        <th>Files</th>
+        <th>Log</th>
+      </tr>
+    </thead>
+    <tbody>
+      #for(build in builds):
+      <tr>
+        <td><strong>#(build.branch)</strong></td>
+        <td>#(build.triggeredISO)</td>
+        <td class="status-#(build.status)">#(build.status)</td>
+        <td>#(build.fileCount)</td>
+        <td><a href="/admin/builds/#(build.id)">View</a></td>
+      </tr>
+      #endfor
+    </tbody>
+  </table>
+  #endif
+
+</main>
+#endexport
+
+#export("scripts"):
+<script>
+'use strict';
+
+async function syncBranch(branch, btn) {
+  const status = document.getElementById('sync-status');
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Syncing…'; }
+  status.textContent = 'Syncing catalogue for branch "' + branch + '"…';
+
+  try {
+    const res = await fetch('/admin/branches/' + encodeURIComponent(branch) + '/sync', {
+      method: 'POST',
+    });
+    if (res.ok) {
+      status.textContent = 'Build started for "' + branch + '". Waiting for completion…';
+      pollBuildStatus(branch, btn);
+    } else {
+      const text = await res.text();
+      status.textContent = 'Error: ' + text;
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+    }
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+  }
+}
+
+function pollBuildStatus(branch, btn) {
+  const status = document.getElementById('sync-status');
+  let attempts = 0;
+  const maxAttempts = 120; // 10 minutes at 5s intervals
+  const timer = setInterval(async () => {
+    if (++attempts > maxAttempts) {
+      clearInterval(timer);
+      status.textContent = 'Sync is taking longer than expected. Reload to check.';
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+      return;
+    }
+    try {
+      const res = await fetch('/admin/branches/' + encodeURIComponent(branch) + '/latest-build');
+      const dto = await res.json();
+      if (dto.status === 'success') {
+        clearInterval(timer);
+        status.textContent = 'Sync complete for "' + branch + '"! Reloading…';
+        setTimeout(() => location.reload(), 800);
+      } else if (dto.status === 'partial') {
+        clearInterval(timer);
+        status.textContent = 'Sync finished for "' + branch + '", but some steps failed. See the build log for details.';
+        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+        setTimeout(() => location.reload(), 800);
+      } else if (dto.status === 'failure') {
+        clearInterval(timer);
+        status.textContent = 'Sync failed for "' + branch + '". See the build log for details.';
+        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+        setTimeout(() => location.reload(), 800);
+      }
+    } catch (_) { /* keep polling */ }
+  }, 5000);
+}
+
+async function deleteBranch(branch, btn) {
+  const question = 'Remove branch "' + branch + '" from the server?\n\n'
+    + 'This deletes its tune catalogue, build history and logs, binder definitions, '
+    + 'git checkout, and generated SVG/PDF files. Nothing in Box is touched. '
+    + 'Syncing "' + branch + '" again rebuilds it from the repository.';
+  if (!confirm(question)) return;
+
+  const status = document.getElementById('sync-status');
+  btn.disabled = true;
+  btn.textContent = '✕ Removing…';
+  status.textContent = 'Removing branch "' + branch + '"…';
+
+  try {
+    const res = await fetch('/admin/branches/' + encodeURIComponent(branch), { method: 'DELETE' });
+    if (res.ok) {
+      const s = await res.json();
+      const mb = (s.bytes / (1024 * 1024)).toFixed(1);
+      status.textContent = 'Removed "' + branch + '": ' + s.tunes + ' tune(s), ' + s.parts + ' part(s), '
+        + s.builds + ' build(s), ' + s.binder_definitions + ' binder definition(s), '
+        + mb + ' MB on disk. Reloading…';
+      setTimeout(() => location.reload(), 2500);
+    } else {
+      let reason = await res.text();
+      try { reason = JSON.parse(reason).reason || reason; } catch (_) {}
+      status.textContent = 'Could not remove "' + branch + '": ' + reason;
+      btn.disabled = false;
+      btn.textContent = '✕ Remove';
+    }
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = '✕ Remove';
+  }
+}
+
+function syncNewBranch() {
+  const input = document.getElementById('new-branch');
+  const branch = input.value.trim();
+  if (!branch) {
+    document.getElementById('sync-status').textContent = 'Please enter a branch name.';
+    return;
+  }
+  input.value = '';
+  syncBranch(branch, null);
+}
+</script>
+#endexport
+
+#endextend

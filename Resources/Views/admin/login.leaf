@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign In — SVPB TNG</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; padding: 0 1rem; color: #222; }
+    h1   { font-size: 1.6rem; margin-bottom: 0.25rem; }
+    .sub { color: #555; margin-top: 0; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.5rem; margin-top: 2rem; background: #fafafa; }
+    code { background: #eee; padding: 2px 5px; border-radius: 3px; }
+    footer { margin-top: 3rem; font-size: 0.8rem; color: #999; }
+  </style>
+</head>
+<body>
+  <h1>SVPB TNG Admin</h1>
+  <p class="sub">Silicon Valley Pipe Band · Tools Next Generation · v#(appVersion)</p>
+
+  <div class="card">
+    <h2>Sign In</h2>
+    <p>TNG uses Slack for authentication. To get a login link:</p>
+    <ol>
+      <li>Open Slack and send <em>any message</em> to the <strong>TNG</strong> bot.</li>
+      <li>The bot will reply with a one-time login link valid for 10 minutes.</li>
+      <li>Click the link to access the admin dashboard.</li>
+    </ol>
+    <p>If you do not have access, ask a band administrator to add your Slack account.</p>
+  </div>
+
+  <footer>SVPB TNG v#(appVersion)</footer>
+</body>
+</html>

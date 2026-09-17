@@ -1,0 +1,10 @@
+# Overlay for building the TNG image locally instead of pulling it from GHCR.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Needs roughly 4 GB of RAM and 10–20 minutes. The normal deployment path pulls
+# a prebuilt image and needs neither.
+services:
+  tng:
+    build: .
+    image: ghcr.io/svpb/svpb-tools:dev
