@@ -404,3 +404,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   self-protection rules.
 - All three admin Leaf templates (`index`, `build-detail`, `users`) now share a consistent
   header navigation bar with links to **Dashboard** and **Users**.
+
+### Removed
+
+#### openapi.yaml - no longer serving
+
+ - The file documents the server API, but the only client, current or proposed, is the server
+ itself. It doesn't make sense to keep paying the documentation tax to keep it up to date. If
+ we ever see interest, we can regenerate the document then.
+ 
