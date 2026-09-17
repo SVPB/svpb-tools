@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### The band's circuit thistle as the site icon
+
+- `Brand/` holds vector traces of the circuit thistle — the mark beside the wordmark in the band
+  logo — taken from artboard 5 of `SV_Pipeband_Logo_Final.ai` and coloured the way the thistle is
+  coloured in the lockup: `#AA04BC` for the bloom, `#44C40E` for the leaves. `Brand/README.md`
+  records where the artwork came from and which file to reach for.
+- `Brand/slack-app-icon-512.png` is the 512x512 icon to upload for the TNG Slack app.
+- `Public/favicon.ico` (16/32/48), `Public/favicon.svg` and `Public/apple-touch-icon.png`, linked
+  from both the public layout and the admin sign-in page, which has its own `<head>`.
+- Renderings at 48px and below scale the stroke weights 1.8x. The thistle is fine line art —
+  strokes are about 1% of its height — and at true weight it disappears in a favicon.
+
+### Changed
+
+- The page header shows the thistle (`Public/img/thistle.svg`) in place of the music-note emoji.
+  The header mark is transparent rather than white-backed, so it sits on the navy bar the way the
+  reversed logo does in the `.ai`.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
