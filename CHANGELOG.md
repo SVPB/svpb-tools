@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The header mark is transparent rather than white-backed, so it sits on the navy bar the way the
   reversed logo does in the `.ai`.
 
+#### CeolKit 1.5.0 -> 1.6.0
+
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
