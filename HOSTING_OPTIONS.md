@@ -1,5 +1,31 @@
 # Hosting Options for SVPB TNG
 
+> **Superseded — this is a decision record, not current documentation.**
+>
+> The hosting decision has been made and built. TNG runs on a **DigitalOcean Droplet**, and the
+> deployment as actually built differs from what this document recommended below:
+>
+> | | Recommended here | As built |
+> |---|---|---|
+> | Droplet size | 1 vCPU / 1 GB / $6 per month | 1 vCPU / **2 GB** / **$12** per month, plus a 2 GB swapfile |
+> | Persistent state | the boot disk — "no additional storage product is needed" | a **Block Storage volume** (`tng-state`, 1 GiB, $0.10 per month) |
+> | Static address | "Floating IP" | a **Reserved IP** — DigitalOcean's current name for the same product |
+> | Updating | `git pull && docker compose pull && docker compose up -d` by hand | `Scripts/deploy.sh`, with a build gate, health check and image prune |
+>
+> The 1 GB droplet does not survive a full catalogue build, and the boot disk is persistent across
+> reboots but not across droplet *replacement*. Those four corrections are [#2][i2], [#3][i3] and
+> [#6][i6], all closed.
+>
+> **For how TNG is deployed today, read [§ Deployment in README.md](README.md#deployment).** That
+> section is maintained; everything below this note is kept only as the record of why DigitalOcean
+> was chosen over the alternatives, and its costs and details are frozen as of March 2026.
+
+[i2]: https://github.com/SVPB/svpb-tools/issues/2
+[i3]: https://github.com/SVPB/svpb-tools/issues/3
+[i6]: https://github.com/SVPB/svpb-tools/issues/6
+
+---
+
 This document compares the realistic hosting options for the TNG server. The goal is to help
 whoever maintains SVPB Tools choose and, if necessary, change the deployment target without
 needing to understand cloud infrastructure in depth.

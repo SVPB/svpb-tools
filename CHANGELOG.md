@@ -28,6 +28,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 #### CeolKit 1.5.0 -> 1.6.0
 
+#### Documentation reconciled with the deployment as built (#14)
+
+- `HOSTING_OPTIONS.md` is marked as a superseded decision record. It compared hosts before one was
+  chosen, and its DigitalOcean numbers never caught up with the deployment: it recommended the
+  1 GB / $6 droplet (which does not survive a full catalogue build), said the boot disk meant "no
+  additional storage product is needed" (persistent across reboots, not across droplet
+  replacement — #3), called a Reserved IP a "Floating IP" (#2), and described updating as a
+  by-hand `docker compose pull && up -d` (#6). Rather than maintain six costed alternatives for a
+  decision that has been made, the header tabulates those four corrections and sends readers to
+  README § Deployment; the comparison below it is frozen as of March 2026.
+- The README's opening no longer offers `HOSTING_OPTIONS.md` as current hosting guidance; it
+  points at § Deployment and labels the older document a superseded decision record.
+- The `box-auth` entry under 0.2.0 gave `docker compose run --rm tng swift run TNG box-auth`,
+  which cannot work — the runtime image has no Swift toolchain and its `ENTRYPOINT` is already
+  `./TNG`. Corrected to `docker compose run --rm tng box-auth`, matching the README. The bare
+  `swift run TNG box-auth` in the tunnel workflow is unchanged and still correct there.
+
 
 ## [0.2.0] - 2026-09-17
 
@@ -164,7 +181,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   6. Prints `BOX_REFRESH_TOKEN=<value>` for copy-paste into `.env`.
   - In `box-auth` mode `configure()` skips env-var validation and service initialisation, so the
     command works when only the Box credentials are present.
-  - Invoked as described in the README: `docker compose run --rm tng swift run TNG box-auth`.
+  - Invoked as described in the README: `docker compose run --rm tng box-auth`. The runtime
+    image has no Swift toolchain and its `ENTRYPOINT` is already `./TNG`, so the subcommand is
+    passed straight to the binary.
 
 ### Changed
 

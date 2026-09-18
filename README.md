@@ -8,7 +8,10 @@ builder to generate a personalised PDF containing only the parts they need, with
 reflect their own binder.
 
 For full architecture details, feature list, and implementation plan, see [PROJECT_PLAN.md](PROJECT_PLAN.md).
-For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md).
+TNG is deployed on a DigitalOcean Droplet; see [Deployment](#deployment) below. For the
+record of why that host was chosen over the alternatives, see
+[HOSTING_OPTIONS.md](HOSTING_OPTIONS.md) — a superseded decision record, not current
+documentation.
 
 ---
 
