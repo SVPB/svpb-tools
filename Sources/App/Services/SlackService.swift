@@ -119,6 +119,66 @@ actor SlackService {
         return text
     }
 
+    // MARK: - Status
+
+    /// What `auth.test` says about the bot token, for the connections page.
+    struct Status: Sendable {
+        /// The workspace the token belongs to, when Slack accepted it.
+        let workspace: String?
+        /// The bot user the token acts as.
+        let botUser: String?
+        /// Why Slack did not accept it.
+        let error: String?
+        /// Whether an incoming webhook URL is configured. `auth.test` says nothing about
+        /// it — it is a separate credential, and it is the one build notifications use.
+        let hasWebhook: Bool
+    }
+
+    /// Asks Slack who TNG is.
+    ///
+    /// `auth.test` is the cheapest call that actually exercises the token, which is the
+    /// question worth answering: a token that is present and a token that works are not
+    /// the same thing, and the difference only shows up when someone is waiting for a
+    /// login link that never arrives.
+    func status() async -> Status {
+        let hasWebhook = !webhookURL.isEmpty
+
+        guard !botToken.isEmpty else {
+            return Status(workspace: nil, botUser: nil,
+                          error: "SLACK_BOT_TOKEN is not set", hasWebhook: hasWebhook)
+        }
+
+        struct AuthTestResponse: Decodable {
+            let ok: Bool
+            let team: String?
+            let user: String?
+            let error: String?
+        }
+
+        var request = HTTPClientRequest(url: "https://slack.com/api/auth.test")
+        request.method = .POST
+        request.headers.add(name: "Authorization", value: "Bearer \(botToken)")
+        request.headers.add(name: "Content-Type", value: "application/x-www-form-urlencoded")
+
+        do {
+            let response = try await httpClient.execute(request, timeout: .seconds(10))
+            let buffer = try await response.body.collect(upTo: 64 * 1024)
+            let decoded = try JSONDecoder().decode(AuthTestResponse.self, from: Data(buffer: buffer))
+            guard decoded.ok else {
+                // Slack reports a bad token as HTTP 200 with `ok: false`, so the status
+                // code says nothing and the body is the only signal.
+                return Status(workspace: nil, botUser: nil,
+                              error: decoded.error ?? "Slack rejected the token",
+                              hasWebhook: hasWebhook)
+            }
+            return Status(workspace: decoded.team, botUser: decoded.user,
+                          error: nil, hasWebhook: hasWebhook)
+        } catch {
+            logger.warning("[Slack] auth.test failed: \(error)")
+            return Status(workspace: nil, botUser: nil, error: "\(error)", hasWebhook: hasWebhook)
+        }
+    }
+
     /// Fetches the display name for a Slack user via `users.info`.
     ///
     /// Returns the user's profile display name, falling back to their real name,

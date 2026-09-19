@@ -19,12 +19,16 @@ struct ConfigurationError: Error, CustomStringConvertible {
 /// immediately rather than surfacing as a runtime failure hours later.
 /// In the `.testing` environment the check is skipped so unit tests can
 /// run without a full `.env` file.
+///
+/// `BOX_REFRESH_TOKEN` is deliberately *not* here. It is the one credential the server
+/// can obtain for itself — from `/admin/connections`, which a deployment has to be able
+/// to boot far enough to reach. Refusing to start without one would mean a fresh
+/// deployment could never be authorised at all.
 private let requiredEnvironmentVariables: [String] = [
     "GITHUB_WEBHOOK_SECRET",
     "SVPB_MUSIC_REPO_URL",
     "BOX_CLIENT_ID",
     "BOX_CLIENT_SECRET",
-    "BOX_REFRESH_TOKEN",
     "BOX_FOLDER_ID",
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
@@ -150,6 +154,7 @@ private func initServices(_ app: Application) {
         repoURL: Environment.get("SVPB_MUSIC_REPO_URL") ?? "",
         workspaceBase: URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
     )
+    app.gitService = gitService
 
     let boxService = BoxService(
         clientID:     Environment.get("BOX_CLIENT_ID")     ?? "",

@@ -316,31 +316,32 @@ actor BoxService {
         return token
     }
 
-    private func refreshAccessToken() async throws -> String {
-        struct TokenResponse: Decodable {
-            let accessToken: String
-            let refreshToken: String
-            let expiresIn: Int
+    /// What Box returns from either grant on the token endpoint.
+    private struct TokenResponse: Decodable {
+        let accessToken: String
+        let refreshToken: String
+        let expiresIn: Int
 
-            enum CodingKeys: String, CodingKey {
-                case accessToken = "access_token"
-                case refreshToken = "refresh_token"
-                case expiresIn = "expires_in"
-            }
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
         }
+    }
 
+    private func refreshAccessToken() async throws -> String {
         logger.info("[Box] Refreshing the access token")
         let current = try await currentRefreshToken()
 
         var request = HTTPClientRequest(url: "https://api.box.com/oauth2/token")
         request.method = .POST
         request.headers.add(name: "Content-Type", value: "application/x-www-form-urlencoded")
-        request.body = .bytes(ByteBuffer(string: [
-            "grant_type=refresh_token",
-            "refresh_token=\(current)",
-            "client_id=\(clientID)",
-            "client_secret=\(clientSecret)",
-        ].joined(separator: "&")))
+        request.body = .bytes(ByteBuffer(string: Self.formEncoded([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", current),
+            ("client_id", clientID),
+            ("client_secret", clientSecret),
+        ])))
 
         let response = try await execute(request, timeout: .seconds(30))
         guard response.status == .ok else {
@@ -352,20 +353,149 @@ actor BoxService {
         }
 
         let decoded = try response.decode(TokenResponse.self)
-        accessToken = decoded.accessToken
-        tokenExpiry = Date().addingTimeInterval(TimeInterval(decoded.expiresIn) - Self.expiryMargin)
-
-        // Box has just invalidated the token we presented, so the new one is now the only
-        // way back in. Record it before it is used for anything.
-        refreshToken = decoded.refreshToken
         do {
-            try await Setting.set(Setting.boxRefreshToken, to: decoded.refreshToken, on: db)
+            try await adopt(decoded)
         } catch {
-            // The upload can still go ahead — but the next restart would reach for a token
-            // Box has retired, so this is an error, not a warning.
-            logger.error("[Box] Could not persist the rotated refresh token; a restart will need `box-auth` run again: \(error)")
+            // The upload can still go ahead on the access token just issued — but the next
+            // restart would reach for a refresh token Box has retired, so this is an error,
+            // not a warning.
+            logger.error("[Box] Could not persist the rotated refresh token; a restart will need re-authorisation: \(error)")
         }
         return decoded.accessToken
+    }
+
+    /// Takes a freshly issued pair of tokens into use and writes the refresh token down.
+    ///
+    /// Box invalidates the token it was presented with on every grant, so the one that
+    /// just came back is the only way in from here. It is recorded before it is used for
+    /// anything.
+    private func adopt(_ tokens: TokenResponse) async throws {
+        accessToken = tokens.accessToken
+        tokenExpiry = Date().addingTimeInterval(TimeInterval(tokens.expiresIn) - Self.expiryMargin)
+        refreshToken = tokens.refreshToken
+        try await Setting.set(Setting.boxRefreshToken, to: tokens.refreshToken, on: db)
+    }
+
+    // MARK: - Interactive authorisation
+
+    /// Where the operator is sent to grant TNG access to Box.
+    ///
+    /// - Parameters:
+    ///   - redirectURI: Must match one registered in the Box Developer Console *and* the
+    ///     one later given to ``adoptAuthorizationCode(_:redirectURI:)`` — Box checks both.
+    ///   - state: Opaque value echoed back to the redirect, checked against the session so
+    ///     a stray request cannot drive a token exchange.
+    func authorizationURL(redirectURI: String, state: String) -> String {
+        Self.authorizationURL(clientID: clientID, redirectURI: redirectURI, state: state)
+    }
+
+    nonisolated static func authorizationURL(clientID: String, redirectURI: String, state: String) -> String {
+        var components = URLComponents(string: "https://account.box.com/api/oauth2/authorize")!
+        components.queryItems = [
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "state", value: state),
+        ]
+        return components.url!.absoluteString
+    }
+
+    /// Exchanges the authorisation code from a Box redirect for tokens, and takes them
+    /// into use.
+    ///
+    /// Unlike a refresh, a failure to persist here throws: the whole point of the exchange
+    /// is to leave a usable refresh token behind, and reporting success without one would
+    /// send the operator away believing a job was done that was not.
+    func adoptAuthorizationCode(_ code: String, redirectURI: String) async throws {
+        var request = HTTPClientRequest(url: "https://api.box.com/oauth2/token")
+        request.method = .POST
+        request.headers.add(name: "Content-Type", value: "application/x-www-form-urlencoded")
+        request.body = .bytes(ByteBuffer(string: Self.formEncoded([
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("client_id", clientID),
+            ("client_secret", clientSecret),
+            ("redirect_uri", redirectURI),
+        ])))
+
+        let response = try await execute(request, timeout: .seconds(30))
+        guard response.status == .ok else {
+            logger.error("[Box] Authorisation code exchange failed (\(response.status.code)): \(response.text)")
+            throw BoxError.http(status: response.status.code, body: response.text)
+        }
+        try await adopt(try response.decode(TokenResponse.self))
+        logger.notice("[Box] Authorised; a new refresh token is stored")
+    }
+
+    // MARK: - Status
+
+    /// What the admin page reports about TNG's access to Box.
+    struct Status: Sendable {
+        /// A refresh token has been stored by a previous authorisation or refresh.
+        let hasStoredToken: Bool
+        /// When that token was last replaced — the 60-day expiry counts from here.
+        let lastRotated: Date?
+        /// `BOX_REFRESH_TOKEN` is set, which is what a deployment that has never
+        /// refreshed falls back to.
+        let hasSeedToken: Bool
+        /// The name of the configured root folder, when Box could be reached.
+        let rootFolderName: String?
+        /// Why Box could not be reached, when it could not.
+        let error: String?
+
+        var isWorking: Bool { rootFolderName != nil }
+    }
+
+    /// Asks Box for the configured root folder, reporting what happened.
+    ///
+    /// This is deliberately a real request rather than a look at what is stored: "a token
+    /// exists" and "Box works" are different questions, and the second is the one an
+    /// operator is asking. Refreshing an expired access token along the way is a bonus —
+    /// it rotates the refresh token, which restarts its 60-day clock.
+    func status() async -> Status {
+        var lastRotated: Date?
+        var hasStoredToken = false
+        do {
+            if let row = try await Setting.find(Setting.boxRefreshToken, on: db) {
+                hasStoredToken = true
+                lastRotated = row.updatedAt
+            }
+        } catch {
+            logger.warning("[Box] Could not read the stored refresh token: \(error)")
+        }
+
+        var folderName: String?
+        var failure: String?
+        do {
+            folderName = try await rootFolderName()
+        } catch {
+            failure = "\(error)"
+        }
+
+        return Status(
+            hasStoredToken: hasStoredToken,
+            lastRotated: lastRotated,
+            hasSeedToken: !seedRefreshToken.isEmpty,
+            rootFolderName: folderName,
+            error: failure)
+    }
+
+    /// The name of the folder `BOX_FOLDER_ID` points at.
+    private func rootFolderName() async throws -> String {
+        struct Folder: Decodable { let name: String }
+
+        guard !rootFolderID.isEmpty else {
+            throw BoxError.unexpectedBody("BOX_FOLDER_ID is not set")
+        }
+        let token = try await validAccessToken()
+        var request = HTTPClientRequest(
+            url: "https://api.box.com/2.0/folders/\(rootFolderID)?fields=name")
+        request.method = .GET
+        request.headers.add(name: "Authorization", value: "Bearer \(token)")
+
+        let response = try await execute(request, timeout: .seconds(30))
+        try response.orThrow()
+        return try response.decode(Folder.self).name
     }
 
     // MARK: - HTTP
@@ -391,6 +521,19 @@ actor BoxService {
                 throw BoxError.unexpectedBody(text)
             }
         }
+    }
+
+    /// `application/x-www-form-urlencoded` body from ordered pairs.
+    ///
+    /// Percent-encoded rather than interpolated: an authorisation code or a client secret
+    /// carrying a `+`, `/` or `=` would otherwise arrive at Box as a different string.
+    static func formEncoded(_ pairs: [(String, String)]) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return pairs.map { key, value in
+            let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+            return "\(key)=\(encoded)"
+        }.joined(separator: "&")
     }
 
     private func execute(_ request: HTTPClientRequest, timeout: TimeAmount) async throws -> BoxResponse {

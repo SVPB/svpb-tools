@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### A Connections page: every remote service, its state, and a button where one helps (#51)
+
+- `/admin/connections` reports GitHub, Box and Slack side by side. Each is asked a real
+  question rather than checked for a credential — `ls-remote` against the music repository,
+  the configured folder fetched from Box, `auth.test` against Slack — because a credential that
+  is present and a credential that works are different things, and the difference only shows up
+  when someone is waiting for a binder that never arrives.
+- Each row says what TNG uses that service *for*, so a red row explains what is broken rather
+  than only that something is. Where a credential expires, the page says when: Box's refresh
+  token carries its 60-day deadline, counted from the last renewal.
+- **Box can be re-authorised from the page.** The button opens Box's consent screen in a popup;
+  Box redirects back to `/box-callback` on the running server, which exchanges the code, stores
+  the new refresh token, reloads the page behind it and closes itself.
+- Services whose credentials are static configuration — Slack's bot token, GitHub's webhook
+  secret — get no button, because there is no flow TNG could drive. They carry a "How to fix
+  this" note naming the environment variable and where its value comes from instead. Adding a
+  service later means writing one more `status(…)` in `ConnectionsReport`; the page itself knows
+  nothing about any particular one.
+- The redirect URI Box has to have registered is shown on the page, derived from `DOMAIN` — the
+  same value Caddy serves TNG on — so it can be copied rather than guessed.
+- `BOX_REFRESH_TOKEN` is no longer a required environment variable. It could not stay one: a
+  fresh deployment has to boot far enough to reach the page that would give it a token.
+- The repository URL is shown with any embedded credentials stripped. A clone URL can carry a
+  token as userinfo, and a status page exists to be read by whoever is standing there.
+- git now runs with `GIT_TERMINAL_PROMPT=0`. A server has no terminal to answer a credential
+  prompt at, so a repository that has become private must fail rather than hang the task
+  waiting for one.
+
 #### The official binders are assembled and uploaded to Box (#18, #7)
 
 - A build now assembles the binders `binders.yaml` declares and writes each to
