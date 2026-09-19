@@ -180,6 +180,10 @@ private func initServices(_ app: Application) {
     let binderService = BinderService(musicWorkspacePath: musicWorkspacePath)
     app.binderService = binderService
 
+    // Box's refresh token expires after 60 days of disuse, and a build is the only thing
+    // that would otherwise use it. Renew it on a timer so a quiet season cannot kill it.
+    app.lifecycle.use(BoxTokenKeepAlive())
+
     app.buildService = BuildService(
         gitService:         gitService,
         boxService:         boxService,

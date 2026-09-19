@@ -74,12 +74,15 @@ enum ConnectionsReport {
         let configured = !(Environment.get("BOX_CLIENT_ID") ?? "").isEmpty
             && !(Environment.get("BOX_CLIENT_SECRET") ?? "").isEmpty
 
+        let renewal = " Renewed automatically every "
+            + ConnectionsReport.renewalInterval + ", so it cannot expire while TNG is running."
+
         let credential: String
         if let rotated = status.lastRotated {
             let expires = rotated.addingTimeInterval(ConnectionStatus.boxTokenLifetime)
             let days = Int(expires.timeIntervalSinceNow / 86400)
             credential = days > 0
-                ? "Refresh token last renewed \(Self.relative(rotated)); expires in \(days) day(s) unless a build renews it first"
+                ? "Refresh token last renewed \(Self.relative(rotated)); expires in \(days) day(s) otherwise." + renewal
                 : "⚠ Refresh token last renewed \(Self.relative(rotated)) and has passed its 60-day expiry"
         } else if status.hasSeedToken {
             credential = "Using the BOX_REFRESH_TOKEN from .env; nothing renewed yet"
@@ -106,6 +109,12 @@ enum ConnectionsReport {
             // through a browser redirect, which is exactly what this page can drive.
             authorizePath: "/admin/connections/box/authorize",
             remedy: nil)
+    }
+
+    /// How often the scheduled renewal runs, as the page says it.
+    private static var renewalInterval: String {
+        BoxTokenKeepAlive.describe(
+            BoxTokenKeepAlive.interval(from: Environment.get("BOX_TOKEN_REFRESH_HOURS")))
     }
 
     private static let boxPurpose =

@@ -119,6 +119,18 @@ actor SlackService {
         return text
     }
 
+    /// Posts an arbitrary message to the build channel.
+    ///
+    /// Used by the scheduled token renewal, which has something to say that is not about
+    /// a build and does not belong in the build notification's vocabulary.
+    func postPlainMessage(_ text: String) async throws {
+        struct WebhookBody: Encodable {
+            let text: String
+        }
+        try await postJSON(to: webhookURL, body: WebhookBody(text: text), authorizationHeader: nil)
+        logger.info("[Slack] Message posted to the build channel")
+    }
+
     // MARK: - Status
 
     /// What `auth.test` says about the bot token, for the connections page.
