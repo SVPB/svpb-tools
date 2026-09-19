@@ -25,11 +25,6 @@ documentation.
    uploads **those PDFs only** to Box.
 5. A summary is posted to the band's Slack channel.
 
-> **Current status:** step 4's binder assembly and Box upload are not yet implemented —
-> `BoxService` is a skeleton, and `BuildService` currently attempts to upload each per-tune PDF
-> rather than the assembled binders. Conversion, the tune catalogue, and the binder builder all
-> work. See the open issues.
-
 Band members can visit the server's web UI to build a personalised binder: select the tunes
 and parts they need, and download a single PDF with page numbers specific to their selection.
 A personalised binder lives on the server and on the member's own computer — it is never pushed

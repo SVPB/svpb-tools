@@ -6,7 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### The official binders are assembled and uploaded to Box (#18, #7)
+
+- A build now assembles the binders `binders.yaml` declares and writes each to
+  `output/<branch>/binders/<output>`. The file had been read and stored since #10, but nothing
+  turned it into a PDF: the band's official binders existed only as rows in a table.
+- Assembly reuses the personalised binder pipeline rather than growing one of its own. An official
+  binder is a `BinderSpec` like any other, so it gets the same re-engraved, binder-relative page
+  numbers (#19) and the same generated divider page ahead of each titled section. What differs is
+  only where the PDF is written and what happens to it next.
+- An official entry carries no parts. Per-part rendering is deferred past MVP (#20) and every
+  `Part` row of a tune points at the same pages today, so honouring `parts:` would repeat the whole
+  score once per named part. The key is still decoded and stored, so a `binders.yaml` written now
+  keeps its meaning when part support lands.
+- Binders go to `output/<branch>/binders/` rather than beside the per-tune PDFs: a binder's
+  `output:` filename is chosen by the pipe major and a tune's is its `.abc` stem, so
+  `2026_binder.pdf` sitting beside the tunes could silently overwrite a tune slugged
+  `2026_binder`.
+- `BoxService` is implemented. `refreshAccessToken`, `createYearFolder` and `uploadFile` had all
+  ended in `throw Abort(.notImplemented)`, and `resolveYearFolder` never asked whether the year
+  folder already existed — it called `createYearFolder` every time.
+- A binder already in the year folder gets a new **version** of the same file rather than a second
+  one: the link the band has bookmarked keeps working, and Box's history becomes the record of what
+  each build changed. Filenames are compared case-insensitively, because that is how Box compares
+  them. Two branches racing to create the same year folder is not an error for the loser.
+- Only the binders go up. The per-tune upload inside the conversion loop is gone — those PDFs are
+  intermediates the binders are made from, and personalised binders are downloaded from TNG itself.
+
+#### The rotated Box refresh token survives a restart (#7)
+
+- Box invalidates the refresh token it was given on every refresh, so the value in `.env` is
+  correct exactly once. Keeping the new one in actor state alone meant every restart reached for a
+  token Box had already retired — and a token unused for 60 days expires outright.
+- A `settings` table now holds it, seeded from `BOX_REFRESH_TOKEN` when there is nothing stored. A
+  refresh Box refuses now says in as many words that `box-auth` has to be run again, rather than
+  surfacing as a bare 400.
+
+#### A binder that could not reach Box goes up on the next build (#12)
+
+- O6 asks for artefacts to be retained locally and re-uploaded on the next build. That was not
+  implementable from the build log alone: nothing recorded *which* binders were outstanding, so
+  after a failed build the only options were re-uploading everything or nothing.
+- A `box_uploads` table now holds one row per binder per branch — where the file is, the hash of
+  the bytes assembled, whether it has reached Box, how many attempts it has taken and why the last
+  one failed. It is its own table because `binder_definitions` rows are deleted and recreated
+  wholesale by every build, so upload state kept there would be erased by the build that needs it.
+- The retry runs after the current build's own uploads rather than before conversion: a binder this
+  build is about to reassemble does not want last week's bytes pushed ahead of it, and a build that
+  fails before assembly has no working Box session to retry through anyway.
+- A pending file that has gone, or whose bytes are no longer the ones its row describes, is dropped
+  rather than retried forever. Something later rebuilt it, and uploading what is on disk now under a
+  row that means something else would put the wrong version in Box.
+- Slack notifications are **not** replayed — "build succeeded", hours late, reads worse than
+  silence — so the build that catches up names what it caught up on.
+- Removing a branch takes its upload records with it, and says how many. Box itself is still never
+  touched.
+
 ### Fixed
+
+#### The build now reports what it actually produced (#8)
+
+- `Build.files` and the Slack message named the per-tune PDFs, so the band was told about files
+  that never leave the server and told nothing about the binders that do. Both now name the
+  binders, and the dashboard's column and heading say "Binders" instead of "Files".
+- The notification links the Box year folder the upload returned. A build that never reached Box
+  leaves the link out rather than offering a dead one.
+- A CeolKit error diagnostic now counts as a failed step. The pages are still engraved, from a
+  score CeolKit had to guess at — which is not a tune that built, and "green means it worked" has
+  to be true or the dashboard is worse than no dashboard.
+
+#### Documentation that described unbuilt behaviour (#14)
+
+- The README's "Current status" note said binder assembly and Box upload were unimplemented and
+  that `BuildService` uploaded each per-tune PDF. Both are now wrong in the other direction, so the
+  note is gone; the prose around it already described the behaviour that now exists.
+- `PROJECT_PLAN.md`'s Phase 3 line promised retry logic for Box uploads *and* Slack notifications.
+  It now records what was built and that Slack replay was deliberately decided against.
 
 #### A failed build no longer empties the branch catalogue (#22)
 
