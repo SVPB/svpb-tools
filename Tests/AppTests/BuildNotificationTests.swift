@@ -34,6 +34,25 @@ final class BuildNotificationTests: XCTestCase {
         """)
     }
 
+    /// Old builds' notifications are never replayed — a "build succeeded" arriving hours
+    /// late is worse than silence — so a catch-up is reported by the build that did it.
+    func testCatchUpUploadsAreNamedSeparately() {
+        let text = SlackService.buildNotificationText(
+            branch: "2026", status: .success,
+            files: ["2026_spec.pdf"],
+            boxFolderURL: "https://app.box.com/folder/111",
+            alsoUploaded: ["2026_binder.pdf"])
+
+        XCTAssertEqual(text, """
+        ✅ *Build success* — branch `2026`
+        Binders rebuilt:
+        • 2026_spec.pdf
+        Also uploaded, held over from an earlier build:
+        • 2026_binder.pdf
+        <https://app.box.com/folder/111|Open the 2026 folder in Box>
+        """)
+    }
+
     func testPartialIsFlaggedAndPointsAtTheLog() {
         let text = SlackService.buildNotificationText(
             branch: "2026", status: .partial, files: ["2026_binder.pdf"])

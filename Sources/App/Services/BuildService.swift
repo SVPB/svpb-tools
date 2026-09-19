@@ -285,11 +285,13 @@ actor BuildService {
 
             // ── Box upload (skipped for catalogue sync) ─────────────────────
             var boxFolderURL: String?
+            var caughtUp: [String] = []
             if uploadToBox {
                 let upload = await uploadBinders(
-                    assembly.binders, branch: branch, log: &log, logger: logger)
+                    assembly.binders, branch: branch, db: db, log: &log, logger: logger)
                 failedSteps += upload.failures
                 boxFolderURL = upload.folderID.map(BoxService.folderURL(id:))
+                caughtUp = upload.retried
             }
 
             // ── update Branch record timestamps ─────────────────────────────
@@ -307,7 +309,8 @@ actor BuildService {
                         branch: branch,
                         status: failedSteps == 0 ? .success : .partial,
                         files: producedFiles,
-                        boxFolderURL: boxFolderURL)
+                        boxFolderURL: boxFolderURL,
+                        alsoUploaded: caughtUp)
                 } catch {
                     log += "[slack] Notification failed: \(error)\n"
                     logger.warning("[BuildService] Slack notification failed: \(error)")
@@ -408,11 +411,14 @@ actor BuildService {
             let binders = try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).count()
             try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).delete()
 
+            let uploads = try await BoxUpload.query(on: tx).filter(\.$branch.$id == branch).count()
+            try await BoxUpload.query(on: tx).filter(\.$branch.$id == branch).delete()
+
             let branchRow = try await Branch.find(branch, on: tx)
             try await branchRow?.delete(on: tx)
 
             return (tunes: tunes, parts: parts, builds: builds, binders: binders,
-                    hadBranch: branchRow != nil)
+                    uploads: uploads, hadBranch: branchRow != nil)
         }
 
         let fm = FileManager.default
@@ -424,13 +430,14 @@ actor BuildService {
             removed.append(relative)
         }
 
-        guard rows.hadBranch || rows.tunes + rows.builds + rows.binders > 0 || !removed.isEmpty else {
+        guard rows.hadBranch || rows.tunes + rows.builds + rows.binders + rows.uploads > 0 || !removed.isEmpty else {
             throw Abort(.notFound, reason: "No branch '\(branch)' in the database or the workspace.")
         }
 
         let summary = BranchRemovalSummary(
             branch: branch, tunes: rows.tunes, parts: rows.parts, builds: rows.builds,
-            binderDefinitions: rows.binders, directories: removed, bytes: bytes)
+            binderDefinitions: rows.binders, boxUploads: rows.uploads,
+            directories: removed, bytes: bytes)
         logger.notice("[BuildService] Removed branch '\(branch)': \(summary.tunes) tune(s), \(summary.parts) part(s), \(summary.builds) build(s), \(summary.binderDefinitions) binder definition(s); deleted \(removed.isEmpty ? "no directories" : removed.joined(separator: ", ")) (\(bytes) bytes)")
         return summary
     }
@@ -714,6 +721,17 @@ actor BuildService {
                     logger.warning("[BuildService] \(binder.output) assembled without \(result.missing.count) tune(s)")
                     failures += 1
                 }
+                do {
+                    // The record of this file's journey to Box, written before any
+                    // attempt on it: a build that dies mid-upload still leaves the next
+                    // one something to reconcile from.
+                    _ = try await BoxUpload.record(
+                        branch: branch, filename: binder.output, url: result.url, on: db)
+                } catch {
+                    log += "[binder]   ⚠ Could not record \(binder.output) for upload: \(error)\n"
+                    logger.warning("[BuildService] Recording \(binder.output) for upload failed: \(error)")
+                    failures += 1
+                }
                 assembled.append(AssembledBinder(filename: binder.output, url: result.url))
             } catch {
                 log += "[binder] ✗ \(binder.output) could not be assembled: \(error)\n"
@@ -734,32 +752,145 @@ actor BuildService {
     /// is fine — and every failure is a failed step, so a build that reached Box with
     /// none of its binders cannot come out green.
     ///
-    /// - Returns: The ID of the year folder the binders went to, and the number of
-    ///   failed uploads.
+    /// Before returning, it catches up on any binder an earlier build assembled but
+    /// could not send (O6) — see `retryOutstandingUploads`.
+    ///
+    /// - Returns: The ID of the year folder the binders went to, the binders held over
+    ///   from earlier builds that went up with them, and the number of failed uploads.
     private func uploadBinders(
         _ binders: [AssembledBinder],
         branch: String,
+        db: Database,
         log: inout String,
         logger: Logger
-    ) async -> (folderID: String?, failures: Int) {
-        guard !binders.isEmpty else {
-            log += "[box] No binders to upload\n"
-            return (nil, 0)
-        }
-
+    ) async -> (folderID: String?, retried: [String], failures: Int) {
         var folderID: String?
         var failures = 0
+
+        if binders.isEmpty {
+            log += "[box] No binders to upload\n"
+        }
         for binder in binders {
             do {
                 folderID = try await boxService.upload(pdf: binder.url, forBranch: branch)
                 log += "[box] Uploaded \(binder.filename)\n"
+                await markUploaded(branch: branch, filename: binder.filename, db: db, logger: logger)
             } catch {
                 log += "[box] ✗ Upload failed for \(binder.filename): \(error)\n"
                 logger.warning("[BuildService] Box upload failed for \(binder.filename): \(error)")
+                await markFailed(branch: branch, filename: binder.filename,
+                                 error: error, db: db, logger: logger)
                 failures += 1
             }
         }
-        return (folderID, failures)
+
+        let caughtUp = await retryOutstandingUploads(
+            branch: branch, excluding: Set(binders.map(\.filename)),
+            db: db, log: &log, logger: logger)
+        folderID = folderID ?? caughtUp.folderID
+        failures += caughtUp.failures
+        return (folderID, caughtUp.uploaded, failures)
+    }
+
+    /// Uploads the binders of `branch` that an earlier build assembled but could not
+    /// send, skipping the ones this build has just dealt with.
+    ///
+    /// This is O6's "retry on the next build", and it runs here rather than before
+    /// conversion for a reason: a binder this build is about to reassemble does not want
+    /// last week's bytes pushed ahead of it, and a build that fails before assembly has
+    /// no working Box session to retry through anyway.
+    ///
+    /// A pending file that is gone, or whose bytes are no longer the ones the row
+    /// describes, is dropped rather than uploaded: something later rebuilt it, and
+    /// uploading what is on disk now under a row that means something else would put
+    /// the wrong version in Box.
+    private func retryOutstandingUploads(
+        branch: String,
+        excluding handled: Set<String>,
+        db: Database,
+        log: inout String,
+        logger: Logger
+    ) async -> (folderID: String?, uploaded: [String], failures: Int) {
+        let outstanding: [BoxUpload]
+        do {
+            outstanding = try await BoxUpload.outstanding(for: branch, on: db)
+                .filter { !handled.contains($0.filename) }
+        } catch {
+            log += "[box] Could not check for outstanding uploads: \(error)\n"
+            logger.warning("[BuildService] Reading outstanding uploads for '\(branch)' failed: \(error)")
+            return (nil, [], 1)
+        }
+        guard !outstanding.isEmpty else { return (nil, [], 0) }
+
+        log += "[box] \(outstanding.count) binder(s) held over from an earlier build\n"
+        var folderID: String?
+        var uploaded: [String] = []
+        var failures = 0
+
+        for row in outstanding {
+            let url = URL(fileURLWithPath: row.localPath)
+            guard FileManager.default.fileExists(atPath: row.localPath),
+                  let hash = try? BoxUpload.hash(of: url), hash == row.contentHash else {
+                log += "[box]   \(row.filename) is no longer on disk as assembled; dropping it\n"
+                logger.info("[BuildService] Dropping stale outstanding upload \(row.filename) for '\(branch)'")
+                try? await row.delete(on: db)
+                continue
+            }
+
+            do {
+                folderID = try await boxService.upload(pdf: url, forBranch: branch)
+                log += "[box]   Uploaded \(row.filename), held over from an earlier build\n"
+                row.uploadedAt = Date()
+                row.lastError = nil
+                row.attempts += 1
+                try await row.save(on: db)
+                uploaded.append(row.filename)
+            } catch {
+                log += "[box]   ✗ \(row.filename) failed again: \(error)\n"
+                logger.warning("[BuildService] Retrying \(row.filename) for '\(branch)' failed: \(error)")
+                await markFailed(branch: branch, filename: row.filename,
+                                 error: error, db: db, logger: logger)
+                failures += 1
+            }
+        }
+        return (folderID, uploaded, failures)
+    }
+
+    /// Stamps a binder as having reached Box.
+    ///
+    /// Bookkeeping failures are logged but do not fail the build: the binder *is* in
+    /// Box. The cost is that the next build may upload it a second time, which Box
+    /// records as a new version of the same file and nobody has to clean up.
+    private func markUploaded(branch: String, filename: String, db: Database, logger: Logger) async {
+        do {
+            guard let row = try await BoxUpload.query(on: db)
+                .filter(\.$branch.$id == branch)
+                .filter(\.$filename == filename)
+                .first() else { return }
+            row.uploadedAt = Date()
+            row.lastError = nil
+            row.attempts += 1
+            try await row.save(on: db)
+        } catch {
+            logger.warning("[BuildService] Could not record \(filename) as uploaded: \(error)")
+        }
+    }
+
+    /// Records why a binder did not reach Box, so the next build has something to
+    /// retry and the operator has something to read.
+    private func markFailed(branch: String, filename: String, error: any Error,
+                            db: Database, logger: Logger) async {
+        do {
+            guard let row = try await BoxUpload.query(on: db)
+                .filter(\.$branch.$id == branch)
+                .filter(\.$filename == filename)
+                .first() else { return }
+            row.lastError = "\(error)"
+            row.attempts += 1
+            try await row.save(on: db)
+        } catch {
+            logger.warning("[BuildService] Could not record the failed upload of \(filename): \(error)")
+        }
     }
 
     // MARK: - File discovery

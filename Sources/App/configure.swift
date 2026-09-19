@@ -118,6 +118,7 @@ private func addMigrations(_ app: Application) {
     //   6. LoginToken    — no FK (Slack user ID stored as plain TEXT)
     //   7. BinderDefinition — FK → Branch
     //   8. Setting        — no FKs
+    //   9. BoxUpload      — FK → Branch
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(CreateBranch())
     app.migrations.add(CreateUser())
@@ -132,6 +133,7 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(AddSubtitleToTune())
     // Phase 1 (C5): runtime state that outlives the process.
     app.migrations.add(CreateSetting())
+    app.migrations.add(CreateBoxUpload())
 }
 
 // MARK: - Service initialisation

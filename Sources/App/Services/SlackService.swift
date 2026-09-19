@@ -58,7 +58,8 @@ actor SlackService {
         branch: String,
         status: BuildStatus,
         files: [String],
-        boxFolderURL: String? = nil
+        boxFolderURL: String? = nil,
+        alsoUploaded: [String] = []
     ) async throws {
         struct WebhookBody: Encodable {
             let text: String
@@ -66,7 +67,8 @@ actor SlackService {
         try await postJSON(
             to: webhookURL,
             body: WebhookBody(text: Self.buildNotificationText(
-                branch: branch, status: status, files: files, boxFolderURL: boxFolderURL)),
+                branch: branch, status: status, files: files,
+                boxFolderURL: boxFolderURL, alsoUploaded: alsoUploaded)),
             authorizationHeader: nil
         )
         logger.info("[Slack] Notification posted for branch '\(branch)' (\(status.rawValue))")
@@ -84,7 +86,8 @@ actor SlackService {
         branch: String,
         status: BuildStatus,
         files: [String],
-        boxFolderURL: String? = nil
+        boxFolderURL: String? = nil,
+        alsoUploaded: [String] = []
     ) -> String {
         let emoji: String
         switch status {
@@ -102,6 +105,13 @@ actor SlackService {
         } else {
             text += "Binders rebuilt:\n"
             text += files.map { "• \($0)" }.joined(separator: "\n")
+        }
+        // Earlier builds' notifications are not replayed — a "build succeeded" arriving
+        // hours late is worse than silence — so the catch-up is reported here, where it
+        // actually happened.
+        if !alsoUploaded.isEmpty {
+            text += "\nAlso uploaded, held over from an earlier build:\n"
+            text += alsoUploaded.map { "• \($0)" }.joined(separator: "\n")
         }
         if let boxFolderURL {
             text += "\n<\(boxFolderURL)|Open the \(branch) folder in Box>"
