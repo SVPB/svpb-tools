@@ -239,6 +239,36 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertTrue(html.contains("Uploading into pipe_music"))
     }
 
+    // MARK: - Credential age
+
+    /// The age of the Box token is the one thing on this page that has to be computed
+    /// rather than reported, and it runs on Linux in production.
+    func testCredentialAgeReadsInHoursAndDays() {
+        let now = Date()
+        XCTAssertEqual(ConnectionsReport.relative(now.addingTimeInterval(-60), now: now),
+                       "less than an hour ago")
+        XCTAssertEqual(ConnectionsReport.relative(now.addingTimeInterval(-3 * 3600), now: now),
+                       "3 hour(s) ago")
+        XCTAssertEqual(ConnectionsReport.relative(now.addingTimeInterval(-50 * 3600), now: now),
+                       "2 day(s) ago")
+        XCTAssertEqual(ConnectionsReport.relative(now.addingTimeInterval(60), now: now),
+                       "just now", "A clock that has gone backwards is not an error worth showing")
+    }
+
+    /// A stored token makes the page report its age and its deadline — the path an
+    /// operator actually looks at, and the one that computes anything.
+    func testAStoredTokenReportsItsAgeAndDeadline() async throws {
+        try await Setting.set(Setting.boxRefreshToken, to: "stored-token", on: app.db)
+
+        let connections = await ConnectionsReport.gather(on: app)
+        let box = try XCTUnwrap(connections.first { $0.id == "box" })
+        let credential = try XCTUnwrap(box.credential)
+
+        XCTAssertTrue(credential.contains("last renewed"), credential)
+        XCTAssertTrue(credential.contains("expires in 59 day(s)") || credential.contains("expires in 60 day(s)"),
+                      credential)
+    }
+
     // MARK: - Credentials in the open
 
     /// A clone URL can carry a token as userinfo, and a status page exists to be read by

@@ -151,9 +151,17 @@ enum ConnectionsReport {
     // MARK: - Helpers
 
     /// "3 days ago", for a credential's age.
-    private static func relative(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: Date())
+    ///
+    /// Counted by hand rather than with `RelativeDateTimeFormatter`: this runs on Linux in
+    /// production, where that API is a thin and historically unreliable part of
+    /// corelibs-foundation, and the whole vocabulary needed here is hours and days.
+    static func relative(_ date: Date, now: Date = Date()) -> String {
+        let seconds = now.timeIntervalSince(date)
+        guard seconds >= 0 else { return "just now" }
+
+        let hours = Int(seconds / 3600)
+        if hours < 1 { return "less than an hour ago" }
+        if hours < 24 { return "\(hours) hour(s) ago" }
+        return "\(hours / 24) day(s) ago"
     }
 }
