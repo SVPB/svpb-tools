@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>#if(error):Authorisation failed#else:Authorised#endif — SVPB TNG</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0;
+           display: grid; place-items: center; min-height: 100vh; background: #f7f7f8;
+           color: #1a1a2e; text-align: center; padding: 1.5rem; }
+    .panel { max-width: 46ch; }
+    h1 { font-size: 1.15rem; margin: 0 0 0.6rem; }
+    p  { font-size: 0.9rem; color: #555; margin: 0 0 0.75rem; }
+    .error { font-family: ui-monospace, monospace; font-size: 0.82rem; color: #991b1b;
+             background: #fee2e2; border-radius: 6px; padding: 0.6rem 0.8rem;
+             word-break: break-word; text-align: left; }
+    a { color: #1a1a2e; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    #if(error):
+    <h1>Authorisation failed</h1>
+    <p>Nothing has changed — TNG is still using whatever token it had.</p>
+    <p class="error">#(error)</p>
+    <p><a href="/admin/connections" target="_blank" rel="noopener">Back to Connections</a></p>
+    #else:
+    <h1>Authorised ✓</h1>
+    <p>TNG has a fresh Box refresh token. This window closes itself.</p>
+    <p><a href="/admin/connections">Back to Connections</a></p>
+    #endif
+  </div>
+
+  <script>
+  // Success reloads the page that opened this popup, so its status indicator reflects the
+  // new token, and then closes. A failure stays put so the message can be read.
+  (function () {
+    var failed = #if(error):true#else:false#endif;
+    if (failed) { return; }
+    try { if (window.opener && !window.opener.closed) { window.opener.location.reload(); } } catch (e) {}
+    window.setTimeout(function () { window.close(); }, 1200);
+  })();
+  </script>
+</body>
+</html>

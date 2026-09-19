@@ -77,6 +77,40 @@ actor GitService {
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Status
+
+    /// Asks the remote whether it is there and whether TNG may read it.
+    ///
+    /// `ls-remote` is the cheapest request that exercises both reachability and
+    /// credentials without writing anything to disk.
+    ///
+    /// - Returns: The number of branches the remote advertises.
+    func probeRemote() async throws -> Int {
+        guard !repoURL.isEmpty else {
+            throw GitError.failed(status: 0, output: "SVPB_MUSIC_REPO_URL is not set")
+        }
+        // Run somewhere that certainly exists: `ls-remote` needs no working copy, but a
+        // Process with a missing currentDirectoryURL fails before git is reached.
+        let output = try await run(["ls-remote", "--heads", repoURL],
+                                   in: URL(fileURLWithPath: NSTemporaryDirectory()))
+        return output
+            .split(separator: "\n")
+            .filter { $0.contains("refs/heads/") }
+            .count
+    }
+
+    /// `repoURL` with any embedded credentials removed, safe to show in the UI.
+    ///
+    /// A clone URL can carry a token as userinfo (`https://x-access-token:ghp_…@github…`),
+    /// and a status page exists to be read by whoever is standing there.
+    nonisolated var displayRepoURL: String {
+        guard var components = URLComponents(string: repoURL) else { return repoURL }
+        guard components.user != nil || components.password != nil else { return repoURL }
+        components.user = nil
+        components.password = nil
+        return components.string ?? repoURL
+    }
+
     // MARK: - Private helpers
 
     /// Runs a git command, capturing stdout+stderr.
@@ -87,6 +121,15 @@ actor GitService {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
             process.arguments = args
             process.currentDirectoryURL = directory
+
+            // A server has no terminal to answer a credential prompt at, so git must fail
+            // rather than wait for one. Without this, a repository that has become private
+            // — or a probe of an unreachable remote — hangs the calling task indefinitely
+            // instead of reporting that it cannot authenticate.
+            var environment = ProcessInfo.processInfo.environment
+            environment["GIT_TERMINAL_PROMPT"] = "0"
+            environment["GIT_ASKPASS"] = "true"
+            process.environment = environment
 
             let outputPipe = Pipe()
             let errorPipe  = Pipe()

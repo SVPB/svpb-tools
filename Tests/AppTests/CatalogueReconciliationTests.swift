@@ -40,6 +40,7 @@ final class CatalogueReconciliationTests: XCTestCase {
             gitService: GitService(repoURL: origin.path, workspaceBase: workspace),
             boxService: app.boxService,
             slackService: app.slackService,
+            binderService: app.binderService,
             musicWorkspacePath: workspace.path)
     }
 

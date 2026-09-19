@@ -63,7 +63,7 @@
         <th>Branch</th>
         <th>Triggered</th>
         <th>Status</th>
-        <th>Files</th>
+        <th>Binders</th>
         <th>Log</th>
       </tr>
     </thead>
