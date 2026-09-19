@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### Binder page numbering, which was inert (#19)
+
+- A binder now re-engraves each tune from its ABC source with `%%ceolkit:pagenumber` set to the
+  page it opens on, so the footer prints where the tune sits in *that* binder. Before this, every
+  tune in an assembled binder restarted its footer at 1 — the one thing a binder needs to be
+  usable in rehearsal was the thing that did not work.
+- The old mechanism could not have worked. `BinderService` set
+  `ConversionOptions.startingPageNumber`, which drives SVGPDFKit's `PageNumberInjector`, which
+  rewrites a `<text id="svgpdfkit-page-number">` element that CeolKit does not emit — and returns
+  the SVG unchanged, without error, when it finds none. Nor was there anything to rewrite:
+  CeolKit's `textRendering` defaults to `.outlines`, so a footer is path geometry by the time a
+  binder sees it, and the runtime image installs no fonts, so nothing downstream of CeolKit could
+  draw a replacement either. The number has to be right when CeolKit draws it.
+- `TunePageRenderer` (new) prepends the directive to a tune's ABC, after any `%abc` version line
+  and before everything else, so a tune that sets its own page number still wins.
+- Nothing in TNG dictates the footer itself; the music repository's style sheets do, and the
+  directive moves both of their page-number tokens — `$P`, and the `${pagenumber}` mark CeolKit
+  1.6 added (sbeitzel/CeolKit#137), whose default value is the same number. A binder wants that
+  default drawn, so it needs nothing of the mark beyond CeolKit honouring the directive.
+- A tune whose `%%footer` names neither token is engraved and numbered correctly and simply
+  prints nothing — and nothing in the rendered pages can say so, because a drawn number is
+  outlines like everything else. So the check reads the footer template rather than the output,
+  and the build log names the tunes that print no number. Against `svpb-music` branch `2027`,
+  that is 14 tunes over 20 of 107 pages: the ones still including `style.abh`, which carries no
+  page-number token, rather than `ckstyle.abh`, which prints `Page ${pagenumber}`.
+- Divider pages are counted but print no number, as a book's part titles are: the tune behind a
+  divider is numbered as though the divider were a page, because it is one.
+- A tune with no readable ABC source still reaches the binder, from the pages the build made of
+  it. Those footers number from 1, which is logged at `error` — it is the silent version of the
+  bug this change exists to fix, and it should not pass unremarked.
+- `SVGPDFConverter` is now called with `injectPageNumbers = false` rather than left to perform a
+  no-op. Filed upstream as sbeitzel/SVGPDFKit#3: a missed injection should not be silent.
+
 ### Added
 
 #### The band's circuit thistle as the site icon

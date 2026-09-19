@@ -53,7 +53,7 @@ The two headline improvements over Gen.1 are:
 | B2 | Canonical binder definitions | The pipe major defines the official band binders in `binders.yaml`, committed to the root of the relevant branch of `svpb-music`. One file declares one or more binders; each binder names its output PDF and an ordered list of sections, and each section carries a title (rendered as a divider page) and an ordered list of tunes. The repository is the sole source of truth: the server reads this file from the working directory during the build, assembles the binders it names (C4), and stores the definitions in SQLite alongside the tune catalogue. |
 | B3 | Binder constructor (UI) | A web page that lets the pipe major assemble a binder interactively — browsing the tune catalogue, selecting parts, grouping entries into titled sections, and setting the order — and then displays the resulting YAML for copy-paste into `binders.yaml`. This is how the contents of that file are authored. The page never commits anything itself; the pipe major remains in control of what lands in source control. |
 | B4 | Personal binder builder (UI) | A web page where any band member can browse the tune catalogue, select the specific parts they need, reorder them, group them into titled sections, name the binder, and request a PDF. No login required — a shareable URL encodes the binder definition. The binder constructor (B3) and the personal binder builder share the same tune-selection UI component; they differ only in their output (YAML vs. PDF). |
-| B5 | Personalised PDF generation | Given a binder definition, the server assembles the pre-built per-part PDFs for the selected entries and passes them to `SVGPDFKit` with a `startingPageNumber` offset, so footers reflect position within the *personal* binder rather than the master. Each titled section gets a generated divider page ahead of it, the same page official binders use (C4). No re-conversion from ABC is needed — the part PDFs produced during the build step are reused directly. |
+| B5 | Personalised PDF generation | Given a binder definition, the server re-engraves each selected entry from its ABC source with `%%ceolkit:pagenumber` set to the page it opens on, then feeds the pages to `SVGPDFKit`, so footers reflect position within the *personal* binder rather than the master. Each titled section gets a generated divider page ahead of it, the same page official binders use (C4); a divider is counted but prints no number, the way a book's part titles are. The numbering has to be re-engraved rather than patched in afterwards: CeolKit outlines every glyph it draws, so a rendered footer holds no text to rewrite (#19). |
 | B6 | Binder download link | The generated personalised PDF is served directly from the TNG server as a download, and so exists only on the server and on the member's own computer. It is never pushed to Box: Box holds the official binders named in `binders.yaml` and nothing else. |
 | B7 | Binder URL sharing | A binder definition can be encoded in a URL so a band member can share their configuration with a section leader or print it later without re-selecting everything. |
 
@@ -142,7 +142,7 @@ managed by TNG itself; identity is delegated entirely to the band's Slack worksp
      `I:abc-include` references resolve, so it is set to the ABC file's own directory.
   2. `SVGRenderer(config:).render(_:)` takes that `Score` and returns `[String]` — **one
      complete SVG document per page**. This gives SVGPDFKit a one-to-one mapping of SVG inputs
-     to PDF pages, making `startingPageNumber` injection precise and unambiguous.
+     to PDF pages, so a binder's page count is the number of SVGs it collected.
 - Configured via `SVGRenderConfig` (page size, margins, staff size, system/tune gaps, flag and
   slur styling). Bagpipe-specific engraving is no longer a converter flag: it is driven from the
   ABC source itself with `%%ceolkit:pipeformat true`, so the score files own that decision.
@@ -162,9 +162,13 @@ managed by TNG itself; identity is delegated entirely to the band's Slack worksp
 - Public API: `SVGPDFConverter` struct; call `convert(sources:)` with an array of `SVGSource`
   values (`.data(Data)` accepts in-memory SVG output directly from CeolKit) and receive a `Data`
   blob containing the finished PDF.
-- `ConversionOptions.startingPageNumber` is used directly for personal binder page numbering:
-  each binder request calculates the correct offset and passes it in, so footer page numbers
-  automatically reflect position within the personal binder rather than the master.
+- `ConversionOptions.startingPageNumber` is **not** used. It drives `PageNumberInjector`, which
+  rewrites the text of a `<text id="svgpdfkit-page-number">` element that CeolKit does not emit,
+  and which changes nothing and reports nothing when it finds no match (sbeitzel/SVGPDFKit#3).
+  Nor could it work: CeolKit's default `.outlines` text rendering leaves path geometry rather
+  than text, and the runtime image installs no fonts, so nothing downstream of CeolKit can read
+  or draw a page number. `BinderService` sets `injectPageNumbers = false` and gets the numbers
+  right at engraving time instead — see B5 and `TunePageRenderer`.
 
 **TLS / Reverse Proxy:** [Caddy](https://caddyserver.com/)
 
@@ -414,10 +418,13 @@ untitled section.
   configuration can be bookmarked or sent to a section leader. Polls `GET /binders/{id}` for
   completion, then presents a download link.
 - Binder generation backend:
-  - Look up the pre-built per-part PDF paths from the `Part` table for each binder entry.
-  - Feed the PDFs as `SVGSource.fileURL` inputs to `SVGPDFConverter`, setting
-    `startingPageNumber` to the correct offset for this binder (calculated by summing page
-    counts of preceding entries).
+  - Resolve each binder entry against the `Part` table, which is the authority on whether a part
+    produced pages, and take the tune's ABC source path from the `Tune` record.
+  - Re-engrave each entry with `%%ceolkit:pagenumber` set to the page it opens on — the count of
+    pages already collected, dividers included — and feed the resulting SVGs to
+    `SVGPDFConverter` with page-number injection switched off. A tune with no readable ABC falls
+    back to the build's pages, unnumbered, and says so in the log. So does a tune whose
+    `%%footer` names neither `$P` nor `${pagenumber}` and therefore prints no number at all.
   - Persist the completed `BinderRequest` record; serve the PDF via a streaming Vapor `Response`.
 
 ### Phase 3 — Hardening and Handoff (2–3 days)
