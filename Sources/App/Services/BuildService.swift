@@ -14,13 +14,18 @@ import Vapor
 ///   3. Discover every `.abc` file in the working tree.
 ///   4. For each file: convert ABC → per-page SVGs (CeolKit) → PDF (SVGPDFKit).
 ///   5. Optionally upload each PDF to Box (via `BoxService`).
-///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records.
+///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records, then delete the
+///      tunes whose `.abc` file has left the working tree.
 ///   7. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
 ///   8. Optionally post a Slack notification (via `SlackService`).
 ///   9. Update the `Build` record (status, log, files).
 ///
 /// Status is `.failure` when the pipeline threw, `.partial` when it finished but
 /// any per-file or distribution step failed, and `.success` only when nothing did.
+///
+/// The catalogue is reconciled rather than rebuilt: nothing is deleted until the
+/// conversion loop has finished, so a build that throws part-way leaves the branch
+/// serving the entries it already had instead of the fraction this build reached.
 ///
 /// The service also removes branches (`removeBranch`). Builds and removals of the
 /// same branch exclude each other, so a removal cannot race a build into recreating
@@ -142,14 +147,6 @@ actor BuildService {
             log += "[build] Found \(abcFiles.count) .abc file(s)\n"
             logger.info("[BuildService] \(abcFiles.count) .abc files in '\(branch)'")
 
-            // ── clear existing catalogue for this branch ─────────────────────
-            // Delete all Tune records (Parts cascade-delete via FK constraint).
-            try await Tune.query(on: db)
-                .filter(\.$branch.$id == branch)
-                .delete()
-            log += "[catalogue] Cleared existing catalogue entries for '\(branch)'\n"
-            logger.info("[BuildService] Cleared catalogue for '\(branch)'")
-
             // ── convert each file ───────────────────────────────────────────
             let outputDir = outputDirectory(for: branch)
             try FileManager.default.createDirectory(at: outputDir,
@@ -228,6 +225,41 @@ actor BuildService {
                     logger.warning("[BuildService] Catalogue upsert failed for \(stem): \(error)")
                     failedSteps += 1
                 }
+            }
+
+            // ── reconcile the catalogue with the working tree ───────────────
+            // The branch keeps the entries it had until this build has something
+            // to put in their place, so a throw anywhere above leaves a stale
+            // catalogue rather than a gutted one. What goes now is the tunes whose
+            // `.abc` file has left the tree, and nothing else: a file that failed
+            // to convert is still in the tree, so its entry survives as it was.
+            do {
+                let stems = Set(abcFiles.map { $0.deletingPathExtension().lastPathComponent })
+                if stems.isEmpty {
+                    // A tree with no music in it is far more likely to be a bad
+                    // checkout than a branch that has genuinely lost every tune,
+                    // and an empty catalogue is the damage this build exists not
+                    // to do. Keep the rows; say so loudly. `removeBranch` is how
+                    // a branch's catalogue is meant to end.
+                    let kept = try await Tune.query(on: db).filter(\.$branch.$id == branch).count()
+                    if kept > 0 {
+                        log += "[catalogue] ⚠ No .abc files in the tree; keeping the "
+                        log += "\(kept) existing catalogue row(s) rather than emptying the catalogue\n"
+                        logger.warning("[BuildService] '\(branch)' has no .abc files; kept \(kept) catalogue row(s)")
+                        failedSteps += 1
+                    }
+                } else {
+                    let pruned = try await pruneCatalogue(branch: branch, keeping: stems, db: db)
+                    if !pruned.tunes.isEmpty {
+                        log += "[catalogue] Removed \(pruned.tunes.count) tune(s) no longer in the tree "
+                        log += "(\(pruned.parts) part(s)): \(pruned.tunes.joined(separator: ", "))\n"
+                        logger.info("[BuildService] Pruned \(pruned.tunes.count) tune(s) from '\(branch)'")
+                    }
+                }
+            } catch {
+                log += "[catalogue] Pruning removed tunes failed: \(error)\n"
+                logger.warning("[BuildService] Catalogue pruning failed for '\(branch)': \(error)")
+                failedSteps += 1
             }
 
             // ── official binder definitions ─────────────────────────────────
@@ -430,12 +462,17 @@ actor BuildService {
 
     // MARK: - Catalogue population
 
-    /// Upserts `Tune` and `Part` records for one converted ABC file.
+    /// Upserts the `Tune` and `Part` records for one converted ABC file, and drops
+    /// the parts that file no longer declares.
     ///
     /// Takes the `ParseResult` produced for rendering rather than the raw ABC
     /// text: the file has already been parsed once, and CeolKit's score model
     /// carries the title and voice names the catalogue needs.
-    private func upsertCatalogueEntry(
+    ///
+    /// One transaction per file, so an entry is never left half-written: a tune
+    /// either has the parts this build engraved for it or the ones the last build
+    /// did, and no member is offered a part whose PDF was never made.
+    func upsertCatalogueEntry(
         branch: String,
         stem: String,
         abcPath: String,
@@ -446,47 +483,90 @@ actor BuildService {
     ) async throws {
         let entry = CatalogueExtractor.extract(from: parsed)
 
-        // Upsert Tune
-        let tune: Tune
-        if let existing = try await Tune.query(on: db)
-            .filter(\.$branch.$id == branch)
-            .filter(\.$slug == stem)
-            .first() {
-            existing.title = entry.title
-            existing.subtitle = entry.subtitle
-            existing.abcPath = abcPath
-            try await existing.save(on: db)
-            tune = existing
-        } else {
-            let fresh = Tune()
-            fresh.$branch.id = branch
-            fresh.slug = stem
-            fresh.title = entry.title
-            fresh.subtitle = entry.subtitle
-            fresh.abcPath = abcPath
-            try await fresh.save(on: db)
-            tune = fresh
-        }
-
-        let tuneID = try tune.requireID()
-
-        // Upsert Parts
-        for partName in entry.parts {
-            if let existing = try await Part.query(on: db)
-                .filter(\.$tune.$id == tuneID)
-                .filter(\.$name == partName)
+        try await db.transaction { tx in
+            // Upsert Tune
+            let tune: Tune
+            if let existing = try await Tune.query(on: tx)
+                .filter(\.$branch.$id == branch)
+                .filter(\.$slug == stem)
                 .first() {
-                existing.pdfPath = pdfPath
-                existing.svgPaths = svgPaths
-                try await existing.save(on: db)
+                existing.title = entry.title
+                existing.subtitle = entry.subtitle
+                existing.abcPath = abcPath
+                try await existing.save(on: tx)
+                tune = existing
             } else {
-                let part = Part()
-                part.$tune.id = tuneID
-                part.name = partName
-                part.pdfPath = pdfPath
-                part.svgPaths = svgPaths
-                try await part.save(on: db)
+                let fresh = Tune()
+                fresh.$branch.id = branch
+                fresh.slug = stem
+                fresh.title = entry.title
+                fresh.subtitle = entry.subtitle
+                fresh.abcPath = abcPath
+                try await fresh.save(on: tx)
+                tune = fresh
             }
+
+            let tuneID = try tune.requireID()
+
+            // Upsert Parts
+            for partName in entry.parts {
+                if let existing = try await Part.query(on: tx)
+                    .filter(\.$tune.$id == tuneID)
+                    .filter(\.$name == partName)
+                    .first() {
+                    existing.pdfPath = pdfPath
+                    existing.svgPaths = svgPaths
+                    try await existing.save(on: tx)
+                } else {
+                    let part = Part()
+                    part.$tune.id = tuneID
+                    part.name = partName
+                    part.pdfPath = pdfPath
+                    part.svgPaths = svgPaths
+                    try await part.save(on: tx)
+                }
+            }
+
+            // A renamed or deleted voice used to disappear with the wholesale
+            // clear that ran before conversion. Nothing clears now, so the parts
+            // this file has stopped declaring have to go here, or a binder would
+            // keep offering a part that no longer exists in the arrangement.
+            try await Part.query(on: tx)
+                .filter(\.$tune.$id == tuneID)
+                .filter(\.$name !~ entry.parts)
+                .delete()
+        }
+    }
+
+    /// Deletes the branch's tunes — and their parts — whose slug is not in
+    /// `slugs`, i.e. whose `.abc` file is no longer in the working tree.
+    ///
+    /// Runs once conversion has finished, in one transaction, and touches nothing
+    /// a build might still be writing. A tune that is in the tree but failed to
+    /// convert keeps its existing row: the file is still there, so the entry is
+    /// stale, not gone.
+    ///
+    /// - Returns: The slugs removed, in order, and how many parts went with them.
+    func pruneCatalogue(
+        branch: String,
+        keeping slugs: Set<String>,
+        db: any Database
+    ) async throws -> (tunes: [String], parts: Int) {
+        try await db.transaction { tx in
+            let stale = try await Tune.query(on: tx)
+                .filter(\.$branch.$id == branch)
+                .all()
+                .filter { !slugs.contains($0.slug) }
+            let staleIDs = try stale.map { try $0.requireID() }
+            guard !staleIDs.isEmpty else { return (tunes: [], parts: 0) }
+
+            // Parts would cascade from tunes, but deleting them explicitly gives
+            // the count — as `removeBranch` does.
+            let parts = try await Part.query(on: tx).filter(\.$tune.$id ~~ staleIDs).count()
+            try await Part.query(on: tx).filter(\.$tune.$id ~~ staleIDs).delete()
+            try await Tune.query(on: tx).filter(\.$id ~~ staleIDs).delete()
+
+            return (tunes: stale.map(\.slug).sorted(), parts: parts)
         }
     }
 
