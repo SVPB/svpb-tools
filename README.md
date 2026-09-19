@@ -442,10 +442,16 @@ Box OAuth2 requires completing an authorization flow once. Sign in to the dashbo
 its database, and the server starts without one precisely so that it can be authorized this way.
 
 > **Important:** Box access tokens expire after one hour, and refresh tokens after 60 days of
-> disuse. TNG exchanges the refresh token for a new access token as needed and writes the new
-> refresh token back to its database, so routine operation needs no intervention — every build
-> restarts the 60-day clock. The Connections page shows how much of it is left. If it does run
-> out, press **Re-authorise Box** and repeat the three steps above.
+> disuse. TNG renews its refresh token **once a day**, whether or not anything has been built,
+> and writes each new one to its database — so as long as the server is running, its Box access
+> cannot lapse. This matters because the band goes months between edits to the music: renewing
+> only when a build uploads would mean a quiet winter ended with a dead token. Set
+> `BOX_TOKEN_REFRESH_HOURS` to change the interval.
+>
+> The daily renewal doubles as a check that Box still works. If one fails, TNG posts to the
+> Slack channel — once when it starts failing and once when it recovers, not every day — and the
+> Connections page shows the error. If the token does lapse, press **Re-authorise Box** and
+> repeat the three steps above.
 
 **Fallback: the `box-auth` command.**
 

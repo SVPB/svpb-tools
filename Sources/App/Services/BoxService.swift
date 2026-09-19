@@ -353,14 +353,7 @@ actor BoxService {
         }
 
         let decoded = try response.decode(TokenResponse.self)
-        do {
-            try await adopt(decoded)
-        } catch {
-            // The upload can still go ahead on the access token just issued — but the next
-            // restart would reach for a refresh token Box has retired, so this is an error,
-            // not a warning.
-            logger.error("[Box] Could not persist the rotated refresh token; a restart will need re-authorisation: \(error)")
-        }
+        try await adopt(decoded)
         return decoded.accessToken
     }
 
@@ -370,10 +363,39 @@ actor BoxService {
     /// just came back is the only way in from here. It is recorded before it is used for
     /// anything.
     private func adopt(_ tokens: TokenResponse) async throws {
+        // In-memory state first, deliberately. Box has already invalidated the token we
+        // presented, so if the write below fails, holding the new one in memory is the
+        // difference between "broken at the next restart" and "broken now" — and it
+        // leaves a window in which the database can be fixed without re-authorising.
         accessToken = tokens.accessToken
         tokenExpiry = Date().addingTimeInterval(TimeInterval(tokens.expiresIn) - Self.expiryMargin)
         refreshToken = tokens.refreshToken
-        try await Setting.set(Setting.boxRefreshToken, to: tokens.refreshToken, on: db)
+
+        do {
+            try await Setting.set(Setting.boxRefreshToken, to: tokens.refreshToken, on: db)
+        } catch {
+            // One immediate retry: a momentarily busy SQLite file is transient, and what
+            // is at stake is the only credential that can get back in.
+            do {
+                try await Setting.set(Setting.boxRefreshToken, to: tokens.refreshToken, on: db)
+            } catch {
+                logger.critical("[Box] A new refresh token was issued but could not be stored. Box has already invalidated the previous one, so this server loses its Box access when it restarts unless the write starts working: \(error)")
+                throw BoxError.tokenNotPersisted("\(error)")
+            }
+        }
+    }
+
+    // MARK: - Keeping the token alive
+
+    /// Renews the tokens whether or not the current access token has expired.
+    ///
+    /// A refresh token dies after 60 days of *disuse*, and TNG only presents one when it
+    /// has a binder to upload — so a band that does not touch its music over a winter
+    /// would come back to a dead credential. Renewing on a timer instead of on activity
+    /// means a server that is merely running keeps its own access alive, because every
+    /// refresh issues a token with a fresh 60 days on it.
+    func renew() async throws {
+        _ = try await refreshAccessToken()
     }
 
     // MARK: - Interactive authorisation
@@ -552,17 +574,23 @@ enum BoxError: Error, CustomStringConvertible {
     case refreshRejected(body: String)
     /// Box rejected the access token. Retried once before it reaches a caller.
     case unauthorized
+    /// Box issued a new refresh token that could not be written down.
+    case tokenNotPersisted(String)
     case http(status: UInt, body: String)
     case unexpectedBody(String)
 
     var description: String {
         switch self {
         case .noRefreshToken:
-            return "No Box refresh token: set BOX_REFRESH_TOKEN, or run `box-auth` to obtain one"
+            return "No Box refresh token: authorise TNG from the Connections page on the "
+                + "admin dashboard, or seed BOX_REFRESH_TOKEN from a `box-auth` run"
         case .refreshRejected(let body):
             return "Box rejected the refresh token — run `box-auth` to issue a new one: \(body)"
         case .unauthorized:
             return "Box rejected the access token"
+        case .tokenNotPersisted(let detail):
+            return "A new Box refresh token was issued but could not be stored, so it will "
+                + "be lost at the next restart: \(detail)"
         case .http(let status, let body):
             return "HTTP \(status) from Box: \(body)"
         case .unexpectedBody(let body):

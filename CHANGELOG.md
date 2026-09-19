@@ -8,6 +8,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### The Box refresh token renews on a timer, not on activity (#53)
+
+- Box expires a refresh token 60 days after its last use, and a build uploading a binder was
+  the only thing that ever used one. The band goes months between edits to the music, so a
+  quiet winter ended with a dead credential and a manual re-authorisation — the chore the
+  connections page (#51) exists to abolish.
+- TNG now renews the token every 24 hours whether or not anything has been built, so a server
+  that is merely running keeps its own access alive: each refresh issues a token with a fresh
+  60 days on it. `BOX_TOKEN_REFRESH_HOURS` changes the interval; anything unparseable falls
+  back to daily rather than switching the renewal off, which would be the one failure nobody
+  notices until the token has already gone.
+- It doubles as a liveness check, which is half its value. A revoked token or an unreachable
+  Box used to surface when someone next pushed music, potentially two months after it broke.
+- So a failure is **announced**, not merely logged — nobody reads the server log, and the whole
+  point is that nobody is looking. TNG posts to the Slack channel when the outcome *changes*:
+  once when renewal starts failing, once when it recovers. A fortnight's outage is one message,
+  not fourteen, because a channel that cries daily is a channel that gets muted.
+- The timer runs in the server process rather than as a cron job on the droplet. TNG being
+  self-contained is a deliberate property of the deployment, and an external timer is one more
+  thing to forget when the droplet is rebuilt.
+
+### Fixed
+
+#### A refresh token that cannot be written down is now a failure, not a log line (#53)
+
+- Box invalidates the token it was given the moment it issues a new one, so a refresh whose
+  database write fails leaves the server holding the only usable copy in memory — working until
+  the next restart, then locked out, with nothing but an `error` line to say so. Renewing daily
+  rather than per-build multiplies the chances of hitting that window.
+- The write is now part of the refresh succeeding: it retries once, then logs at `critical` and
+  throws. In-memory state is still updated first and deliberately, so the process keeps working
+  and there is a window in which the database can be fixed without re-authorising.
+
+### Added
+
 #### A Connections page: every remote service, its state, and a button where one helps (#51)
 
 - `/admin/connections` reports GitHub, Box and Slack side by side. Each is asked a real
