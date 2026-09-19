@@ -50,13 +50,23 @@ actor SlackService {
     }
 
     /// Posts a build notification to the configured channel via Incoming Webhook.
-    func postBuildNotification(branch: String, status: BuildStatus, files: [String]) async throws {
+    ///
+    /// - Parameters:
+    ///   - files: The binders this build rebuilt, by filename.
+    ///   - boxFolderURL: The year folder the binders went to, when they reached Box.
+    func postBuildNotification(
+        branch: String,
+        status: BuildStatus,
+        files: [String],
+        boxFolderURL: String? = nil
+    ) async throws {
         struct WebhookBody: Encodable {
             let text: String
         }
         try await postJSON(
             to: webhookURL,
-            body: WebhookBody(text: Self.buildNotificationText(branch: branch, status: status, files: files)),
+            body: WebhookBody(text: Self.buildNotificationText(
+                branch: branch, status: status, files: files, boxFolderURL: boxFolderURL)),
             authorizationHeader: nil
         )
         logger.info("[Slack] Notification posted for branch '\(branch)' (\(status.rawValue))")
@@ -66,7 +76,16 @@ actor SlackService {
     ///
     /// A `partial` build must not read as a success: the channel is where band
     /// members without dashboard habits find out whether the new PDFs are real.
-    static func buildNotificationText(branch: String, status: BuildStatus, files: [String]) -> String {
+    ///
+    /// What it names is the binders — the build's product — not the per-tune PDFs it
+    /// made them from, and it links the Box folder they went to, because "the new
+    /// binder is up" is only useful with somewhere to go and read it.
+    static func buildNotificationText(
+        branch: String,
+        status: BuildStatus,
+        files: [String],
+        boxFolderURL: String? = nil
+    ) -> String {
         let emoji: String
         switch status {
         case .success: emoji = "✅"
@@ -78,9 +97,15 @@ actor SlackService {
         if status == .partial {
             text += "_Some steps failed; see the build log on the admin dashboard._\n"
         }
-        text += files.isEmpty
-            ? "_(no files)_"
-            : files.map { "• \($0)" }.joined(separator: "\n")
+        if files.isEmpty {
+            text += "_(no binders)_"
+        } else {
+            text += "Binders rebuilt:\n"
+            text += files.map { "• \($0)" }.joined(separator: "\n")
+        }
+        if let boxFolderURL {
+            text += "\n<\(boxFolderURL)|Open the \(branch) folder in Box>"
+        }
         return text
     }
 

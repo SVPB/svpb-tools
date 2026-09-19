@@ -180,7 +180,15 @@ actor BuildService {
                     fileResolver: CeolKitParser.defaultFileResolver
                 )
                 let parsed = parser.parse(abcContent, options: .default)
-                log += formatDiagnostics(parsed, stem: stem)
+                let diagnostics = formatDiagnostics(parsed, stem: stem)
+                log += diagnostics.text
+                if diagnostics.errors > 0 {
+                    // The pages will still be engraved, from a score CeolKit had to
+                    // guess at. That is not a tune that built, so the build does not
+                    // come out green over it.
+                    logger.warning("[BuildService] \(stem).abc parsed with \(diagnostics.errors) error(s)")
+                    failedSteps += 1
+                }
 
                 // CeolKit's SVG renderer returns one complete <svg>…</svg> document
                 // per page. Write each to its own numbered file so SVGPDFKit can
@@ -269,17 +277,19 @@ actor BuildService {
 
             // ── assemble the official binders ───────────────────────────────
             // These are the build's product: what `Build.files` lists, what Slack names,
-            // and — once C5 lands — the only thing that goes to Box.
+            // and the only thing that goes to Box.
             let assembly = await assembleOfficialBinders(
                 branch: branch, binders: definitions.binders, db: db, log: &log, logger: logger)
             failedSteps += assembly.failures
             producedFiles = assembly.binders.map(\.filename)
 
             // ── Box upload (skipped for catalogue sync) ─────────────────────
+            var boxFolderURL: String?
             if uploadToBox {
                 let upload = await uploadBinders(
                     assembly.binders, branch: branch, log: &log, logger: logger)
                 failedSteps += upload.failures
+                boxFolderURL = upload.folderID.map(BoxService.folderURL(id:))
             }
 
             // ── update Branch record timestamps ─────────────────────────────
@@ -296,7 +306,8 @@ actor BuildService {
                     try await slackService.postBuildNotification(
                         branch: branch,
                         status: failedSteps == 0 ? .success : .partial,
-                        files: producedFiles)
+                        files: producedFiles,
+                        boxFolderURL: boxFolderURL)
                 } catch {
                     log += "[slack] Notification failed: \(error)\n"
                     logger.warning("[BuildService] Slack notification failed: \(error)")
@@ -768,18 +779,20 @@ actor BuildService {
 
     // MARK: - Parser diagnostics
 
-    /// Renders CeolKit parse diagnostics as build-log lines.
+    /// Renders CeolKit parse diagnostics as build-log lines, and counts the errors
+    /// among them.
     ///
     /// Diagnostics replace the stdout/stderr that the previous `abcm2ps`-backed
     /// converter emitted, so they are the operator's only window into a source
     /// file that parsed badly. `info`-severity entries are dropped to keep the
     /// log readable.
-    private func formatDiagnostics(_ parsed: ParseResult, stem: String) -> String {
+    private func formatDiagnostics(_ parsed: ParseResult, stem: String) -> (text: String, errors: Int) {
         var out = ""
+        var errors = 0
         for diagnostic in parsed.diagnostics {
             let label: String
             switch diagnostic.severity {
-            case .error:   label = "✗ error"
+            case .error:   label = "✗ error"; errors += 1
             case .warning: label = "⚠ warning"
             case .info:    continue
             }
@@ -791,7 +804,7 @@ actor BuildService {
                 out += "[parse]     hint: \(hint)\n"
             }
         }
-        return out
+        return (out, errors)
     }
 
     // MARK: - PDF conversion
