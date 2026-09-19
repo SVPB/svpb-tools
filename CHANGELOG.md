@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+#### A failed build no longer empties the branch catalogue (#22)
+
+- A build used to delete every `Tune` (and, by cascade, every `Part`) for the branch *before*
+  converting a single file, then upsert its way back. Anything that threw in the conversion loop —
+  a malformed ABC file, a renderer error, a full disk, a restart — left the branch holding only
+  what had been upserted before the failure, and a failure on the first file left it empty. What a
+  member saw was `/binder-builder` and `/binder-constructor` going blank, with nothing but another
+  successful build to bring them back and nothing in the build report to say that the catalogue,
+  rather than the build, was the casualty.
+- The catalogue is now reconciled instead of rebuilt. Every file is upserted as before, and only
+  once the loop has finished are the tunes whose `.abc` file has left the working tree deleted, in
+  one transaction. A build that throws leaves the entries the last good build wrote — stale for as
+  long as the branch stays broken, which is the failure worth having.
+- A file that is still in the tree but failed to convert keeps its existing entry for the same
+  reason: the tune has not gone anywhere, so the catalogue should not say it has.
+- Each file's upsert is its own transaction, and it now deletes the parts that file has stopped
+  declaring — the work the wholesale clear used to do by accident. A renamed or removed voice
+  disappears from the catalogue; a half-written entry never reaches it.
+- A tree that turns out to hold no `.abc` files at all prunes nothing, logs what it kept, and marks
+  the build partial. An empty tree is far likelier to be a bad checkout than a branch that has
+  genuinely lost every tune, and `removeBranch` (#33) is how a branch is meant to end.
+- `BuildService`'s pipeline is now covered end to end: the tests clone a fixture repository from a
+  local path, so a build that fails part-way through conversion is something the suite can actually
+  arrange.
+
 #### Binder page numbering, which was inert (#19)
 
 - A binder now re-engraves each tune from its ABC source with `%%ceolkit:pagenumber` set to the
