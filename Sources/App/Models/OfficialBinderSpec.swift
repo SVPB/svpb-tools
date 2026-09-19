@@ -70,3 +70,34 @@ struct OfficialBinderEntry: Codable, Sendable {
     /// today keeps its meaning when part selection lands.
     let parts: [String]?
 }
+
+// MARK: - Assembly
+
+extension OfficialBinder {
+
+    /// This binder as the `BinderSpec` the assembler builds from.
+    ///
+    /// Official and personal binders are assembled by the same code — the pages, the
+    /// divider ahead of each titled section, and the re-engraved page numbers are the
+    /// same problem either way — so `binders.yaml`'s shape is mapped onto the personal
+    /// spec rather than duplicating `BinderService`.
+    ///
+    /// Every section of an official binder has a title, so every one gets a divider.
+    /// Entries carry **no parts**: per-part rendering is deferred past MVP (#20), and an
+    /// empty `parts` list is how a spec asks for the tune's one set of pages. Honouring
+    /// `parts:` today would repeat the whole score once per named part, since every
+    /// `Part` row of a tune points at the same `svgPaths`. When #20 lands, this is where
+    /// `entry.parts` starts being passed through.
+    func spec(branch: String) -> BinderSpec {
+        BinderSpec(
+            name: name,
+            branch: branch,
+            sections: sections.map { section in
+                BinderSection(
+                    title: section.title,
+                    entries: section.entries.map { BinderEntry(tuneSlug: $0.tune, parts: []) }
+                )
+            }
+        )
+    }
+}

@@ -17,8 +17,13 @@ import Vapor
 ///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records, then delete the
 ///      tunes whose `.abc` file has left the working tree.
 ///   7. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
-///   8. Optionally post a Slack notification (via `SlackService`).
-///   9. Update the `Build` record (status, log, files).
+///   8. Assemble the official binders that file declares (via `BinderService`).
+///   9. Optionally post a Slack notification (via `SlackService`).
+///  10. Update the `Build` record (status, log, files).
+///
+/// The build's *product* is the assembled binders, which is what `Build.files` lists and
+/// what the Slack notification names. The per-tune PDFs are intermediates: they are what
+/// the binders and the personalised builder are made from, and they stay on the server.
 ///
 /// Status is `.failure` when the pipeline threw, `.partial` when it finished but
 /// any per-file or distribution step failed, and `.success` only when nothing did.
@@ -35,6 +40,7 @@ actor BuildService {
     private let gitService: GitService
     private let boxService: BoxService
     private let slackService: SlackService
+    private let binderService: BinderService
     private let musicWorkspaceURL: URL
 
     /// Builds currently running in this process, per branch. Webhook and manual
@@ -47,11 +53,13 @@ actor BuildService {
         gitService: GitService,
         boxService: BoxService,
         slackService: SlackService,
+        binderService: BinderService,
         musicWorkspacePath: String
     ) {
         self.gitService = gitService
         self.boxService = boxService
         self.slackService = slackService
+        self.binderService = binderService
         self.musicWorkspaceURL = URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
     }
 
@@ -131,7 +139,10 @@ actor BuildService {
         }
 
         var log = uploadToBox ? "" : "[catalogue-sync] Box upload and Slack notification skipped.\n"
+        /// The assembled official binders — what this build produced.
         var producedFiles: [String] = []
+        /// Per-tune PDFs, counted for the log. They are intermediates, not products.
+        var convertedTunes = 0
         // Steps that failed without aborting the build; any makes it `.partial`.
         var failedSteps = 0
 
@@ -194,7 +205,7 @@ actor BuildService {
 
                 let pdfURL = outputDir.appendingPathComponent("\(stem).pdf")
                 try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL)
-                producedFiles.append("\(stem).pdf")
+                convertedTunes += 1
 
                 // ── Box upload (skipped for catalogue sync) ─────────────────
                 if uploadToBox {
@@ -264,8 +275,17 @@ actor BuildService {
 
             // ── official binder definitions ─────────────────────────────────
             // After conversion, so entries are checked against this build's catalogue.
-            failedSteps += await refreshBinderDefinitions(
+            let definitions = await refreshBinderDefinitions(
                 branch: branch, branchDir: branchDir, db: db, log: &log, logger: logger)
+            failedSteps += definitions.failures
+
+            // ── assemble the official binders ───────────────────────────────
+            // These are the build's product: what `Build.files` lists, what Slack names,
+            // and — once C5 lands — the only thing that goes to Box.
+            let assembly = await assembleOfficialBinders(
+                branch: branch, binders: definitions.binders, db: db, log: &log, logger: logger)
+            failedSteps += assembly.failures
+            producedFiles = assembly.binders.map(\.filename)
 
             // ── update Branch record timestamps ─────────────────────────────
             branchRecord.lastBuilt = Date()
@@ -299,7 +319,7 @@ actor BuildService {
             build.files = producedFiles
             build.log = log
             try await build.save(on: db)
-            logger.info("[BuildService] Build \(build.id!) finished \(build.status.rawValue) (\(producedFiles.count) files, \(failedSteps) failed step(s))")
+            logger.info("[BuildService] Build \(build.id!) finished \(build.status.rawValue) (\(convertedTunes) tune(s) converted, \(producedFiles.count) binder(s) assembled, \(failedSteps) failed step(s))")
 
         } catch {
             log += "[error] \(error)\n"
@@ -414,6 +434,17 @@ actor BuildService {
         musicWorkspaceURL
             .appendingPathComponent("output", isDirectory: true)
             .appendingPathComponent(branch, isDirectory: true)
+    }
+
+    /// The assembled official binders for `branch`.
+    ///
+    /// A subdirectory of the branch's output directory rather than the directory itself:
+    /// a binder's `output:` filename is chosen by the pipe major and a tune's is the
+    /// `.abc` stem, so `2026_binder.pdf` sitting beside the tunes would silently
+    /// overwrite — or be overwritten by — a tune slugged `2026_binder`. Nested inside
+    /// `output/<branch>`, it still goes when `removeBranch` deletes that directory.
+    func binderOutputDirectory(for branch: String) -> URL {
+        outputDirectory(for: branch).appendingPathComponent("binders", isDirectory: true)
     }
 
     /// The checkout and output directories for `branch`, keyed by workspace-relative
@@ -580,14 +611,15 @@ actor BuildService {
     /// is the source of truth — leaves the branch with no stored definitions rather
     /// than stale ones.
     ///
-    /// - Returns: The number of failed steps (0 or more) to add to the build's count.
+    /// - Returns: The binders the file declares — empty when it is absent or unusable —
+    ///   and the number of failed steps (0 or more) to add to the build's count.
     private func refreshBinderDefinitions(
         branch: String,
         branchDir: URL,
         db: Database,
         log: inout String,
         logger: Logger
-    ) async -> Int {
+    ) async -> (binders: [OfficialBinder], failures: Int) {
         let fileName = BinderDefinitionLoader.fileName
         var failures = 0
         var binders: [OfficialBinder] = []
@@ -628,7 +660,62 @@ actor BuildService {
             logger.warning("[BuildService] Storing binder definitions failed: \(error)")
             failures += 1
         }
-        return failures
+        return (binders, failures)
+    }
+
+    // MARK: - Official binder assembly
+
+    /// One assembled official binder.
+    struct AssembledBinder: Sendable {
+        /// The `output:` filename the binder declared, which is also its name in Box.
+        let filename: String
+        /// Where it was written on disk.
+        let url: URL
+    }
+
+    /// Assembles every binder `binders.yaml` declared, writing each to the branch's
+    /// binder output directory.
+    ///
+    /// One binder failing does not stop the others: a band with two binders and one
+    /// broken tune should still get the binder that is fine. Each failure is a failed
+    /// step, so the build comes out `partial` rather than green.
+    ///
+    /// A tune the binder names but the catalogue could not supply is logged per binder,
+    /// not just once per file: `refreshBinderDefinitions` says the slug is unknown, and
+    /// this says which binder went to press without it.
+    private func assembleOfficialBinders(
+        branch: String,
+        binders: [OfficialBinder],
+        db: Database,
+        log: inout String,
+        logger: Logger
+    ) async -> (binders: [AssembledBinder], failures: Int) {
+        guard !binders.isEmpty else { return ([], 0) }
+
+        let directory = binderOutputDirectory(for: branch)
+        var assembled: [AssembledBinder] = []
+        var failures = 0
+
+        for binder in binders {
+            do {
+                let result = try await binderService.assemble(
+                    binder, branch: branch, in: directory, db: db, logger: logger)
+                log += "[binder] Assembled \(binder.output) — \(result.pageCount) page(s)\n"
+                for slug in result.missing {
+                    log += "[binder]   ⚠ \(binder.output) is missing '\(slug)': it produced no pages\n"
+                }
+                if !result.missing.isEmpty {
+                    logger.warning("[BuildService] \(binder.output) assembled without \(result.missing.count) tune(s)")
+                    failures += 1
+                }
+                assembled.append(AssembledBinder(filename: binder.output, url: result.url))
+            } catch {
+                log += "[binder] ✗ \(binder.output) could not be assembled: \(error)\n"
+                logger.warning("[BuildService] Assembling \(binder.output) for '\(branch)' failed: \(error)")
+                failures += 1
+            }
+        }
+        return (assembled, failures)
     }
 
     // MARK: - File discovery

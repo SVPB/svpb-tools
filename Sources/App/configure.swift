@@ -164,14 +164,16 @@ private func initServices(_ app: Application) {
     )
     app.slackService = slackService
 
+    let binderService = BinderService(musicWorkspacePath: musicWorkspacePath)
+    app.binderService = binderService
+
     app.buildService = BuildService(
         gitService:         gitService,
         boxService:         boxService,
         slackService:       slackService,
+        binderService:      binderService,
         musicWorkspacePath: musicWorkspacePath
     )
-
-    app.binderService = BinderService(musicWorkspacePath: musicWorkspacePath)
 }
 
 // MARK: - Admin bootstrap

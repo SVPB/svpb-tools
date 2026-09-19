@@ -48,7 +48,7 @@ final class BinderGenerationTests: XCTestCase {
             BinderSection(title: "  ", entries: [entry("march")]),
         ])
 
-        let pages = try await service.pages(for: spec, requestID: UUID(), db: app.db, logger: app.logger)
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(describe(pages), ["march", "divider: Parade Set", "reel", "jig", "march"])
     }
 
@@ -57,7 +57,7 @@ final class BinderGenerationTests: XCTestCase {
         let json = #"{"name":"Old","branch":"2026","entries":[{"tune_slug":"jig","parts":["Melody"]},{"tune_slug":"reel","parts":["Melody"]}]}"#
         let spec = try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8))
 
-        let pages = try await service.pages(for: spec, requestID: UUID(), db: app.db, logger: app.logger)
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(describe(pages), ["jig", "reel"])
     }
 
@@ -71,7 +71,7 @@ final class BinderGenerationTests: XCTestCase {
             BinderSection(title: nil, entries: [entry("march"), entry("reel"), entry("jig")]),
         ])
 
-        let pages = try await service.pages(for: spec, requestID: UUID(), db: app.db, logger: app.logger)
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(printedPageNumbers(pages), [1, 2, 3])
     }
 
@@ -84,7 +84,7 @@ final class BinderGenerationTests: XCTestCase {
             BinderSection(title: "Slow Airs", entries: [entry("reel")]),
         ])
 
-        let pages = try await service.pages(for: spec, requestID: UUID(), db: app.db, logger: app.logger)
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(describe(pages),
                        ["divider: Parade Set", "march", "divider: Slow Airs", "reel"])
         // Pages 1 and 3 are the dividers; the tunes behind them are 2 and 4.
@@ -101,7 +101,7 @@ final class BinderGenerationTests: XCTestCase {
             BinderSection(title: nil, entries: [entry("long"), entry("jig")]),
         ])
 
-        let pages = try await service.pages(for: spec, requestID: UUID(), db: app.db, logger: app.logger)
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(describe(pages), ["long", "long", "jig"])
         XCTAssertEqual(printedPageNumbers(pages), [1, 2, 3])
     }
@@ -118,7 +118,7 @@ final class BinderGenerationTests: XCTestCase {
             BinderSection(title: nil, entries: [entry("march"), entry("reel")]),
         ])
 
-        let pages = try await service.pages(for: spec, requestID: UUID(), db: app.db, logger: app.logger)
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(describe(pages), ["march", "prebuilt: reel"])
         // The fallback page is still a page: it keeps its slot in the count.
         XCTAssertEqual(pages.count, 2)

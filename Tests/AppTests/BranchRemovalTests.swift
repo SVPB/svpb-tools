@@ -21,6 +21,7 @@ final class BranchRemovalTests: XCTestCase {
             gitService: GitService(repoURL: "", workspaceBase: workspace),
             boxService: app.boxService,
             slackService: app.slackService,
+            binderService: app.binderService,
             musicWorkspacePath: workspace.path)
     }
 
