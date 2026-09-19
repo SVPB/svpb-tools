@@ -117,6 +117,7 @@ private func addMigrations(_ app: Application) {
     //   5. BinderRequest — no external FKs
     //   6. LoginToken    — no FK (Slack user ID stored as plain TEXT)
     //   7. BinderDefinition — FK → Branch
+    //   8. Setting        — no FKs
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(CreateBranch())
     app.migrations.add(CreateUser())
@@ -129,6 +130,8 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(AddSvgPathsToPart())
     app.migrations.add(CreateBinderDefinition())
     app.migrations.add(AddSubtitleToTune())
+    // Phase 1 (C5): runtime state that outlives the process.
+    app.migrations.add(CreateSetting())
 }
 
 // MARK: - Service initialisation
@@ -151,6 +154,9 @@ private func initServices(_ app: Application) {
         clientSecret: Environment.get("BOX_CLIENT_SECRET") ?? "",
         rootFolderID: Environment.get("BOX_FOLDER_ID")     ?? "",
         refreshToken: Environment.get("BOX_REFRESH_TOKEN") ?? "",
+        // The environment seeds the refresh token; the database holds the rotated one,
+        // so a restart does not reach for a token Box has already retired.
+        db:           app.db,
         httpClient:   httpClient,
         logger:       app.logger
     )

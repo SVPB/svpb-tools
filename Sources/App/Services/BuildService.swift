@@ -13,11 +13,11 @@ import Vapor
 ///   2. `git` sync via `GitService`.
 ///   3. Discover every `.abc` file in the working tree.
 ///   4. For each file: convert ABC → per-page SVGs (CeolKit) → PDF (SVGPDFKit).
-///   5. Optionally upload each PDF to Box (via `BoxService`).
-///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records, then delete the
+///   5. Upsert the `Branch`, `Tune`, and `Part` catalogue records, then delete the
 ///      tunes whose `.abc` file has left the working tree.
-///   7. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
-///   8. Assemble the official binders that file declares (via `BinderService`).
+///   6. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
+///   7. Assemble the official binders that file declares (via `BinderService`).
+///   8. Optionally upload those binders — and only those — to Box (via `BoxService`).
 ///   9. Optionally post a Slack notification (via `SlackService`).
 ///  10. Update the `Build` record (status, log, files).
 ///
@@ -207,18 +207,6 @@ actor BuildService {
                 try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL)
                 convertedTunes += 1
 
-                // ── Box upload (skipped for catalogue sync) ─────────────────
-                if uploadToBox {
-                    do {
-                        try await boxService.upload(pdf: pdfURL, forBranch: branch)
-                        log += "[box] Uploaded \(stem).pdf\n"
-                    } catch {
-                        log += "[box] Upload failed for \(stem).pdf: \(error)\n"
-                        logger.warning("[BuildService] Box upload failed for \(stem).pdf: \(error)")
-                        failedSteps += 1
-                    }
-                }
-
                 // ── catalogue population ────────────────────────────────────
                 do {
                     try await upsertCatalogueEntry(
@@ -286,6 +274,13 @@ actor BuildService {
                 branch: branch, binders: definitions.binders, db: db, log: &log, logger: logger)
             failedSteps += assembly.failures
             producedFiles = assembly.binders.map(\.filename)
+
+            // ── Box upload (skipped for catalogue sync) ─────────────────────
+            if uploadToBox {
+                let upload = await uploadBinders(
+                    assembly.binders, branch: branch, log: &log, logger: logger)
+                failedSteps += upload.failures
+            }
 
             // ── update Branch record timestamps ─────────────────────────────
             branchRecord.lastBuilt = Date()
@@ -716,6 +711,44 @@ actor BuildService {
             }
         }
         return (assembled, failures)
+    }
+
+    // MARK: - Box upload
+
+    /// Uploads the assembled binders to the branch's year folder in Box.
+    ///
+    /// Only these go to Box (C5): the per-tune PDFs are intermediates the binders are
+    /// made from, and a personalised binder is downloaded from TNG itself. One binder
+    /// failing does not stop the next — a band with two binders should get the one that
+    /// is fine — and every failure is a failed step, so a build that reached Box with
+    /// none of its binders cannot come out green.
+    ///
+    /// - Returns: The ID of the year folder the binders went to, and the number of
+    ///   failed uploads.
+    private func uploadBinders(
+        _ binders: [AssembledBinder],
+        branch: String,
+        log: inout String,
+        logger: Logger
+    ) async -> (folderID: String?, failures: Int) {
+        guard !binders.isEmpty else {
+            log += "[box] No binders to upload\n"
+            return (nil, 0)
+        }
+
+        var folderID: String?
+        var failures = 0
+        for binder in binders {
+            do {
+                folderID = try await boxService.upload(pdf: binder.url, forBranch: branch)
+                log += "[box] Uploaded \(binder.filename)\n"
+            } catch {
+                log += "[box] ✗ Upload failed for \(binder.filename): \(error)\n"
+                logger.warning("[BuildService] Box upload failed for \(binder.filename): \(error)")
+                failures += 1
+            }
+        }
+        return (folderID, failures)
     }
 
     // MARK: - File discovery
