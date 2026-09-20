@@ -15,6 +15,10 @@
  * sees exactly one untitled section and none of the controls for adding,
  * naming, or reordering sections, so its selection behaves as a flat list.
  *
+ * A section can be folded down to its header row so a tall binder stays
+ * navigable. Folding is display only: it never touches the selection, the
+ * ordering, or anything a page generates from them.
+ *
  * Things the component cannot decide for itself are supplied as hooks to
  * `init`: how the page reports status, what else the page has to reset when the
  * selection is cleared, and how a page restores a saved selection.
@@ -30,6 +34,9 @@ const TuneSelector = (() => {
   let untitledSections = true;   // a blank section title is allowed, and means no divider
   let allTunes = [];       // [{id, slug, title, subtitle, abcPath}]
   let tuneDetails = {};    // slug → {id, slug, title, subtitle, parts: [{id, name}]}
+  // Folded sections, held by identity rather than by index so the fold follows
+  // a section through a reorder, a retitle, and every rebuild of the list.
+  const folded = new WeakSet();
 
   // ── Page hooks ───────────────────────────────────────────────────────────
   let setStatus = () => {};
@@ -131,18 +138,33 @@ const TuneSelector = (() => {
     return b;
   }
 
-  function renderSectionHeader(section, sIdx) {
-    const li = document.createElement('li');
-    li.className = 'section-header' + (sIdx === active ? ' active' : '');
-    li.title = 'Tunes you add from the catalogue go into the highlighted section';
-    li.addEventListener('click', e => {
+  /**
+   * The header row of a section: the disclosure control, the section's own
+   * controls, and — while it is folded — how many tunes are hidden under it.
+   * `tunesId` identifies the list the disclosure control opens and closes.
+   */
+  function renderSectionHeader(section, sIdx, tunesId) {
+    const row = document.createElement('div');
+    row.className = 'section-header' + (sIdx === active ? ' active' : '');
+    row.title = 'Tunes you add from the catalogue go into the highlighted section';
+    row.addEventListener('click', e => {
       // Buttons act for themselves, and re-rendering under the title input would take its focus.
       if (e.target.closest('button, input')) return;
       if (active !== sIdx) { active = sIdx; renderBinder(); }
     });
 
-    li.appendChild(button('↑', 'Move section up', 'move-btn', () => moveSection(sIdx, -1)));
-    li.appendChild(button('↓', 'Move section down', 'move-btn', () => moveSection(sIdx, 1)));
+    // Folding and activating are separate gestures: this one is a button, and
+    // the row's own click handler leaves buttons alone.
+    const shut = folded.has(section);
+    const disclosure = button(shut ? '▸' : '▾', shut ? 'Show this section' : 'Fold this section',
+                              'fold-btn', () => { setFolded(section, !shut); renderBinder(); });
+    disclosure.setAttribute('aria-expanded', String(!shut));
+    disclosure.setAttribute('aria-controls', tunesId);
+    disclosure.setAttribute('aria-label', `${shut ? 'Show' : 'Fold'} ${sectionLabel(sIdx)}`);
+    row.appendChild(disclosure);
+
+    row.appendChild(button('↑', 'Move section up', 'move-btn', () => moveSection(sIdx, -1)));
+    row.appendChild(button('↓', 'Move section down', 'move-btn', () => moveSection(sIdx, 1)));
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -156,17 +178,26 @@ const TuneSelector = (() => {
     input.addEventListener('focus', () => {
       if (active !== sIdx) {
         active = sIdx;
-        el('binder-entries').querySelectorAll('li.section-header')
+        el('binder-entries').querySelectorAll('.section-header')
           .forEach((h, i) => h.classList.toggle('active', i === active));
       }
     });
-    li.appendChild(input);
+    row.appendChild(input);
+
+    // A folded section still says how much is under it.
+    if (shut) {
+      const count = document.createElement('span');
+      count.className = 'section-count';
+      const n = section.entries.length;
+      count.textContent = `${n} ${n === 1 ? 'tune' : 'tunes'}`;
+      row.appendChild(count);
+    }
 
     if (sections.length > 1) {
       const receiver = sIdx > 0 ? 'above' : 'below';
-      li.appendChild(button('✕', `Remove section — its tunes join the section ${receiver}`, '', () => removeSection(sIdx)));
+      row.appendChild(button('✕', `Remove section — its tunes join the section ${receiver}`, '', () => removeSection(sIdx)));
     }
-    return li;
+    return row;
   }
 
   function renderEntry(entry, sIdx, eIdx) {
@@ -233,10 +264,46 @@ const TuneSelector = (() => {
     el('add-section').hidden = !sectionsEnabled;
 
     sections.forEach((section, sIdx) => {
-      if (sectionsEnabled) ul.appendChild(renderSectionHeader(section, sIdx));
-      section.entries.forEach((entry, eIdx) => ul.appendChild(renderEntry(entry, sIdx, eIdx)));
+      // Without sections there is nothing to fold, so the entries stay a flat list.
+      if (!sectionsEnabled) {
+        section.entries.forEach((entry, eIdx) => ul.appendChild(renderEntry(entry, sIdx, eIdx)));
+        return;
+      }
+      // A section is its header plus a list of its own, so folding it hides one
+      // element. The tunes are rendered either way: they are only out of sight.
+      const group = document.createElement('li');
+      group.className = 'section-group';
+      const tunes = document.createElement('ul');
+      tunes.className = 'section-tunes';
+      tunes.id = `section-tunes-${sIdx}`;
+      tunes.hidden = folded.has(section);
+      section.entries.forEach((entry, eIdx) => tunes.appendChild(renderEntry(entry, sIdx, eIdx)));
+      group.appendChild(renderSectionHeader(section, sIdx, tunes.id));
+      group.appendChild(tunes);
+      ul.appendChild(group);
     });
+    renderFoldAll();
     renderTuneList(currentFilter());
+  }
+
+  /** Folds or unfolds one section. Display only — the selection is untouched. */
+  function setFolded(section, shut) {
+    if (shut) folded.add(section); else folded.delete(section);
+  }
+
+  /**
+   * Labels the fold-everything control for what it would do next, and hides it
+   * where there is nothing to fold or only one section to fold.
+   */
+  function renderFoldAll() {
+    const btn = el('fold-all-sections');
+    btn.hidden = !sectionsEnabled || sections.length < 2;
+    if (btn.hidden) return;
+    const anyOpen = sections.some(s => !folded.has(s));
+    btn.textContent = anyOpen ? 'Fold all' : 'Show all';
+    btn.title = anyOpen
+      ? 'Fold every section down to its header'
+      : 'Show the tunes in every section';
   }
 
   /** Relabels the move-to-section menus after a title edit, without re-rendering. */
@@ -252,6 +319,8 @@ const TuneSelector = (() => {
     try {
       const detail = await getTuneDetail(slug);
       sections[active].entries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
+      // Show the section the tune just went into, rather than swallowing it.
+      setFolded(sections[active], false);
       renderBinder();
     } catch (e) {
       setStatus('Failed to load tune detail: ' + e.message, 'error');
@@ -279,8 +348,10 @@ const TuneSelector = (() => {
       [list[eIdx], list[target]] = [list[target], list[eIdx]];
     } else if (delta < 0 && sIdx > 0) {
       sections[sIdx - 1].entries.push(list.splice(eIdx, 1)[0]);
+      setFolded(sections[sIdx - 1], false);
     } else if (delta > 0 && sIdx < sections.length - 1) {
       sections[sIdx + 1].entries.unshift(list.splice(eIdx, 1)[0]);
+      setFolded(sections[sIdx + 1], false);
     } else {
       return;
     }
@@ -290,6 +361,7 @@ const TuneSelector = (() => {
   function moveEntryToSection(sIdx, eIdx, targetIdx) {
     if (targetIdx === sIdx || !sections[targetIdx]) return;
     sections[targetIdx].entries.push(sections[sIdx].entries.splice(eIdx, 1)[0]);
+    setFolded(sections[targetIdx], false);
     renderBinder();
   }
 
@@ -314,8 +386,11 @@ const TuneSelector = (() => {
   function removeSection(sIdx) {
     if (sections.length < 2) return;
     const [removed] = sections.splice(sIdx, 1);
-    if (sIdx > 0) sections[sIdx - 1].entries.push(...removed.entries);
-    else sections[0].entries.unshift(...removed.entries);
+    const receiver = sIdx > 0 ? sections[sIdx - 1] : sections[0];
+    if (sIdx > 0) receiver.entries.push(...removed.entries);
+    else receiver.entries.unshift(...removed.entries);
+    // The tunes moved somewhere the user can see.
+    if (removed.entries.length) setFolded(receiver, false);
     // Follow the tunes: a removed active section hands over to the one that took them.
     if (active > sIdx || (active === sIdx && sIdx > 0)) active -= 1;
     renderBinder();
@@ -394,6 +469,12 @@ const TuneSelector = (() => {
     if (hooks.restore) restore = hooks.restore;
 
     el('add-section').addEventListener('click', addSection);
+    el('fold-all-sections').addEventListener('click', () => {
+      // Whatever the button offers, it does to every section at once.
+      const shut = sections.some(s => !folded.has(s));
+      sections.forEach(s => setFolded(s, shut));
+      renderBinder();
+    });
     renderBinder();
 
     el('sel-branch').addEventListener('change', async e => {

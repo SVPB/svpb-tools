@@ -25,6 +25,7 @@ final class BinderPageTests: XCTestCase {
     private let sharedElementIDs = [
         "sel-branch", "binder-name", "search-tunes",
         "tune-list", "binder-entries", "empty-msg", "add-section",
+        "fold-all-sections",
     ]
 
     func testConstructorPageRenders() async throws {
@@ -85,6 +86,19 @@ final class BinderPageTests: XCTestCase {
             XCTAssertTrue(html.contains("sections: true"))
             XCTAssertTrue(html.contains("parts: false"))
             XCTAssertTrue(html.contains("untitledSections: false"))
+        }
+    }
+
+    /// A section can be folded down to its header row (#45), so both pages need
+    /// the grouping markup's styles as well as the fold-everything control.
+    func testBothPagesCanFoldSections() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains(".section-group"), "\(path) lost the section grouping styles")
+                XCTAssertTrue(html.contains(".section-tunes"), "\(path) lost the folded-list styles")
+                XCTAssertTrue(html.contains(".fold-btn"), "\(path) lost the disclosure styles")
+            }
         }
     }
 
