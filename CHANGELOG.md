@@ -6,40 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-#### The Box refresh token renews on a timer, not on activity (#53)
-
-- Box expires a refresh token 60 days after its last use, and a build uploading a binder was
-  the only thing that ever used one. The band goes months between edits to the music, so a
-  quiet winter ended with a dead credential and a manual re-authorisation — the chore the
-  connections page (#51) exists to abolish.
-- TNG now renews the token every 24 hours whether or not anything has been built, so a server
-  that is merely running keeps its own access alive: each refresh issues a token with a fresh
-  60 days on it. `BOX_TOKEN_REFRESH_HOURS` changes the interval; anything unparseable falls
-  back to daily rather than switching the renewal off, which would be the one failure nobody
-  notices until the token has already gone.
-- It doubles as a liveness check, which is half its value. A revoked token or an unreachable
-  Box used to surface when someone next pushed music, potentially two months after it broke.
-- So a failure is **announced**, not merely logged — nobody reads the server log, and the whole
-  point is that nobody is looking. TNG posts to the Slack channel when the outcome *changes*:
-  once when renewal starts failing, once when it recovers. A fortnight's outage is one message,
-  not fourteen, because a channel that cries daily is a channel that gets muted.
-- The timer runs in the server process rather than as a cron job on the droplet. TNG being
-  self-contained is a deliberate property of the deployment, and an external timer is one more
-  thing to forget when the droplet is rebuilt.
-
-### Fixed
-
-#### A refresh token that cannot be written down is now a failure, not a log line (#53)
-
-- Box invalidates the token it was given the moment it issues a new one, so a refresh whose
-  database write fails leaves the server holding the only usable copy in memory — working until
-  the next restart, then locked out, with nothing but an `error` line to say so. Renewing daily
-  rather than per-build multiplies the chances of hitting that window.
-- The write is now part of the refresh succeeding: it retries once, then logs at `critical` and
-  throws. In-memory state is still updated first and deliberately, so the process keeps working
-  and there is a window in which the database can be fixed without re-authorising.
+## [0.3.0] - 2026-09-19
 
 ### Added
 
@@ -127,6 +94,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Removing a branch takes its upload records with it, and says how many. Box itself is still never
   touched.
 
+#### The Box refresh token renews on a timer, not on activity (#53)
+
+- Box expires a refresh token 60 days after its last use, and a build uploading a binder was
+  the only thing that ever used one. The band goes months between edits to the music, so a
+  quiet winter ended with a dead credential and a manual re-authorisation — the chore the
+  connections page (#51) exists to abolish.
+- TNG now renews the token every 24 hours whether or not anything has been built, so a server
+  that is merely running keeps its own access alive: each refresh issues a token with a fresh
+  60 days on it. `BOX_TOKEN_REFRESH_HOURS` changes the interval; anything unparseable falls
+  back to daily rather than switching the renewal off, which would be the one failure nobody
+  notices until the token has already gone.
+- It doubles as a liveness check, which is half its value. A revoked token or an unreachable
+  Box used to surface when someone next pushed music, potentially two months after it broke.
+- So a failure is **announced**, not merely logged — nobody reads the server log, and the whole
+  point is that nobody is looking. TNG posts to the Slack channel when the outcome *changes*:
+  once when renewal starts failing, once when it recovers. A fortnight's outage is one message,
+  not fourteen, because a channel that cries daily is a channel that gets muted.
+- The timer runs in the server process rather than as a cron job on the droplet. TNG being
+  self-contained is a deliberate property of the deployment, and an external timer is one more
+  thing to forget when the droplet is rebuilt.
+
+#### The band's circuit thistle as the site icon
+
+- `Brand/` holds vector traces of the circuit thistle — the mark beside the wordmark in the band
+  logo — taken from artboard 5 of `SV_Pipeband_Logo_Final.ai` and coloured the way the thistle is
+  coloured in the lockup: `#AA04BC` for the bloom, `#44C40E` for the leaves. `Brand/README.md`
+  records where the artwork came from and which file to reach for.
+- `Brand/slack-app-icon-512.png` is the 512x512 icon to upload for the TNG Slack app.
+- `Public/favicon.ico` (16/32/48), `Public/favicon.svg` and `Public/apple-touch-icon.png`, linked
+  from both the public layout and the admin sign-in page, which has its own `<head>`.
+- Renderings at 48px and below scale the stroke weights 1.8x. The thistle is fine line art —
+  strokes are about 1% of its height — and at true weight it disappears in a favicon.
+
+### Changed
+
+- The page header shows the thistle (`Public/img/thistle.svg`) in place of the music-note emoji.
+  The header mark is transparent rather than white-backed, so it sits on the navy bar the way the
+  reversed logo does in the `.ai`.
+
+#### CeolKit 1.5.0 -> 1.6.0
+
+#### Documentation reconciled with the deployment as built (#14)
+
+- `HOSTING_OPTIONS.md` is marked as a superseded decision record. It compared hosts before one was
+  chosen, and its DigitalOcean numbers never caught up with the deployment: it recommended the
+  1 GB / $6 droplet (which does not survive a full catalogue build), said the boot disk meant "no
+  additional storage product is needed" (persistent across reboots, not across droplet
+  replacement — #3), called a Reserved IP a "Floating IP" (#2), and described updating as a
+  by-hand `docker compose pull && up -d` (#6). Rather than maintain six costed alternatives for a
+  decision that has been made, the header tabulates those four corrections and sends readers to
+  README § Deployment; the comparison below it is frozen as of March 2026.
+- The README's opening no longer offers `HOSTING_OPTIONS.md` as current hosting guidance; it
+  points at § Deployment and labels the older document a superseded decision record.
+- The `box-auth` entry under 0.2.0 gave `docker compose run --rm tng swift run TNG box-auth`,
+  which cannot work — the runtime image has no Swift toolchain and its `ENTRYPOINT` is already
+  `./TNG`. Corrected to `docker compose run --rm tng box-auth`, matching the README. The bare
+  `swift run TNG box-auth` in the tunnel workflow is unchanged and still correct there.
+
 ### Fixed
 
 #### The build now reports what it actually produced (#8)
@@ -206,45 +231,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `SVGPDFConverter` is now called with `injectPageNumbers = false` rather than left to perform a
   no-op. Filed upstream as sbeitzel/SVGPDFKit#3: a missed injection should not be silent.
 
-### Added
+#### A refresh token that cannot be written down is now a failure, not a log line (#53)
 
-#### The band's circuit thistle as the site icon
-
-- `Brand/` holds vector traces of the circuit thistle — the mark beside the wordmark in the band
-  logo — taken from artboard 5 of `SV_Pipeband_Logo_Final.ai` and coloured the way the thistle is
-  coloured in the lockup: `#AA04BC` for the bloom, `#44C40E` for the leaves. `Brand/README.md`
-  records where the artwork came from and which file to reach for.
-- `Brand/slack-app-icon-512.png` is the 512x512 icon to upload for the TNG Slack app.
-- `Public/favicon.ico` (16/32/48), `Public/favicon.svg` and `Public/apple-touch-icon.png`, linked
-  from both the public layout and the admin sign-in page, which has its own `<head>`.
-- Renderings at 48px and below scale the stroke weights 1.8x. The thistle is fine line art —
-  strokes are about 1% of its height — and at true weight it disappears in a favicon.
-
-### Changed
-
-- The page header shows the thistle (`Public/img/thistle.svg`) in place of the music-note emoji.
-  The header mark is transparent rather than white-backed, so it sits on the navy bar the way the
-  reversed logo does in the `.ai`.
-
-#### CeolKit 1.5.0 -> 1.6.0
-
-#### Documentation reconciled with the deployment as built (#14)
-
-- `HOSTING_OPTIONS.md` is marked as a superseded decision record. It compared hosts before one was
-  chosen, and its DigitalOcean numbers never caught up with the deployment: it recommended the
-  1 GB / $6 droplet (which does not survive a full catalogue build), said the boot disk meant "no
-  additional storage product is needed" (persistent across reboots, not across droplet
-  replacement — #3), called a Reserved IP a "Floating IP" (#2), and described updating as a
-  by-hand `docker compose pull && up -d` (#6). Rather than maintain six costed alternatives for a
-  decision that has been made, the header tabulates those four corrections and sends readers to
-  README § Deployment; the comparison below it is frozen as of March 2026.
-- The README's opening no longer offers `HOSTING_OPTIONS.md` as current hosting guidance; it
-  points at § Deployment and labels the older document a superseded decision record.
-- The `box-auth` entry under 0.2.0 gave `docker compose run --rm tng swift run TNG box-auth`,
-  which cannot work — the runtime image has no Swift toolchain and its `ENTRYPOINT` is already
-  `./TNG`. Corrected to `docker compose run --rm tng box-auth`, matching the README. The bare
-  `swift run TNG box-auth` in the tunnel workflow is unchanged and still correct there.
-
+- Box invalidates the token it was given the moment it issues a new one, so a refresh whose
+  database write fails leaves the server holding the only usable copy in memory — working until
+  the next restart, then locked out, with nothing but an `error` line to say so. Renewing daily
+  rather than per-build multiplies the chances of hitting that window.
+- The write is now part of the refresh succeeding: it retries once, then logs at `critical` and
+  throws. In-memory state is still updated first and deliberately, so the process keeps working
+  and there is a window in which the database can be fixed without re-authorising.
 
 ## [0.2.0] - 2026-09-17
 
