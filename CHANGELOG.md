@@ -6,6 +6,241 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-19
+
+### Added
+
+#### A Connections page: every remote service, its state, and a button where one helps (#51)
+
+- `/admin/connections` reports GitHub, Box and Slack side by side. Each is asked a real
+  question rather than checked for a credential — `ls-remote` against the music repository,
+  the configured folder fetched from Box, `auth.test` against Slack — because a credential that
+  is present and a credential that works are different things, and the difference only shows up
+  when someone is waiting for a binder that never arrives.
+- Each row says what TNG uses that service *for*, so a red row explains what is broken rather
+  than only that something is. Where a credential expires, the page says when: Box's refresh
+  token carries its 60-day deadline, counted from the last renewal.
+- **Box can be re-authorised from the page.** The button opens Box's consent screen in a popup;
+  Box redirects back to `/box-callback` on the running server, which exchanges the code, stores
+  the new refresh token, reloads the page behind it and closes itself.
+- Services whose credentials are static configuration — Slack's bot token, GitHub's webhook
+  secret — get no button, because there is no flow TNG could drive. They carry a "How to fix
+  this" note naming the environment variable and where its value comes from instead. Adding a
+  service later means writing one more `status(…)` in `ConnectionsReport`; the page itself knows
+  nothing about any particular one.
+- The redirect URI Box has to have registered is shown on the page, derived from `DOMAIN` — the
+  same value Caddy serves TNG on — so it can be copied rather than guessed.
+- `BOX_REFRESH_TOKEN` is no longer a required environment variable. It could not stay one: a
+  fresh deployment has to boot far enough to reach the page that would give it a token.
+- The repository URL is shown with any embedded credentials stripped. A clone URL can carry a
+  token as userinfo, and a status page exists to be read by whoever is standing there.
+- git now runs with `GIT_TERMINAL_PROMPT=0`. A server has no terminal to answer a credential
+  prompt at, so a repository that has become private must fail rather than hang the task
+  waiting for one.
+
+#### The official binders are assembled and uploaded to Box (#18, #7)
+
+- A build now assembles the binders `binders.yaml` declares and writes each to
+  `output/<branch>/binders/<output>`. The file had been read and stored since #10, but nothing
+  turned it into a PDF: the band's official binders existed only as rows in a table.
+- Assembly reuses the personalised binder pipeline rather than growing one of its own. An official
+  binder is a `BinderSpec` like any other, so it gets the same re-engraved, binder-relative page
+  numbers (#19) and the same generated divider page ahead of each titled section. What differs is
+  only where the PDF is written and what happens to it next.
+- An official entry carries no parts. Per-part rendering is deferred past MVP (#20) and every
+  `Part` row of a tune points at the same pages today, so honouring `parts:` would repeat the whole
+  score once per named part. The key is still decoded and stored, so a `binders.yaml` written now
+  keeps its meaning when part support lands.
+- Binders go to `output/<branch>/binders/` rather than beside the per-tune PDFs: a binder's
+  `output:` filename is chosen by the pipe major and a tune's is its `.abc` stem, so
+  `2026_binder.pdf` sitting beside the tunes could silently overwrite a tune slugged
+  `2026_binder`.
+- `BoxService` is implemented. `refreshAccessToken`, `createYearFolder` and `uploadFile` had all
+  ended in `throw Abort(.notImplemented)`, and `resolveYearFolder` never asked whether the year
+  folder already existed — it called `createYearFolder` every time.
+- A binder already in the year folder gets a new **version** of the same file rather than a second
+  one: the link the band has bookmarked keeps working, and Box's history becomes the record of what
+  each build changed. Filenames are compared case-insensitively, because that is how Box compares
+  them. Two branches racing to create the same year folder is not an error for the loser.
+- Only the binders go up. The per-tune upload inside the conversion loop is gone — those PDFs are
+  intermediates the binders are made from, and personalised binders are downloaded from TNG itself.
+
+#### The rotated Box refresh token survives a restart (#7)
+
+- Box invalidates the refresh token it was given on every refresh, so the value in `.env` is
+  correct exactly once. Keeping the new one in actor state alone meant every restart reached for a
+  token Box had already retired — and a token unused for 60 days expires outright.
+- A `settings` table now holds it, seeded from `BOX_REFRESH_TOKEN` when there is nothing stored. A
+  refresh Box refuses now says in as many words that `box-auth` has to be run again, rather than
+  surfacing as a bare 400.
+
+#### A binder that could not reach Box goes up on the next build (#12)
+
+- O6 asks for artefacts to be retained locally and re-uploaded on the next build. That was not
+  implementable from the build log alone: nothing recorded *which* binders were outstanding, so
+  after a failed build the only options were re-uploading everything or nothing.
+- A `box_uploads` table now holds one row per binder per branch — where the file is, the hash of
+  the bytes assembled, whether it has reached Box, how many attempts it has taken and why the last
+  one failed. It is its own table because `binder_definitions` rows are deleted and recreated
+  wholesale by every build, so upload state kept there would be erased by the build that needs it.
+- The retry runs after the current build's own uploads rather than before conversion: a binder this
+  build is about to reassemble does not want last week's bytes pushed ahead of it, and a build that
+  fails before assembly has no working Box session to retry through anyway.
+- A pending file that has gone, or whose bytes are no longer the ones its row describes, is dropped
+  rather than retried forever. Something later rebuilt it, and uploading what is on disk now under a
+  row that means something else would put the wrong version in Box.
+- Slack notifications are **not** replayed — "build succeeded", hours late, reads worse than
+  silence — so the build that catches up names what it caught up on.
+- Removing a branch takes its upload records with it, and says how many. Box itself is still never
+  touched.
+
+#### The Box refresh token renews on a timer, not on activity (#53)
+
+- Box expires a refresh token 60 days after its last use, and a build uploading a binder was
+  the only thing that ever used one. The band goes months between edits to the music, so a
+  quiet winter ended with a dead credential and a manual re-authorisation — the chore the
+  connections page (#51) exists to abolish.
+- TNG now renews the token every 24 hours whether or not anything has been built, so a server
+  that is merely running keeps its own access alive: each refresh issues a token with a fresh
+  60 days on it. `BOX_TOKEN_REFRESH_HOURS` changes the interval; anything unparseable falls
+  back to daily rather than switching the renewal off, which would be the one failure nobody
+  notices until the token has already gone.
+- It doubles as a liveness check, which is half its value. A revoked token or an unreachable
+  Box used to surface when someone next pushed music, potentially two months after it broke.
+- So a failure is **announced**, not merely logged — nobody reads the server log, and the whole
+  point is that nobody is looking. TNG posts to the Slack channel when the outcome *changes*:
+  once when renewal starts failing, once when it recovers. A fortnight's outage is one message,
+  not fourteen, because a channel that cries daily is a channel that gets muted.
+- The timer runs in the server process rather than as a cron job on the droplet. TNG being
+  self-contained is a deliberate property of the deployment, and an external timer is one more
+  thing to forget when the droplet is rebuilt.
+
+#### The band's circuit thistle as the site icon
+
+- `Brand/` holds vector traces of the circuit thistle — the mark beside the wordmark in the band
+  logo — taken from artboard 5 of `SV_Pipeband_Logo_Final.ai` and coloured the way the thistle is
+  coloured in the lockup: `#AA04BC` for the bloom, `#44C40E` for the leaves. `Brand/README.md`
+  records where the artwork came from and which file to reach for.
+- `Brand/slack-app-icon-512.png` is the 512x512 icon to upload for the TNG Slack app.
+- `Public/favicon.ico` (16/32/48), `Public/favicon.svg` and `Public/apple-touch-icon.png`, linked
+  from both the public layout and the admin sign-in page, which has its own `<head>`.
+- Renderings at 48px and below scale the stroke weights 1.8x. The thistle is fine line art —
+  strokes are about 1% of its height — and at true weight it disappears in a favicon.
+
+### Changed
+
+- The page header shows the thistle (`Public/img/thistle.svg`) in place of the music-note emoji.
+  The header mark is transparent rather than white-backed, so it sits on the navy bar the way the
+  reversed logo does in the `.ai`.
+
+#### CeolKit 1.5.0 -> 1.6.0
+
+#### Documentation reconciled with the deployment as built (#14)
+
+- `HOSTING_OPTIONS.md` is marked as a superseded decision record. It compared hosts before one was
+  chosen, and its DigitalOcean numbers never caught up with the deployment: it recommended the
+  1 GB / $6 droplet (which does not survive a full catalogue build), said the boot disk meant "no
+  additional storage product is needed" (persistent across reboots, not across droplet
+  replacement — #3), called a Reserved IP a "Floating IP" (#2), and described updating as a
+  by-hand `docker compose pull && up -d` (#6). Rather than maintain six costed alternatives for a
+  decision that has been made, the header tabulates those four corrections and sends readers to
+  README § Deployment; the comparison below it is frozen as of March 2026.
+- The README's opening no longer offers `HOSTING_OPTIONS.md` as current hosting guidance; it
+  points at § Deployment and labels the older document a superseded decision record.
+- The `box-auth` entry under 0.2.0 gave `docker compose run --rm tng swift run TNG box-auth`,
+  which cannot work — the runtime image has no Swift toolchain and its `ENTRYPOINT` is already
+  `./TNG`. Corrected to `docker compose run --rm tng box-auth`, matching the README. The bare
+  `swift run TNG box-auth` in the tunnel workflow is unchanged and still correct there.
+
+### Fixed
+
+#### The build now reports what it actually produced (#8)
+
+- `Build.files` and the Slack message named the per-tune PDFs, so the band was told about files
+  that never leave the server and told nothing about the binders that do. Both now name the
+  binders, and the dashboard's column and heading say "Binders" instead of "Files".
+- The notification links the Box year folder the upload returned. A build that never reached Box
+  leaves the link out rather than offering a dead one.
+- A CeolKit error diagnostic now counts as a failed step. The pages are still engraved, from a
+  score CeolKit had to guess at — which is not a tune that built, and "green means it worked" has
+  to be true or the dashboard is worse than no dashboard.
+
+#### Documentation that described unbuilt behaviour (#14)
+
+- The README's "Current status" note said binder assembly and Box upload were unimplemented and
+  that `BuildService` uploaded each per-tune PDF. Both are now wrong in the other direction, so the
+  note is gone; the prose around it already described the behaviour that now exists.
+- `PROJECT_PLAN.md`'s Phase 3 line promised retry logic for Box uploads *and* Slack notifications.
+  It now records what was built and that Slack replay was deliberately decided against.
+
+#### A failed build no longer empties the branch catalogue (#22)
+
+- A build used to delete every `Tune` (and, by cascade, every `Part`) for the branch *before*
+  converting a single file, then upsert its way back. Anything that threw in the conversion loop —
+  a malformed ABC file, a renderer error, a full disk, a restart — left the branch holding only
+  what had been upserted before the failure, and a failure on the first file left it empty. What a
+  member saw was `/binder-builder` and `/binder-constructor` going blank, with nothing but another
+  successful build to bring them back and nothing in the build report to say that the catalogue,
+  rather than the build, was the casualty.
+- The catalogue is now reconciled instead of rebuilt. Every file is upserted as before, and only
+  once the loop has finished are the tunes whose `.abc` file has left the working tree deleted, in
+  one transaction. A build that throws leaves the entries the last good build wrote — stale for as
+  long as the branch stays broken, which is the failure worth having.
+- A file that is still in the tree but failed to convert keeps its existing entry for the same
+  reason: the tune has not gone anywhere, so the catalogue should not say it has.
+- Each file's upsert is its own transaction, and it now deletes the parts that file has stopped
+  declaring — the work the wholesale clear used to do by accident. A renamed or removed voice
+  disappears from the catalogue; a half-written entry never reaches it.
+- A tree that turns out to hold no `.abc` files at all prunes nothing, logs what it kept, and marks
+  the build partial. An empty tree is far likelier to be a bad checkout than a branch that has
+  genuinely lost every tune, and `removeBranch` (#33) is how a branch is meant to end.
+- `BuildService`'s pipeline is now covered end to end: the tests clone a fixture repository from a
+  local path, so a build that fails part-way through conversion is something the suite can actually
+  arrange.
+
+#### Binder page numbering, which was inert (#19)
+
+- A binder now re-engraves each tune from its ABC source with `%%ceolkit:pagenumber` set to the
+  page it opens on, so the footer prints where the tune sits in *that* binder. Before this, every
+  tune in an assembled binder restarted its footer at 1 — the one thing a binder needs to be
+  usable in rehearsal was the thing that did not work.
+- The old mechanism could not have worked. `BinderService` set
+  `ConversionOptions.startingPageNumber`, which drives SVGPDFKit's `PageNumberInjector`, which
+  rewrites a `<text id="svgpdfkit-page-number">` element that CeolKit does not emit — and returns
+  the SVG unchanged, without error, when it finds none. Nor was there anything to rewrite:
+  CeolKit's `textRendering` defaults to `.outlines`, so a footer is path geometry by the time a
+  binder sees it, and the runtime image installs no fonts, so nothing downstream of CeolKit could
+  draw a replacement either. The number has to be right when CeolKit draws it.
+- `TunePageRenderer` (new) prepends the directive to a tune's ABC, after any `%abc` version line
+  and before everything else, so a tune that sets its own page number still wins.
+- Nothing in TNG dictates the footer itself; the music repository's style sheets do, and the
+  directive moves both of their page-number tokens — `$P`, and the `${pagenumber}` mark CeolKit
+  1.6 added (sbeitzel/CeolKit#137), whose default value is the same number. A binder wants that
+  default drawn, so it needs nothing of the mark beyond CeolKit honouring the directive.
+- A tune whose `%%footer` names neither token is engraved and numbered correctly and simply
+  prints nothing — and nothing in the rendered pages can say so, because a drawn number is
+  outlines like everything else. So the check reads the footer template rather than the output,
+  and the build log names the tunes that print no number. Against `svpb-music` branch `2027`,
+  that is 14 tunes over 20 of 107 pages: the ones still including `style.abh`, which carries no
+  page-number token, rather than `ckstyle.abh`, which prints `Page ${pagenumber}`.
+- Divider pages are counted but print no number, as a book's part titles are: the tune behind a
+  divider is numbered as though the divider were a page, because it is one.
+- A tune with no readable ABC source still reaches the binder, from the pages the build made of
+  it. Those footers number from 1, which is logged at `error` — it is the silent version of the
+  bug this change exists to fix, and it should not pass unremarked.
+- `SVGPDFConverter` is now called with `injectPageNumbers = false` rather than left to perform a
+  no-op. Filed upstream as sbeitzel/SVGPDFKit#3: a missed injection should not be silent.
+
+#### A refresh token that cannot be written down is now a failure, not a log line (#53)
+
+- Box invalidates the token it was given the moment it issues a new one, so a refresh whose
+  database write fails leaves the server holding the only usable copy in memory — working until
+  the next restart, then locked out, with nothing but an `error` line to say so. Renewing daily
+  rather than per-build multiplies the chances of hitting that window.
+- The write is now part of the refresh succeeding: it retries once, then logs at `critical` and
+  throws. In-memory state is still updated first and deliberately, so the process keeps working
+  and there is a window in which the database can be fixed without re-authorising.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
@@ -141,7 +376,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   6. Prints `BOX_REFRESH_TOKEN=<value>` for copy-paste into `.env`.
   - In `box-auth` mode `configure()` skips env-var validation and service initialisation, so the
     command works when only the Box credentials are present.
-  - Invoked as described in the README: `docker compose run --rm tng swift run TNG box-auth`.
+  - Invoked as described in the README: `docker compose run --rm tng box-auth`. The runtime
+    image has no Swift toolchain and its `ENTRYPOINT` is already `./TNG`, so the subcommand is
+    passed straight to the binary.
 
 ### Changed
 

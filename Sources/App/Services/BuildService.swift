@@ -13,14 +13,24 @@ import Vapor
 ///   2. `git` sync via `GitService`.
 ///   3. Discover every `.abc` file in the working tree.
 ///   4. For each file: convert ABC → per-page SVGs (CeolKit) → PDF (SVGPDFKit).
-///   5. Optionally upload each PDF to Box (via `BoxService`).
-///   6. Upsert the `Branch`, `Tune`, and `Part` catalogue records.
-///   7. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
-///   8. Optionally post a Slack notification (via `SlackService`).
-///   9. Update the `Build` record (status, log, files).
+///   5. Upsert the `Branch`, `Tune`, and `Part` catalogue records, then delete the
+///      tunes whose `.abc` file has left the working tree.
+///   6. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
+///   7. Assemble the official binders that file declares (via `BinderService`).
+///   8. Optionally upload those binders — and only those — to Box (via `BoxService`).
+///   9. Optionally post a Slack notification (via `SlackService`).
+///  10. Update the `Build` record (status, log, files).
+///
+/// The build's *product* is the assembled binders, which is what `Build.files` lists and
+/// what the Slack notification names. The per-tune PDFs are intermediates: they are what
+/// the binders and the personalised builder are made from, and they stay on the server.
 ///
 /// Status is `.failure` when the pipeline threw, `.partial` when it finished but
 /// any per-file or distribution step failed, and `.success` only when nothing did.
+///
+/// The catalogue is reconciled rather than rebuilt: nothing is deleted until the
+/// conversion loop has finished, so a build that throws part-way leaves the branch
+/// serving the entries it already had instead of the fraction this build reached.
 ///
 /// The service also removes branches (`removeBranch`). Builds and removals of the
 /// same branch exclude each other, so a removal cannot race a build into recreating
@@ -30,6 +40,7 @@ actor BuildService {
     private let gitService: GitService
     private let boxService: BoxService
     private let slackService: SlackService
+    private let binderService: BinderService
     private let musicWorkspaceURL: URL
 
     /// Builds currently running in this process, per branch. Webhook and manual
@@ -42,11 +53,13 @@ actor BuildService {
         gitService: GitService,
         boxService: BoxService,
         slackService: SlackService,
+        binderService: BinderService,
         musicWorkspacePath: String
     ) {
         self.gitService = gitService
         self.boxService = boxService
         self.slackService = slackService
+        self.binderService = binderService
         self.musicWorkspaceURL = URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
     }
 
@@ -126,7 +139,10 @@ actor BuildService {
         }
 
         var log = uploadToBox ? "" : "[catalogue-sync] Box upload and Slack notification skipped.\n"
+        /// The assembled official binders — what this build produced.
         var producedFiles: [String] = []
+        /// Per-tune PDFs, counted for the log. They are intermediates, not products.
+        var convertedTunes = 0
         // Steps that failed without aborting the build; any makes it `.partial`.
         var failedSteps = 0
 
@@ -141,14 +157,6 @@ actor BuildService {
             let abcFiles = try discoverABCFiles(in: branchDir)
             log += "[build] Found \(abcFiles.count) .abc file(s)\n"
             logger.info("[BuildService] \(abcFiles.count) .abc files in '\(branch)'")
-
-            // ── clear existing catalogue for this branch ─────────────────────
-            // Delete all Tune records (Parts cascade-delete via FK constraint).
-            try await Tune.query(on: db)
-                .filter(\.$branch.$id == branch)
-                .delete()
-            log += "[catalogue] Cleared existing catalogue entries for '\(branch)'\n"
-            logger.info("[BuildService] Cleared catalogue for '\(branch)'")
 
             // ── convert each file ───────────────────────────────────────────
             let outputDir = outputDirectory(for: branch)
@@ -172,7 +180,15 @@ actor BuildService {
                     fileResolver: CeolKitParser.defaultFileResolver
                 )
                 let parsed = parser.parse(abcContent, options: .default)
-                log += formatDiagnostics(parsed, stem: stem)
+                let diagnostics = formatDiagnostics(parsed, stem: stem)
+                log += diagnostics.text
+                if diagnostics.errors > 0 {
+                    // The pages will still be engraved, from a score CeolKit had to
+                    // guess at. That is not a tune that built, so the build does not
+                    // come out green over it.
+                    logger.warning("[BuildService] \(stem).abc parsed with \(diagnostics.errors) error(s)")
+                    failedSteps += 1
+                }
 
                 // CeolKit's SVG renderer returns one complete <svg>…</svg> document
                 // per page. Write each to its own numbered file so SVGPDFKit can
@@ -197,19 +213,7 @@ actor BuildService {
 
                 let pdfURL = outputDir.appendingPathComponent("\(stem).pdf")
                 try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL)
-                producedFiles.append("\(stem).pdf")
-
-                // ── Box upload (skipped for catalogue sync) ─────────────────
-                if uploadToBox {
-                    do {
-                        try await boxService.upload(pdf: pdfURL, forBranch: branch)
-                        log += "[box] Uploaded \(stem).pdf\n"
-                    } catch {
-                        log += "[box] Upload failed for \(stem).pdf: \(error)\n"
-                        logger.warning("[BuildService] Box upload failed for \(stem).pdf: \(error)")
-                        failedSteps += 1
-                    }
-                }
+                convertedTunes += 1
 
                 // ── catalogue population ────────────────────────────────────
                 do {
@@ -230,10 +234,65 @@ actor BuildService {
                 }
             }
 
+            // ── reconcile the catalogue with the working tree ───────────────
+            // The branch keeps the entries it had until this build has something
+            // to put in their place, so a throw anywhere above leaves a stale
+            // catalogue rather than a gutted one. What goes now is the tunes whose
+            // `.abc` file has left the tree, and nothing else: a file that failed
+            // to convert is still in the tree, so its entry survives as it was.
+            do {
+                let stems = Set(abcFiles.map { $0.deletingPathExtension().lastPathComponent })
+                if stems.isEmpty {
+                    // A tree with no music in it is far more likely to be a bad
+                    // checkout than a branch that has genuinely lost every tune,
+                    // and an empty catalogue is the damage this build exists not
+                    // to do. Keep the rows; say so loudly. `removeBranch` is how
+                    // a branch's catalogue is meant to end.
+                    let kept = try await Tune.query(on: db).filter(\.$branch.$id == branch).count()
+                    if kept > 0 {
+                        log += "[catalogue] ⚠ No .abc files in the tree; keeping the "
+                        log += "\(kept) existing catalogue row(s) rather than emptying the catalogue\n"
+                        logger.warning("[BuildService] '\(branch)' has no .abc files; kept \(kept) catalogue row(s)")
+                        failedSteps += 1
+                    }
+                } else {
+                    let pruned = try await pruneCatalogue(branch: branch, keeping: stems, db: db)
+                    if !pruned.tunes.isEmpty {
+                        log += "[catalogue] Removed \(pruned.tunes.count) tune(s) no longer in the tree "
+                        log += "(\(pruned.parts) part(s)): \(pruned.tunes.joined(separator: ", "))\n"
+                        logger.info("[BuildService] Pruned \(pruned.tunes.count) tune(s) from '\(branch)'")
+                    }
+                }
+            } catch {
+                log += "[catalogue] Pruning removed tunes failed: \(error)\n"
+                logger.warning("[BuildService] Catalogue pruning failed for '\(branch)': \(error)")
+                failedSteps += 1
+            }
+
             // ── official binder definitions ─────────────────────────────────
             // After conversion, so entries are checked against this build's catalogue.
-            failedSteps += await refreshBinderDefinitions(
+            let definitions = await refreshBinderDefinitions(
                 branch: branch, branchDir: branchDir, db: db, log: &log, logger: logger)
+            failedSteps += definitions.failures
+
+            // ── assemble the official binders ───────────────────────────────
+            // These are the build's product: what `Build.files` lists, what Slack names,
+            // and the only thing that goes to Box.
+            let assembly = await assembleOfficialBinders(
+                branch: branch, binders: definitions.binders, db: db, log: &log, logger: logger)
+            failedSteps += assembly.failures
+            producedFiles = assembly.binders.map(\.filename)
+
+            // ── Box upload (skipped for catalogue sync) ─────────────────────
+            var boxFolderURL: String?
+            var caughtUp: [String] = []
+            if uploadToBox {
+                let upload = await uploadBinders(
+                    assembly.binders, branch: branch, db: db, log: &log, logger: logger)
+                failedSteps += upload.failures
+                boxFolderURL = upload.folderID.map(BoxService.folderURL(id:))
+                caughtUp = upload.retried
+            }
 
             // ── update Branch record timestamps ─────────────────────────────
             branchRecord.lastBuilt = Date()
@@ -249,7 +308,9 @@ actor BuildService {
                     try await slackService.postBuildNotification(
                         branch: branch,
                         status: failedSteps == 0 ? .success : .partial,
-                        files: producedFiles)
+                        files: producedFiles,
+                        boxFolderURL: boxFolderURL,
+                        alsoUploaded: caughtUp)
                 } catch {
                     log += "[slack] Notification failed: \(error)\n"
                     logger.warning("[BuildService] Slack notification failed: \(error)")
@@ -267,7 +328,7 @@ actor BuildService {
             build.files = producedFiles
             build.log = log
             try await build.save(on: db)
-            logger.info("[BuildService] Build \(build.id!) finished \(build.status.rawValue) (\(producedFiles.count) files, \(failedSteps) failed step(s))")
+            logger.info("[BuildService] Build \(build.id!) finished \(build.status.rawValue) (\(convertedTunes) tune(s) converted, \(producedFiles.count) binder(s) assembled, \(failedSteps) failed step(s))")
 
         } catch {
             log += "[error] \(error)\n"
@@ -350,11 +411,14 @@ actor BuildService {
             let binders = try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).count()
             try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).delete()
 
+            let uploads = try await BoxUpload.query(on: tx).filter(\.$branch.$id == branch).count()
+            try await BoxUpload.query(on: tx).filter(\.$branch.$id == branch).delete()
+
             let branchRow = try await Branch.find(branch, on: tx)
             try await branchRow?.delete(on: tx)
 
             return (tunes: tunes, parts: parts, builds: builds, binders: binders,
-                    hadBranch: branchRow != nil)
+                    uploads: uploads, hadBranch: branchRow != nil)
         }
 
         let fm = FileManager.default
@@ -366,13 +430,14 @@ actor BuildService {
             removed.append(relative)
         }
 
-        guard rows.hadBranch || rows.tunes + rows.builds + rows.binders > 0 || !removed.isEmpty else {
+        guard rows.hadBranch || rows.tunes + rows.builds + rows.binders + rows.uploads > 0 || !removed.isEmpty else {
             throw Abort(.notFound, reason: "No branch '\(branch)' in the database or the workspace.")
         }
 
         let summary = BranchRemovalSummary(
             branch: branch, tunes: rows.tunes, parts: rows.parts, builds: rows.builds,
-            binderDefinitions: rows.binders, directories: removed, bytes: bytes)
+            binderDefinitions: rows.binders, boxUploads: rows.uploads,
+            directories: removed, bytes: bytes)
         logger.notice("[BuildService] Removed branch '\(branch)': \(summary.tunes) tune(s), \(summary.parts) part(s), \(summary.builds) build(s), \(summary.binderDefinitions) binder definition(s); deleted \(removed.isEmpty ? "no directories" : removed.joined(separator: ", ")) (\(bytes) bytes)")
         return summary
     }
@@ -382,6 +447,17 @@ actor BuildService {
         musicWorkspaceURL
             .appendingPathComponent("output", isDirectory: true)
             .appendingPathComponent(branch, isDirectory: true)
+    }
+
+    /// The assembled official binders for `branch`.
+    ///
+    /// A subdirectory of the branch's output directory rather than the directory itself:
+    /// a binder's `output:` filename is chosen by the pipe major and a tune's is the
+    /// `.abc` stem, so `2026_binder.pdf` sitting beside the tunes would silently
+    /// overwrite — or be overwritten by — a tune slugged `2026_binder`. Nested inside
+    /// `output/<branch>`, it still goes when `removeBranch` deletes that directory.
+    func binderOutputDirectory(for branch: String) -> URL {
+        outputDirectory(for: branch).appendingPathComponent("binders", isDirectory: true)
     }
 
     /// The checkout and output directories for `branch`, keyed by workspace-relative
@@ -430,12 +506,17 @@ actor BuildService {
 
     // MARK: - Catalogue population
 
-    /// Upserts `Tune` and `Part` records for one converted ABC file.
+    /// Upserts the `Tune` and `Part` records for one converted ABC file, and drops
+    /// the parts that file no longer declares.
     ///
     /// Takes the `ParseResult` produced for rendering rather than the raw ABC
     /// text: the file has already been parsed once, and CeolKit's score model
     /// carries the title and voice names the catalogue needs.
-    private func upsertCatalogueEntry(
+    ///
+    /// One transaction per file, so an entry is never left half-written: a tune
+    /// either has the parts this build engraved for it or the ones the last build
+    /// did, and no member is offered a part whose PDF was never made.
+    func upsertCatalogueEntry(
         branch: String,
         stem: String,
         abcPath: String,
@@ -446,47 +527,90 @@ actor BuildService {
     ) async throws {
         let entry = CatalogueExtractor.extract(from: parsed)
 
-        // Upsert Tune
-        let tune: Tune
-        if let existing = try await Tune.query(on: db)
-            .filter(\.$branch.$id == branch)
-            .filter(\.$slug == stem)
-            .first() {
-            existing.title = entry.title
-            existing.subtitle = entry.subtitle
-            existing.abcPath = abcPath
-            try await existing.save(on: db)
-            tune = existing
-        } else {
-            let fresh = Tune()
-            fresh.$branch.id = branch
-            fresh.slug = stem
-            fresh.title = entry.title
-            fresh.subtitle = entry.subtitle
-            fresh.abcPath = abcPath
-            try await fresh.save(on: db)
-            tune = fresh
-        }
-
-        let tuneID = try tune.requireID()
-
-        // Upsert Parts
-        for partName in entry.parts {
-            if let existing = try await Part.query(on: db)
-                .filter(\.$tune.$id == tuneID)
-                .filter(\.$name == partName)
+        try await db.transaction { tx in
+            // Upsert Tune
+            let tune: Tune
+            if let existing = try await Tune.query(on: tx)
+                .filter(\.$branch.$id == branch)
+                .filter(\.$slug == stem)
                 .first() {
-                existing.pdfPath = pdfPath
-                existing.svgPaths = svgPaths
-                try await existing.save(on: db)
+                existing.title = entry.title
+                existing.subtitle = entry.subtitle
+                existing.abcPath = abcPath
+                try await existing.save(on: tx)
+                tune = existing
             } else {
-                let part = Part()
-                part.$tune.id = tuneID
-                part.name = partName
-                part.pdfPath = pdfPath
-                part.svgPaths = svgPaths
-                try await part.save(on: db)
+                let fresh = Tune()
+                fresh.$branch.id = branch
+                fresh.slug = stem
+                fresh.title = entry.title
+                fresh.subtitle = entry.subtitle
+                fresh.abcPath = abcPath
+                try await fresh.save(on: tx)
+                tune = fresh
             }
+
+            let tuneID = try tune.requireID()
+
+            // Upsert Parts
+            for partName in entry.parts {
+                if let existing = try await Part.query(on: tx)
+                    .filter(\.$tune.$id == tuneID)
+                    .filter(\.$name == partName)
+                    .first() {
+                    existing.pdfPath = pdfPath
+                    existing.svgPaths = svgPaths
+                    try await existing.save(on: tx)
+                } else {
+                    let part = Part()
+                    part.$tune.id = tuneID
+                    part.name = partName
+                    part.pdfPath = pdfPath
+                    part.svgPaths = svgPaths
+                    try await part.save(on: tx)
+                }
+            }
+
+            // A renamed or deleted voice used to disappear with the wholesale
+            // clear that ran before conversion. Nothing clears now, so the parts
+            // this file has stopped declaring have to go here, or a binder would
+            // keep offering a part that no longer exists in the arrangement.
+            try await Part.query(on: tx)
+                .filter(\.$tune.$id == tuneID)
+                .filter(\.$name !~ entry.parts)
+                .delete()
+        }
+    }
+
+    /// Deletes the branch's tunes — and their parts — whose slug is not in
+    /// `slugs`, i.e. whose `.abc` file is no longer in the working tree.
+    ///
+    /// Runs once conversion has finished, in one transaction, and touches nothing
+    /// a build might still be writing. A tune that is in the tree but failed to
+    /// convert keeps its existing row: the file is still there, so the entry is
+    /// stale, not gone.
+    ///
+    /// - Returns: The slugs removed, in order, and how many parts went with them.
+    func pruneCatalogue(
+        branch: String,
+        keeping slugs: Set<String>,
+        db: any Database
+    ) async throws -> (tunes: [String], parts: Int) {
+        try await db.transaction { tx in
+            let stale = try await Tune.query(on: tx)
+                .filter(\.$branch.$id == branch)
+                .all()
+                .filter { !slugs.contains($0.slug) }
+            let staleIDs = try stale.map { try $0.requireID() }
+            guard !staleIDs.isEmpty else { return (tunes: [], parts: 0) }
+
+            // Parts would cascade from tunes, but deleting them explicitly gives
+            // the count — as `removeBranch` does.
+            let parts = try await Part.query(on: tx).filter(\.$tune.$id ~~ staleIDs).count()
+            try await Part.query(on: tx).filter(\.$tune.$id ~~ staleIDs).delete()
+            try await Tune.query(on: tx).filter(\.$id ~~ staleIDs).delete()
+
+            return (tunes: stale.map(\.slug).sorted(), parts: parts)
         }
     }
 
@@ -500,14 +624,15 @@ actor BuildService {
     /// is the source of truth — leaves the branch with no stored definitions rather
     /// than stale ones.
     ///
-    /// - Returns: The number of failed steps (0 or more) to add to the build's count.
+    /// - Returns: The binders the file declares — empty when it is absent or unusable —
+    ///   and the number of failed steps (0 or more) to add to the build's count.
     private func refreshBinderDefinitions(
         branch: String,
         branchDir: URL,
         db: Database,
         log: inout String,
         logger: Logger
-    ) async -> Int {
+    ) async -> (binders: [OfficialBinder], failures: Int) {
         let fileName = BinderDefinitionLoader.fileName
         var failures = 0
         var binders: [OfficialBinder] = []
@@ -548,7 +673,224 @@ actor BuildService {
             logger.warning("[BuildService] Storing binder definitions failed: \(error)")
             failures += 1
         }
-        return failures
+        return (binders, failures)
+    }
+
+    // MARK: - Official binder assembly
+
+    /// One assembled official binder.
+    struct AssembledBinder: Sendable {
+        /// The `output:` filename the binder declared, which is also its name in Box.
+        let filename: String
+        /// Where it was written on disk.
+        let url: URL
+    }
+
+    /// Assembles every binder `binders.yaml` declared, writing each to the branch's
+    /// binder output directory.
+    ///
+    /// One binder failing does not stop the others: a band with two binders and one
+    /// broken tune should still get the binder that is fine. Each failure is a failed
+    /// step, so the build comes out `partial` rather than green.
+    ///
+    /// A tune the binder names but the catalogue could not supply is logged per binder,
+    /// not just once per file: `refreshBinderDefinitions` says the slug is unknown, and
+    /// this says which binder went to press without it.
+    private func assembleOfficialBinders(
+        branch: String,
+        binders: [OfficialBinder],
+        db: Database,
+        log: inout String,
+        logger: Logger
+    ) async -> (binders: [AssembledBinder], failures: Int) {
+        guard !binders.isEmpty else { return ([], 0) }
+
+        let directory = binderOutputDirectory(for: branch)
+        var assembled: [AssembledBinder] = []
+        var failures = 0
+
+        for binder in binders {
+            do {
+                let result = try await binderService.assemble(
+                    binder, branch: branch, in: directory, db: db, logger: logger)
+                log += "[binder] Assembled \(binder.output) — \(result.pageCount) page(s)\n"
+                for slug in result.missing {
+                    log += "[binder]   ⚠ \(binder.output) is missing '\(slug)': it produced no pages\n"
+                }
+                if !result.missing.isEmpty {
+                    logger.warning("[BuildService] \(binder.output) assembled without \(result.missing.count) tune(s)")
+                    failures += 1
+                }
+                do {
+                    // The record of this file's journey to Box, written before any
+                    // attempt on it: a build that dies mid-upload still leaves the next
+                    // one something to reconcile from.
+                    _ = try await BoxUpload.record(
+                        branch: branch, filename: binder.output, url: result.url, on: db)
+                } catch {
+                    log += "[binder]   ⚠ Could not record \(binder.output) for upload: \(error)\n"
+                    logger.warning("[BuildService] Recording \(binder.output) for upload failed: \(error)")
+                    failures += 1
+                }
+                assembled.append(AssembledBinder(filename: binder.output, url: result.url))
+            } catch {
+                log += "[binder] ✗ \(binder.output) could not be assembled: \(error)\n"
+                logger.warning("[BuildService] Assembling \(binder.output) for '\(branch)' failed: \(error)")
+                failures += 1
+            }
+        }
+        return (assembled, failures)
+    }
+
+    // MARK: - Box upload
+
+    /// Uploads the assembled binders to the branch's year folder in Box.
+    ///
+    /// Only these go to Box (C5): the per-tune PDFs are intermediates the binders are
+    /// made from, and a personalised binder is downloaded from TNG itself. One binder
+    /// failing does not stop the next — a band with two binders should get the one that
+    /// is fine — and every failure is a failed step, so a build that reached Box with
+    /// none of its binders cannot come out green.
+    ///
+    /// Before returning, it catches up on any binder an earlier build assembled but
+    /// could not send (O6) — see `retryOutstandingUploads`.
+    ///
+    /// - Returns: The ID of the year folder the binders went to, the binders held over
+    ///   from earlier builds that went up with them, and the number of failed uploads.
+    private func uploadBinders(
+        _ binders: [AssembledBinder],
+        branch: String,
+        db: Database,
+        log: inout String,
+        logger: Logger
+    ) async -> (folderID: String?, retried: [String], failures: Int) {
+        var folderID: String?
+        var failures = 0
+
+        if binders.isEmpty {
+            log += "[box] No binders to upload\n"
+        }
+        for binder in binders {
+            do {
+                folderID = try await boxService.upload(pdf: binder.url, forBranch: branch)
+                log += "[box] Uploaded \(binder.filename)\n"
+                await markUploaded(branch: branch, filename: binder.filename, db: db, logger: logger)
+            } catch {
+                log += "[box] ✗ Upload failed for \(binder.filename): \(error)\n"
+                logger.warning("[BuildService] Box upload failed for \(binder.filename): \(error)")
+                await markFailed(branch: branch, filename: binder.filename,
+                                 error: error, db: db, logger: logger)
+                failures += 1
+            }
+        }
+
+        let caughtUp = await retryOutstandingUploads(
+            branch: branch, excluding: Set(binders.map(\.filename)),
+            db: db, log: &log, logger: logger)
+        folderID = folderID ?? caughtUp.folderID
+        failures += caughtUp.failures
+        return (folderID, caughtUp.uploaded, failures)
+    }
+
+    /// Uploads the binders of `branch` that an earlier build assembled but could not
+    /// send, skipping the ones this build has just dealt with.
+    ///
+    /// This is O6's "retry on the next build", and it runs here rather than before
+    /// conversion for a reason: a binder this build is about to reassemble does not want
+    /// last week's bytes pushed ahead of it, and a build that fails before assembly has
+    /// no working Box session to retry through anyway.
+    ///
+    /// A pending file that is gone, or whose bytes are no longer the ones the row
+    /// describes, is dropped rather than uploaded: something later rebuilt it, and
+    /// uploading what is on disk now under a row that means something else would put
+    /// the wrong version in Box.
+    private func retryOutstandingUploads(
+        branch: String,
+        excluding handled: Set<String>,
+        db: Database,
+        log: inout String,
+        logger: Logger
+    ) async -> (folderID: String?, uploaded: [String], failures: Int) {
+        let outstanding: [BoxUpload]
+        do {
+            outstanding = try await BoxUpload.outstanding(for: branch, on: db)
+                .filter { !handled.contains($0.filename) }
+        } catch {
+            log += "[box] Could not check for outstanding uploads: \(error)\n"
+            logger.warning("[BuildService] Reading outstanding uploads for '\(branch)' failed: \(error)")
+            return (nil, [], 1)
+        }
+        guard !outstanding.isEmpty else { return (nil, [], 0) }
+
+        log += "[box] \(outstanding.count) binder(s) held over from an earlier build\n"
+        var folderID: String?
+        var uploaded: [String] = []
+        var failures = 0
+
+        for row in outstanding {
+            let url = URL(fileURLWithPath: row.localPath)
+            guard FileManager.default.fileExists(atPath: row.localPath),
+                  let hash = try? BoxUpload.hash(of: url), hash == row.contentHash else {
+                log += "[box]   \(row.filename) is no longer on disk as assembled; dropping it\n"
+                logger.info("[BuildService] Dropping stale outstanding upload \(row.filename) for '\(branch)'")
+                try? await row.delete(on: db)
+                continue
+            }
+
+            do {
+                folderID = try await boxService.upload(pdf: url, forBranch: branch)
+                log += "[box]   Uploaded \(row.filename), held over from an earlier build\n"
+                row.uploadedAt = Date()
+                row.lastError = nil
+                row.attempts += 1
+                try await row.save(on: db)
+                uploaded.append(row.filename)
+            } catch {
+                log += "[box]   ✗ \(row.filename) failed again: \(error)\n"
+                logger.warning("[BuildService] Retrying \(row.filename) for '\(branch)' failed: \(error)")
+                await markFailed(branch: branch, filename: row.filename,
+                                 error: error, db: db, logger: logger)
+                failures += 1
+            }
+        }
+        return (folderID, uploaded, failures)
+    }
+
+    /// Stamps a binder as having reached Box.
+    ///
+    /// Bookkeeping failures are logged but do not fail the build: the binder *is* in
+    /// Box. The cost is that the next build may upload it a second time, which Box
+    /// records as a new version of the same file and nobody has to clean up.
+    private func markUploaded(branch: String, filename: String, db: Database, logger: Logger) async {
+        do {
+            guard let row = try await BoxUpload.query(on: db)
+                .filter(\.$branch.$id == branch)
+                .filter(\.$filename == filename)
+                .first() else { return }
+            row.uploadedAt = Date()
+            row.lastError = nil
+            row.attempts += 1
+            try await row.save(on: db)
+        } catch {
+            logger.warning("[BuildService] Could not record \(filename) as uploaded: \(error)")
+        }
+    }
+
+    /// Records why a binder did not reach Box, so the next build has something to
+    /// retry and the operator has something to read.
+    private func markFailed(branch: String, filename: String, error: any Error,
+                            db: Database, logger: Logger) async {
+        do {
+            guard let row = try await BoxUpload.query(on: db)
+                .filter(\.$branch.$id == branch)
+                .filter(\.$filename == filename)
+                .first() else { return }
+            row.lastError = "\(error)"
+            row.attempts += 1
+            try await row.save(on: db)
+        } catch {
+            logger.warning("[BuildService] Could not record the failed upload of \(filename): \(error)")
+        }
     }
 
     // MARK: - File discovery
@@ -568,18 +910,20 @@ actor BuildService {
 
     // MARK: - Parser diagnostics
 
-    /// Renders CeolKit parse diagnostics as build-log lines.
+    /// Renders CeolKit parse diagnostics as build-log lines, and counts the errors
+    /// among them.
     ///
     /// Diagnostics replace the stdout/stderr that the previous `abcm2ps`-backed
     /// converter emitted, so they are the operator's only window into a source
     /// file that parsed badly. `info`-severity entries are dropped to keep the
     /// log readable.
-    private func formatDiagnostics(_ parsed: ParseResult, stem: String) -> String {
+    private func formatDiagnostics(_ parsed: ParseResult, stem: String) -> (text: String, errors: Int) {
         var out = ""
+        var errors = 0
         for diagnostic in parsed.diagnostics {
             let label: String
             switch diagnostic.severity {
-            case .error:   label = "✗ error"
+            case .error:   label = "✗ error"; errors += 1
             case .warning: label = "⚠ warning"
             case .info:    continue
             }
@@ -591,7 +935,7 @@ actor BuildService {
                 out += "[parse]     hint: \(hint)\n"
             }
         }
-        return out
+        return (out, errors)
     }
 
     // MARK: - PDF conversion

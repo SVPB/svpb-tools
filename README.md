@@ -8,7 +8,10 @@ builder to generate a personalised PDF containing only the parts they need, with
 reflect their own binder.
 
 For full architecture details, feature list, and implementation plan, see [PROJECT_PLAN.md](PROJECT_PLAN.md).
-For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md).
+TNG is deployed on a DigitalOcean Droplet; see [Deployment](#deployment) below. For the
+record of why that host was chosen over the alternatives, see
+[HOSTING_OPTIONS.md](HOSTING_OPTIONS.md) — a superseded decision record, not current
+documentation.
 
 ---
 
@@ -21,11 +24,6 @@ For a comparison of hosting options, see [HOSTING_OPTIONS.md](HOSTING_OPTIONS.md
 4. TNG reads `binders.yaml` from that branch, assembles each official binder it names, and
    uploads **those PDFs only** to Box.
 5. A summary is posted to the band's Slack channel.
-
-> **Current status:** step 4's binder assembly and Box upload are not yet implemented —
-> `BoxService` is a skeleton, and `BuildService` currently attempts to upload each per-tune PDF
-> rather than the assembled binders. Conversion, the tune catalogue, and the binder builder all
-> work. See the open issues.
 
 Band members can visit the server's web UI to build a personalised binder: select the tunes
 and parts they need, and download a single PDF with page numbers specific to their selection.
@@ -421,30 +419,47 @@ obtain a fresh refresh token using the existing Client ID and Client Secret.
 4. In the app's **Configuration** tab:
    - Note the **Client ID** and **Client Secret** — these are `BOX_CLIENT_ID` and
      `BOX_CLIENT_SECRET`.
-   - Under **OAuth 2.0 Redirect URI**, add `http://localhost:8080/box-callback` (used only
-     during the one-time token setup below; it does not need to be publicly reachable).
+   - Under **OAuth 2.0 Redirect URI**, add `https://<your-domain>/box-callback` — the exact
+     value is shown on TNG's own **Connections** page (`/admin/connections`), ready to copy.
+     Add `http://localhost:8080/box-callback` as well if you use the `box-auth` fallback
+     below for local development.
    - Under **Application Scopes**, ensure **Read and write all files and folders** is checked.
    - Click **Save Changes**.
 
-**Obtaining the initial tokens:**
+**Authorizing TNG (once, from the browser):**
 
-Box OAuth2 requires completing an authorization flow once to obtain an access token and a
-refresh token. TNG includes a helper command for this:
+Box OAuth2 requires completing an authorization flow once. Sign in to the dashboard and open
+**Connections** (`/admin/connections`):
 
-```sh
-docker compose run --rm tng box-auth
-```
+1. Check the **Box redirect URI** shown at the bottom of the page against the one registered in
+   the Box Developer Console. They must match exactly, or Box refuses the redirect.
+2. Press **Authorise Box**. A window opens at Box — log in as the Box user who owns the music
+   folder and click **Grant Access**.
+3. The window closes itself and the page reloads. Box should now read **working**, naming the
+   folder it is uploading into.
 
-This prints an authorization URL. Open it in a browser, log in as the Box user who owns the
-music folder, and click **Grant Access**. Box redirects to `localhost:8080/box-callback` with
-an authorization code; the helper exchanges this for tokens and prints the refresh token to
-the terminal. Copy it into `BOX_REFRESH_TOKEN` in your `.env`.
+`BOX_REFRESH_TOKEN` does not need to be set in `.env`: the token TNG obtains here is stored in
+its database, and the server starts without one precisely so that it can be authorized this way.
 
-> **Important:** Box access tokens expire after one hour. TNG automatically exchanges the
-> refresh token for a new access token as needed and writes the new refresh token back to its
-> database. You do not need to intervene for routine operation. However, if the server is
-> offline for more than 60 days, the refresh token will expire and you will need to repeat the
-> authorization step above.
+> **Important:** Box access tokens expire after one hour, and refresh tokens after 60 days of
+> disuse. TNG renews its refresh token **once a day**, whether or not anything has been built,
+> and writes each new one to its database — so as long as the server is running, its Box access
+> cannot lapse. This matters because the band goes months between edits to the music: renewing
+> only when a build uploads would mean a quiet winter ended with a dead token. Set
+> `BOX_TOKEN_REFRESH_HOURS` to change the interval.
+>
+> The daily renewal doubles as a check that Box still works. If one fails, TNG posts to the
+> Slack channel — once when it starts failing and once when it recovers, not every day — and the
+> Connections page shows the error. If the token does lapse, press **Re-authorise Box** and
+> repeat the three steps above.
+
+**Fallback: the `box-auth` command.**
+
+`docker compose run --rm tng box-auth` runs the same flow from a terminal, printing a refresh
+token to paste into `BOX_REFRESH_TOKEN`. It needs a publicly reachable HTTPS redirect of its
+own — Box rejects a plain-`http` one that is not localhost — so on a deployed server it needs a
+tunnel (see the local development notes), and the Connections page is the easier path. Keep it
+for bootstrapping a server that is not yet reachable over HTTPS.
 
 **Finding the Box folder ID:**
 

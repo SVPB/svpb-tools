@@ -7,6 +7,9 @@ struct BranchRemovalSummary: Content, Equatable {
     let parts: Int
     let builds: Int
     let binderDefinitions: Int
+    /// Rows tracking which of this branch's binders had reached Box. Box itself is
+    /// never touched — what goes is only TNG's record of it.
+    let boxUploads: Int
     /// Workspace-relative directories that existed and were deleted.
     let directories: [String]
     /// Total size of the regular files in those directories.
@@ -15,5 +18,6 @@ struct BranchRemovalSummary: Content, Equatable {
     enum CodingKeys: String, CodingKey {
         case branch, tunes, parts, builds, directories, bytes
         case binderDefinitions = "binder_definitions"
+        case boxUploads = "box_uploads"
     }
 }

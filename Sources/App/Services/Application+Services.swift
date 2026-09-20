@@ -27,6 +27,15 @@ extension Application {
         set { storage[SlackServiceKey.self] = newValue }
     }
 
+    // MARK: GitService
+
+    private struct GitServiceKey: StorageKey { typealias Value = GitService }
+
+    var gitService: GitService {
+        get { storage[GitServiceKey.self]! }
+        set { storage[GitServiceKey.self] = newValue }
+    }
+
     // MARK: BoxService
 
     private struct BoxServiceKey: StorageKey { typealias Value = BoxService }
