@@ -25,6 +25,7 @@ final class BinderPageTests: XCTestCase {
     private let sharedElementIDs = [
         "sel-branch", "binder-name", "search-tunes",
         "tune-list", "binder-entries", "empty-msg", "add-section",
+        "fold-all-sections",
     ]
 
     func testConstructorPageRenders() async throws {
@@ -64,7 +65,7 @@ final class BinderPageTests: XCTestCase {
     func testBothPagesCarryTheSharedStyles() async throws {
         for path in ["binder-constructor", "binder-builder"] {
             try await app.test(.GET, path) { res async in
-                XCTAssertTrue(res.body.string.contains(".binder-entries li.section-header.active"),
+                XCTAssertTrue(res.body.string.contains(".binder-entries .section-header.active"),
                               "\(path) lost the shared styles")
             }
         }
@@ -86,6 +87,19 @@ final class BinderPageTests: XCTestCase {
         }
     }
 
+    /// A section can be folded down to its header row (#45), so both pages need
+    /// the grouping markup's styles as well as the fold-everything control.
+    func testBothPagesCanFoldSections() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains(".section-group"), "\(path) lost the section grouping styles")
+                XCTAssertTrue(html.contains(".section-tunes"), "\(path) lost the folded-list styles")
+                XCTAssertTrue(html.contains(".fold-btn"), "\(path) lost the disclosure styles")
+            }
+        }
+    }
+  
     /// Neither page offers a part to choose (#24): every part of a tune is the
     /// same multi-voice score until #20, so the tags could only mislead — and
     /// the builder's default of "all parts selected" put the score in the

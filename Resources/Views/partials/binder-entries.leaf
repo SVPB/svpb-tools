@@ -1,7 +1,11 @@
 <!-- The ordered list of selected tunes. The page supplies the heading and
      wraps this in its own card alongside whatever it builds from the
      selection. -->
-<h2>#import("entries-heading")</h2>
+<div class="entries-head">
+  <h2>#import("entries-heading")</h2>
+  <!-- Shown only once there is more than one section to fold. -->
+  <button type="button" class="btn-link" id="fold-all-sections" hidden>Fold all</button>
+</div>
 <p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
 <ul class="binder-entries" id="binder-entries"></ul>
 <!-- Shown only on pages that turn sections on. -->

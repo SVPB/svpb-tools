@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Sections in the binder list can be folded (#45)
+
+- Every section header in "Selected Entries" / "Your Binder" now carries a disclosure triangle
+  that folds the section down to its header row. A real binder runs to many sections of many
+  tunes, and the list was one flat `<ul>` taller than the viewport: moving a tune from an early
+  section to a late one meant scrolling past everything in between, with the header being aimed
+  at off-screen.
+- Folding is display only. It never touches the selection, the order, or the YAML — and because
+  the fold is held against the section itself rather than its position, it survives the rebuild
+  of the list that every add, reorder or retitle triggers, and follows a section that moves.
+- A folded section says how many tunes are under it, so a closed section still reports its size.
+- A tune that arrives in a folded section — added from the catalogue, moved in with the arrows,
+  or sent there by the move-to-section menu — opens that section, so a tune is never swallowed
+  by a fold.
+- A "Fold all" / "Show all" control sits beside the heading once there is more than one section.
+- The disclosure is a real button: reachable from the keyboard, carrying `aria-expanded` and
+  `aria-controls`, and distinct from the click on the header that makes a section active.
+
 #### The server says which music repository it is reading (#34)
 
 - The admin dashboard names the configured music repository directly above the "Known
