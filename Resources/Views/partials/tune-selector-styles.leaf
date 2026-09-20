@@ -30,9 +30,6 @@
   .binder-entries li.section-header.active { border-left-color: #3730a3; background: #e0e7ff; }
   .binder-entries li.section-header input.section-title { flex: 1; margin: 0; font-weight: 600; min-width: 0; }
   .binder-entries select.section-move { width: auto; max-width: 9rem; margin: 0 4px; padding: 1px 2px; font-size: 0.75rem; }
-  .part-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
-  .part-tag  { background: #e0e7ff; color: #3730a3; border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; cursor: pointer; }
-  .part-tag.selected { background: #3730a3; color: #fff; }
   .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
   .btn-primary { background: #1a1a2e; color: #fff; }
   .btn-primary:hover { background: #2a2a4e; }

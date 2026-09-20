@@ -64,27 +64,43 @@ final class BinderPageTests: XCTestCase {
     func testBothPagesCarryTheSharedStyles() async throws {
         for path in ["binder-constructor", "binder-builder"] {
             try await app.test(.GET, path) { res async in
-                XCTAssertTrue(res.body.string.contains(".part-tag.selected"), "\(path) lost the shared styles")
+                XCTAssertTrue(res.body.string.contains(".binder-entries li.section-header.active"),
+                              "\(path) lost the shared styles")
             }
         }
     }
 
-    /// Both pages have sections (#29, #21). The constructor also hides part
-    /// tags, since an official binder takes each tune whole (#20), and needs
-    /// every section titled, since `binders.yaml` has no untitled sections.
-    func testSectionAndPartOptionsPerPage() async throws {
+    /// Both pages have sections (#29, #21). Only the constructor needs every
+    /// section titled, since `binders.yaml` has no untitled sections.
+    func testSectionOptionsPerPage() async throws {
         try await app.test(.GET, "binder-builder") { res async in
             let html = res.body.string
             XCTAssertTrue(html.contains("sections: true"))
             XCTAssertTrue(html.contains(".section-header"), "Section styles missing")
-            XCTAssertFalse(html.contains("parts: false"))
             XCTAssertFalse(html.contains("untitledSections: false"))
         }
         try await app.test(.GET, "binder-constructor") { res async in
             let html = res.body.string
             XCTAssertTrue(html.contains("sections: true"))
-            XCTAssertTrue(html.contains("parts: false"))
             XCTAssertTrue(html.contains("untitledSections: false"))
+        }
+    }
+
+    /// Neither page offers a part to choose (#24): every part of a tune is the
+    /// same multi-voice score until #20, so the tags could only mislead — and
+    /// the builder's default of "all parts selected" put the score in the
+    /// binder once per voice.
+    func testNoPageOffersPartSelection() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                XCTAssertFalse(res.body.string.contains("part-tag"), "\(path) still styles part tags")
+            }
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            XCTAssertEqual(res.status, .ok)
+            let js = res.body.string
+            XCTAssertFalse(js.contains("togglePart"), "the component still toggles parts")
+            XCTAssertFalse(js.contains("part-tag"), "the component still renders part tags")
         }
     }
 

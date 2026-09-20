@@ -65,7 +65,6 @@
 // deferred (#20), and binders.yaml gives every section a divider.
 TuneSelector.init({
   sections: true,
-  parts: false,
   untitledSections: false,
   setStatus,
   onClear: () => { document.getElementById('yaml-output').value = ''; },
