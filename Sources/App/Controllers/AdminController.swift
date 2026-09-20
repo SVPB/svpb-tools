@@ -78,6 +78,8 @@ struct AdminController: RouteCollection {
             let builds: [BuildRow]
             let branchNames: [String]
             let currentUser: String
+            /// Read-only: which music repository the branches below came from.
+            let musicRepo: String?
         }
 
         let isoFormatter = ISO8601DateFormatter()
@@ -96,7 +98,8 @@ struct AdminController: RouteCollection {
             isAdmin: true,
             builds: buildRows,
             branchNames: branches.map(\.name),
-            currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? ""
+            currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "",
+            musicRepo: req.application.gitService.configuredRepoURL
         )
         return try await req.view.render("admin/index", ctx)
     }
