@@ -138,9 +138,8 @@ actor BinderService {
             var pendingDivider = section.dividerTitle
 
             for entry in section.entries {
-                let resolutions = try await resolve(entry, branch: spec.branch,
-                                                    label: label, db: db, logger: logger)
-                guard !resolutions.isEmpty else { continue }
+                guard let resolution = try await resolve(entry, branch: spec.branch,
+                                                         label: label, db: db, logger: logger) else { continue }
 
                 if let title = pendingDivider {
                     pendingDivider = nil
@@ -153,10 +152,8 @@ actor BinderService {
                     }
                 }
 
-                for resolution in resolutions {
-                    pages.append(contentsOf: engrave(resolution, firstPageNumber: pages.count + 1,
-                                                     label: label, logger: logger))
-                }
+                pages.append(contentsOf: engrave(resolution, firstPageNumber: pages.count + 1,
+                                                 label: label, logger: logger))
             }
 
             if let title = pendingDivider {
@@ -241,7 +238,7 @@ actor BinderService {
 
     // MARK: - Resolution
 
-    /// One part of one entry, and what its pages can be engraved from.
+    /// One entry, and what its pages can be engraved from.
     private struct Resolution {
         let slug: String
         let partName: String
@@ -252,20 +249,27 @@ actor BinderService {
         let prebuiltPaths: [String]
     }
 
-    /// The parts of one binder entry that have pages, in the order they were asked for,
-    /// or an empty array when the tune or all of its requested parts cannot be found.
+    /// The one set of pages a binder entry contributes, or `nil` when the tune cannot be
+    /// found or none of its parts produced any.
     ///
-    /// A part is still resolved through its `Part` record rather than from the ABC alone:
-    /// the build is the authority on whether a part produced pages, so a binder includes
-    /// exactly the parts it included before this became a re-engraving (#20 is what will
-    /// make those parts differ from one another).
+    /// **An entry resolves to exactly one part, however many it names.** Per-part rendering
+    /// is deferred past MVP (#20): every `Part` row of a tune points at the same `svgPaths`
+    /// today — the full multi-voice score — so honouring a list of three parts would append
+    /// that score three times. The builder no longer offers the choice (#24), but shared
+    /// URLs and stored `BinderRequest`s written while it did still name every part, and this
+    /// is where those become one tune in the binder again.
+    ///
+    /// The part is still resolved through a `Part` record rather than from the ABC alone:
+    /// the build is the authority on whether a tune produced pages at all. Which part stands
+    /// for the tune does not matter while they are identical; when #20 makes them differ,
+    /// this is where the list comes back.
     private func resolve(
         _ entry: BinderEntry,
         branch: String,
         label: String,
         db: Database,
         logger: Logger
-    ) async throws -> [Resolution] {
+    ) async throws -> Resolution? {
         logger.debug("[BinderService] \(label): looking up tune '\(entry.tuneSlug)'")
         guard let tune = try await Tune.query(on: db)
             .filter(\.$branch.$id == branch)
@@ -273,50 +277,52 @@ actor BinderService {
             .first(),
             let tuneID = tune.id else {
             logger.warning("[BinderService] \(label): tune '\(entry.tuneSlug)' not found in branch '\(branch)' — skipping")
-            return []
+            return nil
         }
         let abcURL = tune.abcPath.map { URL(fileURLWithPath: $0) }
 
-        // An entry with no parts asks for the tune's one set of pages, which is what an
-        // official binder always wants: per-part rendering is deferred past MVP (#20), and
-        // every `Part` row of a tune points at the same `svgPaths` today, so naming them all
-        // would repeat the whole score once per part. One row stands for the tune until #20
-        // makes the parts differ, at which point this is where the list comes back.
-        let partNames: [String]
+        // Named parts first, in the order the entry names them, so an entry that asks for
+        // one particular part still gets that part's record. An entry that names none —
+        // which is what an official binder always sends — falls back to the tune's parts
+        // in name order, for a stable choice rather than whatever the database returns.
+        let candidates: [Part]
         if entry.parts.isEmpty {
-            guard let representative = try await Part.query(on: db)
+            candidates = try await Part.query(on: db)
                 .filter(\.$tune.$id == tuneID)
                 .sort(\.$name)
-                .first() else {
-                logger.warning("[BinderService] \(label): tune '\(entry.tuneSlug)' has no parts — skipping")
-                return []
-            }
-            partNames = [representative.name]
+                .all()
         } else {
-            partNames = entry.parts
-        }
-        logger.debug("[BinderService] \(label): tune '\(entry.tuneSlug)' found, requesting \(partNames.count) part(s): \(partNames.joined(separator: ", "))")
-
-        var result: [Resolution] = []
-        for partName in partNames {
-            guard let part = try await Part.query(on: db)
+            let byName = try await Part.query(on: db)
                 .filter(\.$tune.$id == tuneID)
-                .filter(\.$name == partName)
-                .first() else {
-                logger.warning("[BinderService] \(label): part '\(partName)' not found for tune '\(entry.tuneSlug)' — skipping")
+                .filter(\.$name ~~ entry.parts)
+                .all()
+                .reduce(into: [String: Part]()) { $0[$1.name] = $1 }
+            candidates = entry.parts.compactMap { byName[$0] }
+            if entry.parts.count > 1 {
+                logger.debug("[BinderService] \(label): entry '\(entry.tuneSlug)' names \(entry.parts.count) parts — taking the tune once (#20)")
+            }
+        }
+        guard !candidates.isEmpty else {
+            let named = entry.parts.isEmpty
+                ? "has no parts on record"
+                : "has none of the parts it names (\(entry.parts.joined(separator: ", ")))"
+            logger.warning("[BinderService] \(label): tune '\(entry.tuneSlug)' \(named) — skipping")
+            return nil
+        }
+
+        for part in candidates {
+            let paths = part.svgPaths ?? []
+            guard !paths.isEmpty else {
+                logger.warning("[BinderService] \(label): part '\(part.name)' of '\(entry.tuneSlug)' has no SVG paths — skipping")
                 continue
             }
-
-            let paths = part.svgPaths ?? []
-            if paths.isEmpty {
-                logger.warning("[BinderService] \(label): part '\(partName)' of '\(entry.tuneSlug)' has no SVG paths — skipping")
-            } else {
-                logger.debug("[BinderService] \(label): resolved \(paths.count) page(s) for '\(entry.tuneSlug)' / '\(partName)'")
-                result.append(Resolution(slug: entry.tuneSlug, partName: partName,
-                                         abcURL: abcURL, prebuiltPaths: paths))
-            }
+            logger.debug("[BinderService] \(label): resolved \(paths.count) page(s) for '\(entry.tuneSlug)' / '\(part.name)'")
+            return Resolution(slug: entry.tuneSlug, partName: part.name,
+                              abcURL: abcURL, prebuiltPaths: paths)
         }
-        return result
+
+        logger.warning("[BinderService] \(label): no part of '\(entry.tuneSlug)' has any pages — skipping")
+        return nil
     }
 
     /// The pages for one resolved part, engraved so the first prints `firstPageNumber`.

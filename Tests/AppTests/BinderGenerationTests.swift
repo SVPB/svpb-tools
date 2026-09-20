@@ -14,6 +14,7 @@ final class BinderGenerationTests: XCTestCase {
     var app: Application!
     var workspace: URL!
     var service: BinderService!
+    var branch: Branch!
 
     override func setUp() async throws {
         app = try await Application.make(.testing)
@@ -23,7 +24,7 @@ final class BinderGenerationTests: XCTestCase {
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         service = BinderService(musicWorkspacePath: workspace.path)
 
-        let branch = Branch(name: "2026")
+        branch = Branch(name: "2026")
         try await branch.save(on: app.db)
         for slug in ["march", "reel", "jig"] {
             try await seedTune(slug, branch: branch)
@@ -153,6 +154,74 @@ final class BinderGenerationTests: XCTestCase {
         XCTAssertNil(reloaded?.pdfPath)
     }
 
+    // MARK: - One tune, once (#24)
+
+    /// A multi-voice tune goes in once however many of its parts the entry names.
+    ///
+    /// The builder used to select every part by default and append the same score per
+    /// part, so a member who touched nothing got each harmonised tune two or three times
+    /// over. The page no longer offers the choice, but shared URLs and stored requests
+    /// written while it did still name every voice, and they have to assemble correctly.
+    func testEntryNamingEveryPartYieldsTheTuneOnce() async throws {
+        try await seedTune("air", branch: branch, extraParts: ["Harmony 1", "Harmony 2"])
+
+        let spec = BinderSpec(name: "Voices", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [
+                BinderEntry(tuneSlug: "air", parts: ["Melody", "Harmony 1", "Harmony 2"]),
+            ]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["air"])
+    }
+
+    /// An entry that names one part gets that tune — whole, since that is all there is
+    /// to give — and still only once.
+    func testEntryNamingOnePartYieldsTheTuneOnce() async throws {
+        try await seedTune("air", branch: branch, extraParts: ["Harmony 1"])
+
+        let spec = BinderSpec(name: "One Voice", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [BinderEntry(tuneSlug: "air", parts: ["Harmony 1"])]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["air"])
+    }
+
+    /// Page numbers count sheets of paper, so removing the duplicates has to move the
+    /// numbering with them: three multi-voice tunes are pages 1, 2, 3 — not 1, 4, 7.
+    func testDeduplicatedEntriesRenumberTheBinder() async throws {
+        for slug in ["first", "second", "third"] {
+            try await seedTune(slug, branch: branch, extraParts: ["Harmony 1", "Harmony 2"])
+        }
+        let all = ["Melody", "Harmony 1", "Harmony 2"]
+
+        let spec = BinderSpec(name: "Numbered", branch: "2026", sections: [
+            BinderSection(title: nil, entries: ["first", "second", "third"].map {
+                BinderEntry(tuneSlug: $0, parts: all)
+            }),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["first", "second", "third"])
+        XCTAssertEqual(printedPageNumbers(pages), [1, 2, 3])
+    }
+
+    /// A named part the build never converted does not cost the tune its place: the
+    /// entry falls through to a part that does have pages.
+    func testEntryFallsThroughToAPartWithPages() async throws {
+        try await seedTune("air", branch: branch)
+        let tune = try await Tune.query(on: app.db).filter(\.$slug == "air").first()!
+        try await Part(tune: tune, name: "Bass", svgPaths: nil).save(on: app.db)
+
+        let spec = BinderSpec(name: "Gap", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [BinderEntry(tuneSlug: "air", parts: ["Bass", "Melody"])]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["air"])
+    }
+
     // MARK: - Helpers
 
     private func entry(_ slug: String) -> BinderEntry {
@@ -189,7 +258,8 @@ final class BinderGenerationTests: XCTestCase {
 
     /// Writes a tune's ABC where the build would, engraves it, and records both in the
     /// catalogue — the shape `BinderService` re-engraves from and falls back to.
-    private func seedTune(_ slug: String, branch: Branch, pages: Int = 1) async throws {
+    private func seedTune(_ slug: String, branch: Branch, pages: Int = 1,
+                          extraParts: [String] = []) async throws {
         let body = "ABcd efga | gfed cBAG | ABcd efga | g2 f2 e2 d2 |]"
         let abc = """
         %abc-2.2
@@ -217,6 +287,11 @@ final class BinderGenerationTests: XCTestCase {
 
         let tune = try Tune(branch: branch, slug: slug, title: slug, abcPath: abcURL.path)
         try await tune.save(on: app.db)
-        try await Part(tune: tune, name: "Melody", svgPaths: svgPaths).save(on: app.db)
+        // Every part points at the same pages, which is what the build produces today:
+        // one PDF per `.abc` file, the whole multi-voice score, recorded against each
+        // voice the file declares (#20 is what will make them differ).
+        for name in ["Melody"] + extraParts {
+            try await Part(tune: tune, name: name, svgPaths: svgPaths).save(on: app.db)
+        }
     }
 }

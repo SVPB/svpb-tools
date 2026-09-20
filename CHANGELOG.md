@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### The binder builder no longer offers a part to choose, and a binder holds each tune once (#24)
+
+- `/binder-builder` showed a clickable part tag per voice and sent the selection with the binder
+  spec, but no choice among them could be honoured: `BuildService` renders one PDF per `.abc` file
+  and gives every `Part` row of a tune the same pages, so "Harmony 1" and "Melody" are both the
+  whole multi-voice score. Deselecting down to one voice changed nothing in the PDF.
+- Worse, every part was selected by **default**, and the binder appended the score once per
+  selected part. A member who touched nothing got each harmonised tune twice or three times over.
+  That was live.
+- The tags and `togglePart` are gone from the shared component, so both pages now take a tune
+  whole. The constructor had already opted out (#21); it simply stops having to.
+- **An entry now resolves to one part however many it names.** The de-duplication is in
+  `BinderService`, not the page, because the specs that name every voice are already out there —
+  in shared URLs, in stored `BinderRequest` rows, in anything built from them. They assemble
+  correctly now. Page numbers count the de-duplicated pages, so three multi-voice tunes are pages
+  1, 2, 3 rather than 1, 4, 7.
+- A named part the build never converted no longer costs the tune its place: the entry falls
+  through to a part that does have pages.
+- The spec still carries `parts`, unchanged: the DTO, the `BinderRequest.definition` column and
+  every shared URL are written in it, and #20 is where the choice comes back — with per-part
+  rendering behind it to make it mean something.
+
 ## [0.3.0] - 2026-09-19
 
 ### Added
