@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### The server says which music repository it is reading (#34)
+
+- The admin dashboard names the configured music repository directly above the "Known
+  Branches" list it explains. Until now `SVPB_MUSIC_REPO_URL` appeared only in the log line of
+  a *first* clone, so a server whose checkouts already existed never mentioned it again — and a
+  server pointed at a development repository looked exactly like one pointed at the band's.
+  Answering "which one is this?" meant SSHing to the droplet and reading the environment.
+- `GET /health` reports the same value as `music_repo`, so the wiring can be checked from a
+  monitor or a terminal without first finding a login. This is a deliberate exposure on an
+  unauthenticated endpoint: the repository is no secret to the band, and the question is most
+  worth asking by whoever has not signed in yet.
+- A URL that carries credentials as userinfo (`https://x-access-token:…@github.com/…`) is shown
+  with them removed in both places — a rendered page is where a token stops being a secret.
+- An unset `SVPB_MUSIC_REPO_URL` reads "not configured" rather than leaving a gap, because a
+  server wired to no repository is itself the thing worth noticing.
+- Read-only throughout: this adds no way to change the repository from the UI.
+
 ## [0.3.0] - 2026-09-19
 
 ### Added

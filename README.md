@@ -112,7 +112,7 @@ each value before starting the stack.
 | `TNG_IMAGE_TAG` | Optional. Which published image to run: `develop`, a release version, or unset for `latest` |
 | `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
-| `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository |
+| `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository. The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
 | `BOX_CLIENT_SECRET` | Box OAuth2 application client secret |
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |

@@ -111,6 +111,14 @@ actor GitService {
         return components.string ?? repoURL
     }
 
+    /// The repository this server is pointed at, ready to show, or `nil` when none is set.
+    ///
+    /// A server wired to no repository is itself the interesting fact, so "unset" is a
+    /// value of its own rather than an empty string that renders as a gap.
+    nonisolated var configuredRepoURL: String? {
+        repoURL.isEmpty ? nil : displayRepoURL
+    }
+
     // MARK: - Private helpers
 
     /// Runs a git command, capturing stdout+stderr.
