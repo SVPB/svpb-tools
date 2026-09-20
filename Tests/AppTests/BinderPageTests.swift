@@ -65,7 +65,7 @@ final class BinderPageTests: XCTestCase {
     func testBothPagesCarryTheSharedStyles() async throws {
         for path in ["binder-constructor", "binder-builder"] {
             try await app.test(.GET, path) { res async in
-                XCTAssertTrue(res.body.string.contains(".binder-entries li.section-header.active"),
+                XCTAssertTrue(res.body.string.contains(".binder-entries .section-header.active"),
                               "\(path) lost the shared styles")
             }
         }

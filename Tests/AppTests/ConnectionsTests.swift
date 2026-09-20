@@ -288,4 +288,21 @@ final class ConnectionsTests: XCTestCase {
 
         XCTAssertEqual(service.displayRepoURL, "https://github.com/SVPB/svpb-music.git")
     }
+
+    /// The reported form is the display form: a token must not reach a page through it either.
+    func testTheReportedRepositoryURLAlsoDropsItsCredentials() {
+        let service = GitService(
+            repoURL: "https://x-access-token:ghp_secret@github.com/SVPB/svpb-music.git",
+            workspaceBase: URL(fileURLWithPath: "/tmp"))
+
+        XCTAssertEqual(service.configuredRepoURL, "https://github.com/SVPB/svpb-music.git")
+    }
+
+    /// An unset repository is the interesting fact, so it is absent rather than empty —
+    /// a page can then say "not configured" instead of rendering a gap.
+    func testAnUnsetRepositoryURLIsReportedAsAbsent() {
+        let service = GitService(repoURL: "", workspaceBase: URL(fileURLWithPath: "/tmp"))
+
+        XCTAssertNil(service.configuredRepoURL)
+    }
 }
