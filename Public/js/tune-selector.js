@@ -5,9 +5,15 @@
  * binder builder.
  *
  * The component owns everything the two pages have in common: the branch
- * picker, the tune catalogue with its search filter, and the ordered selection
- * with its part tags. What each page *does* with the selection — YAML on the
- * constructor, a PDF request on the builder — stays in the page.
+ * picker, the tune catalogue with its search filter, and the ordered selection.
+ * What each page *does* with the selection — YAML on the constructor, a PDF
+ * request on the builder — stays in the page.
+ *
+ * A tune goes into a binder whole. Its parts are not offered as a choice: every
+ * part of a tune resolves to the same multi-voice score until #20 renders them
+ * separately, so choosing between them could only ever mislead (#24). Entries
+ * still carry the tune's full part list, because that is what the binder spec
+ * and every shared URL are written in.
  *
  * The selection is always a list of sections, each an ordered list of entries.
  * A section's title becomes a divider page ahead of it; a section with no title
@@ -26,7 +32,6 @@ const TuneSelector = (() => {
   const sections = [];     // [{title: string, entries: [{tuneSlug, title, parts: [string]}]}]
   let active = 0;          // index of the section the catalogue adds tunes to
   let sectionsEnabled = false;
-  let partsEnabled = true;       // show part tags for choosing parts per tune
   let untitledSections = true;   // a blank section title is allowed, and means no divider
   let allTunes = [];       // [{id, slug, title, subtitle, abcPath}]
   let tuneDetails = {};    // slug → {id, slug, title, subtitle, parts: [{id, name}]}
@@ -182,21 +187,7 @@ const TuneSelector = (() => {
     info.style.flex = '1';
     info.style.marginLeft = '4px';
     const tune = allTunes.find(t => t.slug === entry.tuneSlug);
-    const title = tuneNameBlock(entry.title, tune && tuneFile(tune));
-    // Part tags
-    const tags = document.createElement('div');
-    tags.className = 'part-tags';
-    if (partsEnabled && tuneDetails[entry.tuneSlug]) {
-      tuneDetails[entry.tuneSlug].parts.forEach(p => {
-        const tag = document.createElement('span');
-        tag.className = 'part-tag' + (entry.parts.includes(p.name) ? ' selected' : '');
-        tag.textContent = p.name;
-        tag.addEventListener('click', () => togglePart(entry.tuneSlug, p.name));
-        tags.appendChild(tag);
-      });
-    }
-    info.appendChild(title);
-    info.appendChild(tags);
+    info.appendChild(tuneNameBlock(entry.title, tune && tuneFile(tune)));
     li.appendChild(info);
 
     // Jump straight to another section, for moves the arrows would take a while over.
@@ -250,25 +241,13 @@ const TuneSelector = (() => {
   async function addTune(slug, title) {
     if (allEntries().some(e => e.tuneSlug === slug)) return;
     try {
+      // The whole tune goes in, so the entry names every part the catalogue knows.
       const detail = await getTuneDetail(slug);
       sections[active].entries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
       renderBinder();
     } catch (e) {
       setStatus('Failed to load tune detail: ' + e.message, 'error');
     }
-  }
-
-  function togglePart(slug, partName) {
-    const entry = allEntries().find(e => e.tuneSlug === slug);
-    if (!entry) return;
-    const idx = entry.parts.indexOf(partName);
-    if (idx >= 0) {
-      entry.parts.splice(idx, 1);
-      if (entry.parts.length === 0) entry.parts.push(partName); // keep at least one
-    } else {
-      entry.parts.push(partName);
-    }
-    renderBinder();
   }
 
   /** Moves an entry one place; off either end of a section it joins the neighbouring one. */
@@ -326,6 +305,11 @@ const TuneSelector = (() => {
    * `{title, entries: [{tuneSlug, parts?}]}` in binder order. Tunes missing from
    * the current branch's catalogue are dropped. The branch must already be
    * selected and its tunes loaded.
+   *
+   * A saved `parts` list is read and discarded: URLs shared while the tags were
+   * still clickable may name one voice of a tune, and restoring that selection
+   * would be restoring a choice that never worked (#24). The tune comes back
+   * whole, as it would have been rendered anyway.
    */
   async function load(saved) {
     sections.length = 0;
@@ -339,7 +323,7 @@ const TuneSelector = (() => {
         section.entries.push({
           tuneSlug: e.tuneSlug,
           title: tuneLabel(tune),
-          parts: (e.parts && e.parts.length) ? e.parts : detail.parts.map(p => p.name),
+          parts: detail.parts.map(p => p.name),
         });
       }
       if (sectionsEnabled || sections.length === 0) sections.push(section);
@@ -365,9 +349,6 @@ const TuneSelector = (() => {
    * @param {boolean} [hooks.sections]
    *        Shows the controls for adding, naming, and reordering sections.
    *        Without it the selection is a single untitled section.
-   * @param {boolean} [hooks.parts=true]
-   *        Shows the part tags. Without them every entry keeps all of its
-   *        tune's parts: pick a tune and it goes in whole.
    * @param {boolean} [hooks.untitledSections=true]
    *        Whether a blank section title is meaningful (no divider). Pages
    *        that need every section titled turn this off, and the controls
@@ -387,7 +368,6 @@ const TuneSelector = (() => {
   async function init(hooks) {
     hooks = hooks || {};
     sectionsEnabled = !!hooks.sections;
-    partsEnabled = hooks.parts !== false;
     untitledSections = hooks.untitledSections !== false;
     if (hooks.setStatus) setStatus = hooks.setStatus;
     if (hooks.onClear) onClear = hooks.onClear;
@@ -433,7 +413,6 @@ const TuneSelector = (() => {
     load,
     addTune,
     addSection,
-    togglePart,
     loadTunes,
     getTuneDetail,
     render: renderBinder,
