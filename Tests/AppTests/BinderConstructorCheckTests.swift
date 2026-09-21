@@ -34,6 +34,9 @@ final class BinderConstructorCheckTests: XCTestCase {
         output: "the_big_binder.pdf"
         sections:
           - title: ["SVPB Music", "2026"]
+          - toc: true
+          - title: "What's Inside"
+            toc: true
           - title: "Grade 4: Tunes"
             entries:
               - tune: "amazing_grace"
@@ -50,9 +53,13 @@ final class BinderConstructorCheckTests: XCTestCase {
         XCTAssertEqual(binder.name, "The \"Big\" Binder — Sìne Bhàn")
         XCTAssertEqual(binder.output, "the_big_binder.pdf")
         XCTAssertEqual(binder.sections.map(\.title),
-                       [["SVPB Music", "2026"], "Grade 4: Tunes", "Massed Bands"])
-        XCTAssertEqual(binder.sections.map(\.entries.count), [0, 2, 1],
-                       "A title page picked up entries, or a section lost them")
+                       [["SVPB Music", "2026"], [], "What's Inside", "Grade 4: Tunes", "Massed Bands"])
+        // The two shapes the page writes a table of contents in: the bare flag
+        // where the heading is the default, and a title beside it where it is not.
+        XCTAssertEqual(binder.sections.map(\.toc),
+                       [nil, TableOfContentsSpec(), TableOfContentsSpec(), nil, nil])
+        XCTAssertEqual(binder.sections.map(\.entries.count), [0, 0, 0, 2, 1],
+                       "A title page or a table of contents picked up entries, or a section lost them")
         XCTAssertEqual(binder.sections.flatMap(\.entries).map(\.tune), ["amazing_grace", "yes", "1990"])
         XCTAssertTrue(binder.sections.flatMap(\.entries).allSatisfy { $0.parts == nil })
     }

@@ -28,6 +28,11 @@
  * newlines in it — `TuneSelector.titleLines(section)` is what a page generating
  * YAML or a spec should write.
  *
+ * A section may instead be marked `toc` (#47): it is then the binder's table of
+ * contents, which expands at assembly into one line per section and per tune,
+ * each carrying the page it starts on. It holds no tunes, and its title is the
+ * heading printed over the listing rather than a title page of its own.
+ *
  * A section can be folded down to its header row so a tall binder stays
  * navigable. Folding is display only: it never touches the selection, the
  * ordering, or anything a page generates from them.
@@ -40,7 +45,7 @@ const TuneSelector = (() => {
   // ── State ────────────────────────────────────────────────────────────────
   // `sections` is never reassigned: callers hold on to the array returned by
   // `TuneSelector.sections()`, so resetting has to mutate it in place.
-  const sections = [];     // [{title: string, entries: [{tuneSlug, title, parts: [string]}]}]
+  const sections = [];     // [{title: string, toc: boolean, entries: [{tuneSlug, title, parts: [string]}]}]
   let active = 0;          // index of the section the catalogue adds tunes to
   let sectionsEnabled = false;
   let untitledSections = true;   // a blank section title is allowed, and means no title page
@@ -69,16 +74,24 @@ const TuneSelector = (() => {
     .map(line => line.replace(/\s+/g, ' ').trim())
     .filter(line => line !== '');
   const sectionLabel = idx => titleLines(sections[idx]).join(' / ')
-    || `Section ${idx + 1} (${untitledSections ? 'no title page' : 'untitled'})`;
+    || (isContents(sections[idx])
+      ? 'Table of contents'
+      : `Section ${idx + 1} (${untitledSections ? 'no title page' : 'untitled'})`);
+  /** A fresh, empty section. Everything that adds one goes through this. */
+  const newSection = (toc = false) => ({ title: '', entries: [], toc });
+  /** A section that is the binder's table of contents (#47). */
+  const isContents = section => sectionsEnabled && !!section.toc;
   /**
    * A section with a title and no tunes is a title page and nothing else.
    *
    * The title is part of it: a section with neither tunes nor a title is not a
    * title page, it is an empty section that prints nothing — which is what every
-   * page starts with, and what "+ Add section" makes.
+   * page starts with, and what "+ Add section" makes. A table of contents is
+   * none of these: its title is a heading, and it is its own kind of page.
    */
   const isTitlePage = section =>
-    sectionsEnabled && section.entries.length === 0 && titleLines(section).length > 0;
+    sectionsEnabled && !section.toc
+    && section.entries.length === 0 && titleLines(section).length > 0;
 
   /** Title over file path, as shown in both the catalogue and the binder. */
   function tuneNameBlock(title, file) {
@@ -97,7 +110,7 @@ const TuneSelector = (() => {
 
   function resetSections() {
     sections.length = 0;
-    sections.push({ title: '', entries: [] });
+    sections.push(newSection());
     active = 0;
   }
   resetSections();
@@ -169,11 +182,12 @@ const TuneSelector = (() => {
    * `tunesId` identifies the list the disclosure control opens and closes.
    */
   function renderSectionHeader(section, sIdx, tunesId) {
+    const contents = isContents(section);
     const titlePage = isTitlePage(section);
     const hasTunes = section.entries.length > 0;
     const row = document.createElement('div');
     row.className = 'section-header' + (sIdx === active ? ' active' : '')
-      + (titlePage ? ' title-page' : '');
+      + (titlePage ? ' title-page' : '') + (contents ? ' contents' : '');
     row.title = 'Tunes you add from the catalogue go into the highlighted section';
     row.addEventListener('click', e => {
       // Buttons act for themselves, and re-rendering under the title input would take its focus.
@@ -196,8 +210,9 @@ const TuneSelector = (() => {
     } else {
       const marker = document.createElement('span');
       marker.className = 'title-page-marker';
-      marker.textContent = titlePage ? '¶' : '';
-      if (titlePage) marker.title = 'A title page: one page of text, with no tunes under it';
+      marker.textContent = contents ? '☰' : (titlePage ? '¶' : '');
+      if (contents) marker.title = 'A table of contents: every section and tune, with the page it starts on';
+      else if (titlePage) marker.title = 'A title page: one page of text, with no tunes under it';
       row.appendChild(marker);
     }
 
@@ -211,9 +226,11 @@ const TuneSelector = (() => {
     input.rows = Math.max(1, section.title.split('\n').length);
     input.maxLength = 240;
     input.value = section.title;
-    input.placeholder = titlePage
-      ? 'Title page text — one line per line'
-      : (untitledSections ? 'Section title (blank: no title page)' : 'Section title');
+    input.placeholder = contents
+      ? 'Contents heading (blank: "Contents")'
+      : (titlePage
+        ? 'Title page text — one line per line'
+        : (untitledSections ? 'Section title (blank: no title page)' : 'Section title'));
     input.setAttribute('aria-label', `Title of section ${sIdx + 1}`);
     // Update state without re-rendering, so typing keeps focus.
     input.addEventListener('input', () => {
@@ -232,19 +249,22 @@ const TuneSelector = (() => {
 
     // What the row stands for: a title page says so, and a folded section still
     // says how much is under it.
-    if (titlePage || (shut && hasTunes)) {
+    if (contents || titlePage || (shut && hasTunes)) {
       const count = document.createElement('span');
       count.className = 'section-count';
       const n = section.entries.length;
-      count.textContent = titlePage ? 'title page' : `${n} ${n === 1 ? 'tune' : 'tunes'}`;
+      count.textContent = contents ? 'contents'
+        : (titlePage ? 'title page' : `${n} ${n === 1 ? 'tune' : 'tunes'}`);
       row.appendChild(count);
     }
 
     if (sections.length > 1) {
       const receiver = sIdx > 0 ? 'above' : 'below';
-      const what = titlePage
-        ? 'Remove this title page'
-        : `Remove section — its tunes join the section ${receiver}`;
+      const what = contents
+        ? 'Remove this table of contents'
+        : (titlePage
+          ? 'Remove this title page'
+          : `Remove section — its tunes join the section ${receiver}`);
       row.appendChild(button('✕', what, '', () => removeSection(sIdx)));
     }
     return row;
@@ -272,7 +292,8 @@ const TuneSelector = (() => {
       sel.className = 'section-move';
       sel.title = 'Move to section';
       sel.setAttribute('aria-label', `Section for ${entry.title}`);
-      sections.forEach((_, i) => {
+      sections.forEach((section, i) => {
+        if (isContents(section)) return;   // a page, not somewhere to put tunes
         const opt = document.createElement('option');
         opt.value = String(i);
         opt.textContent = sectionLabel(i);
@@ -299,6 +320,7 @@ const TuneSelector = (() => {
     empty.style.display = total === 0 ? '' : 'none';
     el('add-section').hidden = !sectionsEnabled;
     el('add-title-page').hidden = !sectionsEnabled;
+    el('add-toc').hidden = !sectionsEnabled;
 
     sections.forEach((section, sIdx) => {
       // Without sections there is nothing to fold, so the entries stay a flat list.
@@ -347,7 +369,7 @@ const TuneSelector = (() => {
   /** Relabels the move-to-section menus after a title edit, without re-rendering. */
   function refreshSectionLabels() {
     el('binder-entries').querySelectorAll('select.section-move').forEach(sel => {
-      Array.from(sel.options).forEach((opt, i) => { opt.textContent = sectionLabel(i); });
+      Array.from(sel.options).forEach(opt => { opt.textContent = sectionLabel(Number(opt.value)); });
     });
   }
 
@@ -357,6 +379,12 @@ const TuneSelector = (() => {
     try {
       // The whole tune goes in, so the entry names every part the catalogue knows.
       const detail = await getTuneDetail(slug);
+      // A table of contents is a page, not somewhere to put tunes, so a tune
+      // added while one is aimed at starts a section of its own after it.
+      if (isContents(sections[active])) {
+        sections.splice(active + 1, 0, newSection());
+        active += 1;
+      }
       sections[active].entries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
       // Show the section the tune just went into, rather than swallowing it.
       setFolded(sections[active], false);
@@ -366,33 +394,45 @@ const TuneSelector = (() => {
     }
   }
 
+  /**
+   * The nearest section on one side of `sIdx` that a tune may live in, or -1.
+   * Contents sections are stepped over: they are pages, not places for tunes.
+   */
+  function neighbourSection(sIdx, delta) {
+    for (let i = sIdx + delta; i >= 0 && i < sections.length; i += delta) {
+      if (!isContents(sections[i])) return i;
+    }
+    return -1;
+  }
+
   /** Moves an entry one place; off either end of a section it joins the neighbouring one. */
   function moveEntry(sIdx, eIdx, delta) {
     const list = sections[sIdx].entries;
     const target = eIdx + delta;
+    const neighbour = neighbourSection(sIdx, delta < 0 ? -1 : 1);
     if (target >= 0 && target < list.length) {
       [list[eIdx], list[target]] = [list[target], list[eIdx]];
-    } else if (delta < 0 && sIdx > 0) {
-      sections[sIdx - 1].entries.push(list.splice(eIdx, 1)[0]);
-      setFolded(sections[sIdx - 1], false);
-    } else if (delta > 0 && sIdx < sections.length - 1) {
-      sections[sIdx + 1].entries.unshift(list.splice(eIdx, 1)[0]);
-      setFolded(sections[sIdx + 1], false);
-    } else {
+    } else if (neighbour < 0) {
       return;
+    } else if (delta < 0) {
+      sections[neighbour].entries.push(list.splice(eIdx, 1)[0]);
+      setFolded(sections[neighbour], false);
+    } else {
+      sections[neighbour].entries.unshift(list.splice(eIdx, 1)[0]);
+      setFolded(sections[neighbour], false);
     }
     renderBinder();
   }
 
   function moveEntryToSection(sIdx, eIdx, targetIdx) {
-    if (targetIdx === sIdx || !sections[targetIdx]) return;
+    if (targetIdx === sIdx || !sections[targetIdx] || isContents(sections[targetIdx])) return;
     sections[targetIdx].entries.push(sections[sIdx].entries.splice(eIdx, 1)[0]);
     setFolded(sections[targetIdx], false);
     renderBinder();
   }
 
   function addSection() {
-    sections.push({ title: '', entries: [] });
+    sections.push(newSection());
     active = sections.length - 1;
     renderBinder();
     focusLastTitle();
@@ -408,7 +448,22 @@ const TuneSelector = (() => {
    * user can still click its header to aim at it deliberately.
    */
   function addTitlePage() {
-    sections.push({ title: '', entries: [] });
+    sections.push(newSection());
+    renderBinder();
+    focusLastTitle();
+  }
+
+  /**
+   * Adds the binder's table of contents (#47): a section that is a page of its
+   * own, holding no tunes, whose title is the heading over the listing.
+   *
+   * Like a title page it does not become the active section — there is nothing
+   * to put in it. It lists the whole binder wherever it sits, so where it goes
+   * is a matter of taste: added last and moved up with the arrows, or added
+   * first and left there.
+   */
+  function addTableOfContents() {
+    sections.push(newSection(true));
     renderBinder();
     focusLastTitle();
   }
@@ -430,20 +485,31 @@ const TuneSelector = (() => {
   /** Removes a section's title page, keeping its tunes: they join the section above (or below, for the first). */
   function removeSection(sIdx) {
     if (sections.length < 2) return;
+    // The tunes go to the nearest section that can hold them: the one above
+    // where there is one, the first one that can otherwise. Contents sections
+    // are pages rather than places for tunes, so they are stepped over — and
+    // where nothing is left that can hold them, an untitled section is made.
+    const above = neighbourSection(sIdx, -1);
     const [removed] = sections.splice(sIdx, 1);
-    const receiver = sIdx > 0 ? sections[sIdx - 1] : sections[0];
-    if (sIdx > 0) receiver.entries.push(...removed.entries);
+    let receiverIdx = above >= 0 ? above : neighbourSection(-1, 1);
+    if (receiverIdx < 0) {
+      sections.push(newSection());
+      receiverIdx = sections.length - 1;
+    }
+    const receiver = sections[receiverIdx];
+    if (above >= 0) receiver.entries.push(...removed.entries);
     else receiver.entries.unshift(...removed.entries);
     // The tunes moved somewhere the user can see.
     if (removed.entries.length) setFolded(receiver, false);
     // Follow the tunes: a removed active section hands over to the one that took them.
     if (active > sIdx || (active === sIdx && sIdx > 0)) active -= 1;
+    active = Math.min(active, sections.length - 1);
     renderBinder();
   }
 
   /**
    * Replaces the selection with `saved`, a list of
-   * `{title, entries: [{tuneSlug, parts?}]}` in binder order, where `title` is a
+   * `{title, toc?, entries: [{tuneSlug, parts?}]}` in binder order, where `title` is a
    * string or a list of lines. Tunes missing from the current branch's catalogue
    * are dropped, but a section that keeps none of them is kept when it has a
    * title: it is a title page, not an empty section (#46). The branch must
@@ -458,7 +524,8 @@ const TuneSelector = (() => {
     sections.length = 0;
     for (const s of saved) {
       const title = Array.isArray(s.title) ? s.title.join('\n') : (s.title || '');
-      const section = { title: sectionsEnabled ? title : '', entries: [] };
+      const section = newSection(sectionsEnabled && !!s.toc);
+      section.title = sectionsEnabled ? title : '';
       for (const e of (s.entries || [])) {
         const tune = allTunes.find(t => t.slug === e.tuneSlug);
         const seen = x => x.tuneSlug === e.tuneSlug;
@@ -492,8 +559,8 @@ const TuneSelector = (() => {
    * @param {object} hooks
    * @param {boolean} [hooks.sections]
    *        Shows the controls for adding, naming, and reordering sections, and
-   *        for adding a title page. Without it the selection is a single
-   *        untitled section.
+   *        for adding a title page or a table of contents. Without it the
+   *        selection is a single untitled section.
    * @param {boolean} [hooks.untitledSections=true]
    *        Whether a blank section title is meaningful (no title page). Pages
    *        that need every section titled turn this off, and the controls
@@ -520,6 +587,7 @@ const TuneSelector = (() => {
 
     el('add-section').addEventListener('click', addSection);
     el('add-title-page').addEventListener('click', addTitlePage);
+    el('add-toc').addEventListener('click', addTableOfContents);
     el('fold-all-sections').addEventListener('click', () => {
       // Whatever the button offers, it does to every section at once.
       const shut = sections.some(s => !folded.has(s));
@@ -566,6 +634,7 @@ const TuneSelector = (() => {
     addTune,
     addSection,
     addTitlePage,
+    addTableOfContents,
     loadTunes,
     getTuneDetail,
     render: renderBinder,
@@ -573,6 +642,8 @@ const TuneSelector = (() => {
     sections: () => sections,
     /** A section's title as the lines it is engraved as: tidied, blanks dropped. */
     titleLines,
+    /** Whether a section is the binder's table of contents rather than tunes (#47). */
+    isContents,
     /** Every selected entry in binder order, across sections (a fresh array). */
     entries: allEntries,
     /** The catalogue for the currently selected branch. */

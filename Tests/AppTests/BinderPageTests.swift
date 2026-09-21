@@ -121,6 +121,42 @@ final class BinderPageTests: XCTestCase {
         }
     }
 
+    /// A table of contents is a third kind of thing to add, beside a section and
+    /// a title page (#47), and the header of a section that is one is marked as
+    /// such and kept out of the list of places a tune can go.
+    func testBothPagesOfferATableOfContents() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains("id=\"add-toc\""), "\(path) has no table-of-contents control")
+                XCTAssertTrue(html.contains(".section-header.contents"),
+                              "\(path) lost the contents header styles")
+                XCTAssertTrue(html.contains("TuneSelector.isContents"),
+                              "\(path) does not write the contents section out")
+            }
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            let js = res.body.string
+            XCTAssertTrue(js.contains("function addTableOfContents()"),
+                          "the component cannot add a table of contents")
+            XCTAssertTrue(js.contains("isContents(sections[targetIdx])"),
+                          "a tune can still be moved into a table of contents")
+        }
+    }
+
+    /// The constructor writes `toc: true`; the builder writes it into the spec
+    /// it posts and shares.
+    func testEachPageWritesAContentsInItsOwnShape() async throws {
+        try await app.test(.GET, "binder-constructor") { res async in
+            XCTAssertTrue(res.body.string.contains("'      - toc: true'"),
+                          "the constructor cannot write a table of contents")
+        }
+        try await app.test(.GET, "binder-builder") { res async in
+            XCTAssertTrue(res.body.string.contains("section.toc = true"),
+                          "the builder cannot write a table of contents")
+        }
+    }
+
     /// Neither page offers a part to choose (#24): every part of a tune is the
     /// same multi-voice score until #20, so the tags could only mislead — and
     /// the builder's default of "all parts selected" put the score in the
