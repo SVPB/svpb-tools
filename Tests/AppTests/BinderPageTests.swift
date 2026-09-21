@@ -25,7 +25,7 @@ final class BinderPageTests: XCTestCase {
     private let sharedElementIDs = [
         "sel-branch", "binder-name", "search-tunes",
         "tune-list", "binder-entries", "empty-msg", "add-section",
-        "fold-all-sections",
+        "fold-all-sections", "add-title-page",
     ]
 
     func testConstructorPageRenders() async throws {
@@ -100,6 +100,27 @@ final class BinderPageTests: XCTestCase {
         }
     }
   
+    /// A title page is a first-class thing to add, beside "add section" (#46),
+    /// and the header of a section that is one is marked as such.
+    func testBothPagesOfferATitlePage() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains("id=\"add-title-page\""), "\(path) has no title-page control")
+                XCTAssertTrue(html.contains(".section-header.title-page"),
+                              "\(path) lost the title-page header styles")
+                XCTAssertTrue(html.contains("textarea.section-title"),
+                              "\(path) still styles the title as a single-line input")
+            }
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            let js = res.body.string
+            XCTAssertTrue(js.contains("function addTitlePage()"), "the component cannot add a title page")
+            XCTAssertTrue(js.contains("createElement('textarea')"),
+                          "the component still edits a title on one line")
+        }
+    }
+
     /// Neither page offers a part to choose (#24): every part of a tune is the
     /// same multi-voice score until #20, so the tags could only mislead — and
     /// the builder's default of "all parts selected" put the score in the
@@ -125,6 +146,8 @@ final class BinderPageTests: XCTestCase {
             XCTAssertTrue(html.contains("id=\"binder-output\""))
             XCTAssertTrue(html.contains("'binders:'"))
             XCTAssertTrue(html.contains("- tune: "))
+            // A multi-line title is written as a YAML list, a one-line one as a string.
+            XCTAssertTrue(html.contains("title.length > 1"), "the constructor cannot write a multi-line title")
             XCTAssertFalse(html.contains("tune_slug"))
             XCTAssertFalse(html.contains("parts:`"), "the constructor must not emit parts")
             XCTAssertTrue(html.contains("/binder-constructor/check"))

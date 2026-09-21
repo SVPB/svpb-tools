@@ -11,6 +11,7 @@ import Foundation
 ///   - name: "2026 Band Binder"
 ///     output: 2026_binder.pdf
 ///     sections:
+///       - title: ["SVPB Music", "2026"]   # front matter: a title page, no tunes
 ///       - title: "Grade 4 Tunes"
 ///         entries:
 ///           - tune: g4_medley_2026
@@ -39,7 +40,7 @@ struct OfficialBinder: Codable, Sendable {
     /// the binder is written and uploaded under, so it must be a bare filename.
     let output: String
 
-    /// Ordered sections, each introduced by a divider page.
+    /// Ordered sections, each introduced by a title page.
     let sections: [OfficialBinderSection]
 }
 
@@ -48,11 +49,27 @@ struct OfficialBinder: Codable, Sendable {
 /// A titled run of tunes within an official binder.
 struct OfficialBinderSection: Codable, Sendable {
 
-    /// The title printed on the section's divider page.
-    let title: String
+    /// The title printed on the section's title page. One line written as a
+    /// string, or several written as a list and engraved as a stacked block.
+    let title: BinderTitle
 
     /// Ordered tunes in this section.
+    ///
+    /// Omitted or empty means the section is a title page and nothing else
+    /// (#46) — which is how `binders.yaml` writes a binder cover, and how it
+    /// puts two title pages on consecutive pages.
     let entries: [OfficialBinderEntry]
+
+    init(title: BinderTitle, entries: [OfficialBinderEntry] = []) {
+        self.title = title
+        self.entries = entries
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decode(BinderTitle.self, forKey: .title)
+        entries = try container.decodeIfPresent([OfficialBinderEntry].self, forKey: .entries) ?? []
+    }
 }
 
 // MARK: - OfficialBinderEntry
@@ -78,11 +95,11 @@ extension OfficialBinder {
     /// This binder as the `BinderSpec` the assembler builds from.
     ///
     /// Official and personal binders are assembled by the same code — the pages, the
-    /// divider ahead of each titled section, and the re-engraved page numbers are the
+    /// title page ahead of each titled section, and the re-engraved page numbers are the
     /// same problem either way — so `binders.yaml`'s shape is mapped onto the personal
     /// spec rather than duplicating `BinderService`.
     ///
-    /// Every section of an official binder has a title, so every one gets a divider.
+    /// Every section of an official binder has a title, so every one gets a title page.
     /// Entries carry **no parts**: per-part rendering is deferred past MVP (#20), and an
     /// empty `parts` list is how a spec asks for the tune's one set of pages. Honouring
     /// `parts:` today would repeat the whole score once per named part, since every

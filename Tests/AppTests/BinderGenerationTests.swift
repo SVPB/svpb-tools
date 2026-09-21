@@ -7,8 +7,9 @@ import XCTest
 @testable import App
 
 /// Drives `BinderService` against a seeded catalogue: every tune page in order,
-/// with a divider page ahead of each titled section that has something in it,
-/// and every page numbered by its position in the binder rather than in its tune.
+/// with a title page ahead of each titled section and standing on its own wherever
+/// a section holds no tunes (#46), and every page numbered by its position in the
+/// binder rather than in its tune.
 final class BinderGenerationTests: XCTestCase {
 
     var app: Application!
@@ -36,25 +37,81 @@ final class BinderGenerationTests: XCTestCase {
         try? FileManager.default.removeItem(at: workspace)
     }
 
-    func testTitledSectionsGetDividerPages() async throws {
+    func testTitledSectionsGetTitlePages() async throws {
         let spec = BinderSpec(name: "Sections", branch: "2026", sections: [
-            // Untitled: no divider, just the tune.
+            // Untitled: no title page, just the tune.
             BinderSection(title: nil, entries: [entry("march")]),
-            // Titled: a divider, then both tunes.
+            // Titled: a title page, then both tunes.
             BinderSection(title: "Parade Set", entries: [entry("reel"), entry("jig")]),
-            // Titled but empty, and titled with nothing that resolves: no orphan dividers.
-            BinderSection(title: "Nothing Here", entries: []),
+            // Titled with nothing that resolves: no title standing over nothing.
             BinderSection(title: "Gone", entries: [entry("no_such_tune")]),
-            // A blank title is no title.
+            // A blank title is no title, with or without tunes under it.
             BinderSection(title: "  ", entries: [entry("march")]),
+            BinderSection(title: "  ", entries: []),
         ])
 
         let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
-        XCTAssertEqual(describe(pages), ["march", "divider: Parade Set", "reel", "jig", "march"])
+        XCTAssertEqual(describe(pages), ["march", "title: Parade Set", "reel", "jig", "march"])
+    }
+
+    /// The front matter the issue opens with: three title pages in a row, the
+    /// first of them two lines and belonging to the binder rather than to any
+    /// section, and none of them owning the tune that follows (#46).
+    func testTitleOnlySectionsStandAsPagesOfTheirOwn() async throws {
+        let spec = BinderSpec(name: "2027 Band Binder", branch: "2026", sections: [
+            BinderSection(title: ["SVPB Music", "2027"], entries: []),
+            BinderSection(title: "G4 Tunes", entries: []),
+            BinderSection(title: "G4 Medley", entries: [entry("march")]),
+            BinderSection(title: nil, entries: [entry("reel")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), [
+            "title: SVPB Music / 2027",
+            "title: G4 Tunes",
+            "title: G4 Medley",
+            "march",
+            "reel",
+        ])
+        // Front matter is paper too: the medley opens on 4, not on 1.
+        XCTAssertEqual(printedPageNumbers(pages), [4, 5])
+    }
+
+    /// A two-line title page is one page carrying two lines, not two pages and
+    /// not one line with the break swallowed.
+    func testMultiLineTitleIsOnePageOfStackedLines() async throws {
+        let spec = BinderSpec(name: "Cover", branch: "2026", sections: [
+            BinderSection(title: ["SVPB Music", "2027"], entries: []),
+            BinderSection(title: nil, entries: [entry("march")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(pages.count, 2)
+        guard case .titlePage(let title, let svg) = pages[0] else {
+            return XCTFail("First page is not a title page")
+        }
+        XCTAssertEqual(title.pageLines, ["SVPB Music", "2027"])
+        XCTAssertEqual(svg.components(separatedBy: "</svg>").count - 1, 1, "More than one page")
+        let baselines = svg.matches(of: /<g transform="translate\([-0-9.]+ ([-0-9.]+)\)">/)
+            .compactMap { Double($0.1) }
+        XCTAssertEqual(baselines.count, 2, "The two lines did not stack")
+        XCTAssertLessThan(baselines[0], baselines[1], "The second line is not below the first")
+    }
+
+    /// A section that is neither a title nor any tunes is nothing at all, and
+    /// must not cost a blank page.
+    func testEmptyUntitledSectionProducesNothing() async throws {
+        let spec = BinderSpec(name: "Empty", branch: "2026", sections: [
+            BinderSection(title: nil, entries: []),
+            BinderSection(title: "Parade Set", entries: [entry("march")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["title: Parade Set", "march"])
     }
 
     /// A binder stored in the flat shape assembles exactly as it did before.
-    func testFlatSpecHasNoDividers() async throws {
+    func testFlatSpecHasNoTitlePages() async throws {
         let json = #"{"name":"Old","branch":"2026","entries":[{"tune_slug":"jig","parts":["Melody"]},{"tune_slug":"reel","parts":["Melody"]}]}"#
         let spec = try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8))
 
@@ -76,10 +133,10 @@ final class BinderGenerationTests: XCTestCase {
         XCTAssertEqual(printedPageNumbers(pages), [1, 2, 3])
     }
 
-    /// A divider is a sheet of paper, so the tune behind it is numbered as though it
-    /// were one — the number has to match what a reader counts, not what a renderer
+    /// A title page is a sheet of paper, so the tune behind it is numbered as though
+    /// it were one — the number has to match what a reader counts, not what a renderer
     /// happens to have drawn.
-    func testDividerPagesAreCountedEvenThoughTheyPrintNoNumber() async throws {
+    func testTitlePagesAreCountedEvenThoughTheyPrintNoNumber() async throws {
         let spec = BinderSpec(name: "Divided", branch: "2026", sections: [
             BinderSection(title: "Parade Set", entries: [entry("march")]),
             BinderSection(title: "Slow Airs", entries: [entry("reel")]),
@@ -87,8 +144,8 @@ final class BinderGenerationTests: XCTestCase {
 
         let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
         XCTAssertEqual(describe(pages),
-                       ["divider: Parade Set", "march", "divider: Slow Airs", "reel"])
-        // Pages 1 and 3 are the dividers; the tunes behind them are 2 and 4.
+                       ["title: Parade Set", "march", "title: Slow Airs", "reel"])
+        // Pages 1 and 3 are the title pages; the tunes behind them are 2 and 4.
         XCTAssertEqual(printedPageNumbers(pages), [2, 4])
     }
 
@@ -228,7 +285,8 @@ final class BinderGenerationTests: XCTestCase {
         BinderEntry(tuneSlug: slug, parts: ["Melody"])
     }
 
-    /// Tune pages by slug, dividers by title, so a test reads as the binder's contents.
+    /// Tune pages by slug, title pages by their text, so a test reads as the
+    /// binder's contents.
     private func describe(_ pages: [BinderService.Page]) -> [String] {
         pages.map { page in
             switch page {
@@ -236,8 +294,8 @@ final class BinderGenerationTests: XCTestCase {
                 slug
             case .prebuilt(let slug, _):
                 "prebuilt: \(slug)"
-            case .divider(let title, let svg):
-                svg.contains("divider-title") ? "divider: \(title)" : "malformed divider: \(title)"
+            case .titlePage(let title, let svg):
+                svg.contains("title-page") ? "title: \(title.display)" : "malformed title: \(title.display)"
             }
         }
     }

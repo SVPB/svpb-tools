@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Title pages are pages, not a property of the tunes after them (#46)
+
+- A binder section may now hold **no tunes at all**. Such a section is a title page and nothing
+  else. Before this a title existed only as a divider ahead of a run of tunes, so a section with
+  nothing in it was silently dropped — which made three ordinary things inexpressible: a cover
+  page belonging to the binder rather than to whatever tunes happened to follow it, two title
+  pages on consecutive pages, and a heading with nothing under it yet.
+- A title may now be **several lines**, written as a list where a string used to go. The lines are
+  engraved as a block, centred, with the first line largest and the rest set smaller at one shared
+  size, each shrinking to fit the page. `title: ["SVPB Music", "2027"]` is a cover; `title: "Parade
+  Set"` is what it always was.
+- Both shapes are accepted wherever a title is read, and a one-line title is written back out as
+  the bare string it came in as. Every `binders.yaml` in the music repository, every stored
+  `binder_requests` row, and every URL shared from the binder builder keeps working untouched.
+- A title page is counted but prints no number, as a divider always was — so a cover and two
+  headings mean the first tune opens on page 4, which is what a reader counts.
+- `binders.yaml` gained two checks the build now applies before accepting a file: a section with a
+  blank title and no tunes prints nothing and is rejected, and a binder of title pages alone is
+  rejected outright, since assembly needs at least one tune page and would otherwise fail long
+  after the file was committed.
+- The binder constructor and the personal binder builder both gained **"+ Add title page"** beside
+  "+ Add section". A title page's header is tinted and marked, has no disclosure triangle — there
+  is nothing under it to fold — and does not become the section the catalogue adds tunes to, since
+  a title page is a page rather than somewhere to put tunes. Section titles are edited in a text
+  box that grows with the lines typed into it.
+
 #### Sections in the binder list can be folded (#45)
 
 - Every section header in "Selected Entries" / "Your Binder" now carries a disclosure triangle
@@ -42,6 +68,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - An unset `SVPB_MUSIC_REPO_URL` reads "not configured" rather than leaving a gap, because a
   server wired to no repository is itself the thing worth noticing.
 - Read-only throughout: this adds no way to change the repository from the UI.
+
+### Changed
+
+#### `DividerPageRenderer` is now `TitlePageRenderer`, and draws text directly (#46)
+
+- The type is renamed for what it makes: a title page stands on its own, and calling it a divider
+  described only one of the places it can appear.
+- It no longer engraves the title by feeding CeolKit a fake tune (`X:1 / T:… / K:none`) and then
+  reverse-engineering the result — scraping `<use transform="translate(…)">` out of the rendered
+  page to find the title's width and moving it down the page. CeolKit 1.5.0 added `TextOutliner`
+  (sbeitzel/CeolKit#146) for exactly this case: text on a page with no music, outlined in the same
+  face and by the same metrics the engraver lays tune titles out with. Each line is one call.
+- With nothing passing through the ABC parser, the escaping that protected the `T:` field is gone.
+  `%` no longer has to become `\%`, a backslash no longer has to be doubled, and a line break can
+  no longer end the field and let the rest of a title be read as ABC. Whitespace within a line is
+  still collapsed, and blank lines are still dropped.
+- A one-line title lands exactly where it did before: centred, on the baseline 0.42 of the way
+  down a Letter page, at up to 45pt.
 
 ### Fixed
 

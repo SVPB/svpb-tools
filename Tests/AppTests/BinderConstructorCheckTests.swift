@@ -26,12 +26,14 @@ final class BinderConstructorCheckTests: XCTestCase {
     /// Exactly the shape `generateYAML()` in `binder-constructor.leaf` writes:
     /// every scalar a JSON string, no `parts:`. Slugs that plain YAML would
     /// read as a boolean or a number, and names with quotes and non-ASCII
-    /// text, must come through as the strings they were.
+    /// text, must come through as the strings they were. A title page is
+    /// written as a section with a title and no `entries:` key at all (#46).
     private let generatedYAML = """
     binders:
       - name: "The \\"Big\\" Binder — Sìne Bhàn"
         output: "the_big_binder.pdf"
         sections:
+          - title: ["SVPB Music", "2026"]
           - title: "Grade 4: Tunes"
             entries:
               - tune: "amazing_grace"
@@ -47,7 +49,10 @@ final class BinderConstructorCheckTests: XCTestCase {
 
         XCTAssertEqual(binder.name, "The \"Big\" Binder — Sìne Bhàn")
         XCTAssertEqual(binder.output, "the_big_binder.pdf")
-        XCTAssertEqual(binder.sections.map(\.title), ["Grade 4: Tunes", "Massed Bands"])
+        XCTAssertEqual(binder.sections.map(\.title),
+                       [["SVPB Music", "2026"], "Grade 4: Tunes", "Massed Bands"])
+        XCTAssertEqual(binder.sections.map(\.entries.count), [0, 2, 1],
+                       "A title page picked up entries, or a section lost them")
         XCTAssertEqual(binder.sections.flatMap(\.entries).map(\.tune), ["amazing_grace", "yes", "1990"])
         XCTAssertTrue(binder.sections.flatMap(\.entries).allSatisfy { $0.parts == nil })
     }
@@ -96,10 +101,46 @@ final class BinderConstructorCheckTests: XCTestCase {
     }
 
     func testCheckReportsBadOutputFilenames() async throws {
-        let result = try await check(#"binders: [{ name: "A", output: a.txt, sections: [] }]"#)
+        // The binder holds a tune, so the output filename is the only thing wrong with it.
+        let result = try await check(
+            #"binders: [{ name: "A", output: a.txt, sections: [{ title: "S", entries: [{ tune: t }] }] }]"#)
 
         XCTAssertFalse(result.valid)
         XCTAssertEqual(result.problem, "binders[0] output 'a.txt' must be a plain filename ending in .pdf")
+    }
+
+    /// Title pages alone are not a binder: assembly needs a tune page, and the
+    /// page has to say so before the pipe major commits the file (#46).
+    func testCheckRejectsABinderOfTitlePagesAlone() async throws {
+        let result = try await check("""
+        binders:
+          - name: "Front Matter Only"
+            output: front.pdf
+            sections:
+              - title: ["SVPB Music", "2027"]
+              - title: "G4 Tunes"
+        """)
+
+        XCTAssertFalse(result.valid)
+        XCTAssertEqual(result.problem,
+                       "binders[0] 'Front Matter Only' has no tunes — a binder of title pages alone cannot be assembled")
+    }
+
+    /// A title page in an otherwise ordinary binder is accepted, multi-line and all.
+    func testCheckAcceptsTitlePagesAlongsideTunes() async throws {
+        let result = try await check("""
+        binders:
+          - name: "2026 Band Binder"
+            output: 2026_binder.pdf
+            sections:
+              - title: ["SVPB Music", "2026"]
+              - title: "Massed Bands"
+                entries:
+                  - tune: amazing_grace
+        """)
+
+        XCTAssertTrue(result.valid, "\(result.problem ?? "")")
+        XCTAssertTrue(result.unresolved.isEmpty)
     }
 
     func testCheckListsTunesMissingFromTheBranch() async throws {

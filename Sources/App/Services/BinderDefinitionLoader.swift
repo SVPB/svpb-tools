@@ -68,7 +68,8 @@ enum BinderDefinitionLoader {
 
     /// Everything wrong with a structurally valid file that would stop its binders
     /// being built: blank names, output filenames that are not a bare `.pdf`
-    /// filename, and outputs shared by two binders.
+    /// filename, outputs shared by two binders, sections that would print nothing,
+    /// and binders that hold no tunes at all.
     static func problems(in file: BindersFile) -> [String] {
         var problems: [String] = []
         var seenOutputs: Set<String> = []
@@ -77,6 +78,16 @@ enum BinderDefinitionLoader {
             let label = "binders[\(index)]"
             if binder.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 problems.append("\(label) has a blank name")
+            }
+            // A section is a title page, a run of tunes, or both. A blank title over no
+            // tunes is neither, and would silently print nothing.
+            for (sectionIndex, section) in binder.sections.enumerated() where section.title.isEmpty {
+                problems.append("\(label).sections[\(sectionIndex)] has a blank title")
+            }
+            // Title pages alone are not a binder: assembly needs at least one tune page,
+            // and would otherwise fail well after the file was accepted.
+            if binder.sections.allSatisfy(\.entries.isEmpty) {
+                problems.append("\(label) '\(binder.name)' has no tunes — a binder of title pages alone cannot be assembled")
             }
             if !isBareFilename(binder.output) || !binder.output.lowercased().hasSuffix(".pdf") {
                 problems.append("\(label) output '\(binder.output)' must be a plain filename ending in .pdf")
@@ -137,7 +148,7 @@ enum BinderDefinitionLoader {
             binder.sections.flatMap { section in
                 section.entries
                     .filter { !catalogueSlugs.contains($0.tune) }
-                    .map { UnresolvedEntry(binder: binder.name, section: section.title, tune: $0.tune) }
+                    .map { UnresolvedEntry(binder: binder.name, section: section.title.display, tune: $0.tune) }
             }
         }
     }
