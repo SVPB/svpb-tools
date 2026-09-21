@@ -10,6 +10,7 @@ import Foundation
 /// binders:
 ///   - name: "2026 Band Binder"
 ///     output: 2026_binder.pdf
+///     pack: true                       # short tunes share pages (#48)
 ///     sections:
 ///       - title: ["SVPB Music", "2026"]   # front matter: a title page, no tunes
 ///       - toc: true                      # the table of contents (#47)
@@ -18,6 +19,7 @@ import Foundation
 ///           - tune: g4_medley_2026
 ///           - tune: Moonstar
 ///             parts: ["Melody", "Seconds"]
+///             break: before            # this one starts a page of its own
 /// ```
 ///
 /// This is a different type from the personal `BinderSpec` on purpose: entries
@@ -44,6 +46,29 @@ struct OfficialBinder: Codable, Sendable {
     /// Ordered sections: each a title page, a titled run of tunes, or the binder's
     /// table of contents (#47).
     let sections: [OfficialBinderSection]
+
+    /// Whether consecutive tunes may share a page (#48).
+    ///
+    /// Absent means no, which is how every `binders.yaml` written so far reads and
+    /// what every official binder assembled so far did: one tune, one page. A binder
+    /// that says `pack: true` gets the paper back, and an entry that must open a page
+    /// anyway says so with `break: before`.
+    let pack: Bool
+
+    init(name: String, output: String, sections: [OfficialBinderSection], pack: Bool = false) {
+        self.name = name
+        self.output = output
+        self.sections = sections
+        self.pack = pack
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        output = try container.decode(String.self, forKey: .output)
+        sections = try container.decode([OfficialBinderSection].self, forKey: .sections)
+        pack = try container.decodeIfPresent(Bool.self, forKey: .pack) ?? false
+    }
 }
 
 // MARK: - OfficialBinderSection
@@ -106,6 +131,21 @@ struct OfficialBinderEntry: Codable, Sendable {
     /// It is still decoded and stored rather than dropped, so a file written
     /// today keeps its meaning when part selection lands.
     let parts: [String]?
+
+    /// `break: before` where this tune must open a page of its own, whatever the
+    /// binder's `pack:` says; `nil` where it may share one (#48).
+    let pageBreak: BinderPageBreak?
+
+    init(tune: String, parts: [String]? = nil, pageBreak: BinderPageBreak? = nil) {
+        self.tune = tune
+        self.parts = parts
+        self.pageBreak = pageBreak
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case tune, parts
+        case pageBreak = "break"
+    }
 }
 
 // MARK: - Assembly
@@ -134,10 +174,13 @@ extension OfficialBinder {
             sections: sections.map { section in
                 BinderSection(
                     title: section.title.isEmpty ? nil : section.title,
-                    entries: section.entries.map { BinderEntry(tuneSlug: $0.tune, parts: []) },
+                    entries: section.entries.map {
+                        BinderEntry(tuneSlug: $0.tune, parts: [], pageBreak: $0.pageBreak)
+                    },
                     toc: section.toc
                 )
-            }
+            },
+            pack: pack
         )
     }
 }

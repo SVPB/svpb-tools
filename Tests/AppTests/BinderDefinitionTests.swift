@@ -50,6 +50,47 @@ final class BinderDefinitionTests: XCTestCase {
         XCTAssertEqual(entries[1].parts, ["Melody", "Seconds"])
     }
 
+    /// `pack:` and an entry's `break: before` are how `binders.yaml` asks for short tunes
+    /// to share pages (#48). A file that says neither reads as it always did.
+    func testDecodesPackingAndPerEntryBreaks() throws {
+        let yaml = """
+        binders:
+          - name: "Packed"
+            output: packed.pdf
+            pack: true
+            sections:
+              - title: "Set"
+                entries:
+                  - tune: a
+                  - tune: b
+                    break: before
+        """
+        let binder = try XCTUnwrap(BinderDefinitionLoader.decode(yaml).binders.first)
+
+        XCTAssertTrue(binder.pack)
+        XCTAssertEqual(binder.sections[0].entries.map(\.pageBreak), [nil, .before])
+
+        let unchanged = try XCTUnwrap(BinderDefinitionLoader.decode(sampleYAML).binders.first)
+        XCTAssertFalse(unchanged.pack)
+        XCTAssertEqual(unchanged.sections[0].entries.map(\.pageBreak), [nil, nil])
+    }
+
+    /// `before` is the only break there is, so anything else is a typo the pipe major has
+    /// to see rather than a line that quietly does nothing.
+    func testRejectsAnUnknownBreak() {
+        let yaml = """
+        binders:
+          - name: "Odd"
+            output: odd.pdf
+            sections:
+              - title: "Set"
+                entries:
+                  - tune: a
+                    break: after
+        """
+        XCTAssertThrowsError(try BinderDefinitionLoader.decode(yaml))
+    }
+
     /// A section with no `entries` is a title page and nothing else (#46), and a
     /// `title` written as a list is one title page of several lines.
     func testTitleOnlySectionsAndMultiLineTitles() throws {

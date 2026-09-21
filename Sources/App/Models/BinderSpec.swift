@@ -41,6 +41,15 @@ import Vapor
 /// than being a title page or a run of tunes. It expands at assembly into one
 /// line per listed thing, each carrying the page it starts on.
 ///
+/// ## Packing
+///
+/// A binder may ask for its tunes to be **packed** (#48): two short tunes in a
+/// row then share a page instead of each taking one of its own. It is a choice
+/// per binder rather than a rule, because a tune starting half way down a page
+/// cannot be pulled out and handed to one piper, and an official binder may
+/// well want "every tune starts on its own page" as house style. One entry at a
+/// time can opt back out with ``BinderPageBreak/before``.
+///
 /// ## The flat shape
 ///
 /// Binders created before sections existed were stored, and shared by URL, as a
@@ -58,10 +67,16 @@ public struct BinderSpec: Codable, Content, Sendable {
     /// page, or both.
     public let sections: [BinderSection]
 
-    public init(name: String, branch: String, sections: [BinderSection]) {
+    /// Whether consecutive tunes may share a page (#48). `false` — one tune per
+    /// page, as every binder was assembled before packing existed — unless the
+    /// binder asks otherwise.
+    public let pack: Bool
+
+    public init(name: String, branch: String, sections: [BinderSection], pack: Bool = false) {
         self.name = name
         self.branch = branch
         self.sections = sections
+        self.pack = pack
     }
 
     /// Every entry in binder order, across all sections.
@@ -70,13 +85,14 @@ public struct BinderSpec: Codable, Content, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, branch, sections, entries
+        case name, branch, sections, entries, pack
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         branch = try container.decode(String.self, forKey: .branch)
+        pack = try container.decodeIfPresent(Bool.self, forKey: .pack) ?? false
         if let sections = try container.decodeIfPresent([BinderSection].self, forKey: .sections) {
             self.sections = sections
         } else {
@@ -85,11 +101,14 @@ public struct BinderSpec: Codable, Content, Sendable {
         }
     }
 
+    /// Writes `pack` only where it is asked for, so every spec stored or shared
+    /// before packing existed encodes byte-identically.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(branch, forKey: .branch)
         try container.encode(sections, forKey: .sections)
+        if pack { try container.encode(true, forKey: .pack) }
     }
 }
 
@@ -317,6 +336,21 @@ public struct BinderSection: Codable, Content, Sendable {
     }
 }
 
+// MARK: - BinderPageBreak
+
+/// A page break an entry asks for, over and above the ones the layout decides (#48).
+///
+/// Written as `break: before`, in the personal spec and in `binders.yaml` alike.
+/// There is one case because there is one thing to ask for: a tune that must open
+/// a page even in a binder that packs. "After" would say nothing a break before
+/// the next tune does not already say, and the last tune of a binder has no after.
+public enum BinderPageBreak: String, Codable, Sendable, Equatable {
+
+    /// This tune starts a page of its own, however well it would have fitted
+    /// under the tune ahead of it.
+    case before
+}
+
 // MARK: - BinderEntry
 
 /// One row in a binder: a tune identified by slug and one or more part names.
@@ -328,13 +362,25 @@ public struct BinderEntry: Codable, Content, Sendable {
     /// One or more part names to include, e.g. `["Melody", "Harmony 1"]`.
     public let parts: [String]
 
-    public init(tuneSlug: String, parts: [String]) {
+    /// A page break this entry asks for, or `nil` for none (#48). Meaningless in
+    /// a binder that does not pack, where every tune starts a page anyway.
+    public let pageBreak: BinderPageBreak?
+
+    public init(tuneSlug: String, parts: [String], pageBreak: BinderPageBreak? = nil) {
         self.tuneSlug = tuneSlug
         self.parts = parts
+        self.pageBreak = pageBreak
     }
 
+    /// Whether this tune has to open a page of its own.
+    public var breaksBefore: Bool { pageBreak == .before }
+
+    /// `break` is written as the key, because that is what it is called in the
+    /// file a pipe major edits; the synthesised coding leaves it out where there
+    /// is none, so an entry written before #48 round-trips unchanged.
     enum CodingKeys: String, CodingKey {
         case tuneSlug = "tune_slug"
         case parts
+        case pageBreak = "break"
     }
 }

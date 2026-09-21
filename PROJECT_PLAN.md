@@ -40,7 +40,7 @@ The two headline improvements over Gen.1 are:
 | C1 | GitHub webhook receiver | An HTTPS endpoint that accepts `push` events from GitHub. Validates the shared webhook secret before acting. |
 | C2 | Repository sync | On a valid webhook event, pull (or clone) the latest state of `svpb-music` into a working directory on the server. |
 | C3 | In-process conversion | For each changed ABC file, invoke `CeolKit` (configured for one SVG per page) to produce a sequence of per-page SVG documents, then pass them as an ordered list of `SVGSource` values to `SVGPDFKit` to produce a per-part PDF. Both steps run inside the server process — no external tools or containers required. |
-| C4 | Official binder assembly | After conversion, read `binders.yaml` from the root of the branch that was just built. For each binder it declares, concatenate the per-tune PDFs in the order given — inserting a generated title page ahead of each section, and a generated table of contents where one is declared (#47) — and write the assembled binder PDF to the output directory. Page footers number pages within that binder. This file replaces the Gen.1 `Makefile`, which encoded the same information as `make` variables and targets. |
+| C4 | Official binder assembly | After conversion, read `binders.yaml` from the root of the branch that was just built. For each binder it declares, concatenate the per-tune PDFs in the order given — inserting a generated title page ahead of each section, and a generated table of contents where one is declared (#47) — and write the assembled binder PDF to the output directory. A binder declaring `pack: true` is engraved a run of tunes at a time instead, so consecutive short tunes share a sheet (#48). Page footers number pages within that binder. This file replaces the Gen.1 `Makefile`, which encoded the same information as `make` variables and targets. |
 | C5 | Box upload | Upload the assembled official binders to Box via the Box REST API, into a year-named subfolder of `pipe_music` (e.g. `pipe_music/2026/`) matching the git branch. The subfolder is created automatically if it does not yet exist. Each binder is stored under the `output` filename its spec declares, replacing any previous version. **Only the binders named in `binders.yaml` are uploaded** — per-tune PDFs and personalised binders never reach Box. |
 | C6 | Slack notification | Post a build-summary message to the configured Slack channel (success / failure, binders rebuilt, list of changed tunes, link to Box folder). |
 | C7 | Build log retention | Store the stdout/stderr of each build locally, accessible via the admin UI, so failures can be diagnosed without SSH access. |
@@ -50,7 +50,7 @@ The two headline improvements over Gen.1 are:
 | # | Feature | Description |
 |---|---------|-------------|
 | B1 | Tune catalogue | The server parses the ABC source files after each build and maintains a SQLite catalogue of every tune and every named part/voice within it, scoped to the branch (year) that was just built. The same tune slug may appear in multiple branches with differing arrangements. |
-| B2 | Canonical binder definitions | The pipe major defines the official band binders in `binders.yaml`, committed to the root of the relevant branch of `svpb-music`. One file declares one or more binders; each binder names its output PDF and an ordered list of sections, and each section carries a title (rendered as a title page) and an ordered list of tunes — or a title and no tunes, which is a title page standing on its own (#46), or `toc: true`, which is the binder's table of contents (#47). The repository is the sole source of truth: the server reads this file from the working directory during the build, assembles the binders it names (C4), and stores the definitions in SQLite alongside the tune catalogue. |
+| B2 | Canonical binder definitions | The pipe major defines the official band binders in `binders.yaml`, committed to the root of the relevant branch of `svpb-music`. One file declares one or more binders; each binder names its output PDF and an ordered list of sections, and each section carries a title (rendered as a title page) and an ordered list of tunes — or a title and no tunes, which is a title page standing on its own (#46), or `toc: true`, which is the binder's table of contents (#47). The binder may also ask for its short tunes to share pages (`pack: true`, #48). The repository is the sole source of truth: the server reads this file from the working directory during the build, assembles the binders it names (C4), and stores the definitions in SQLite alongside the tune catalogue. |
 | B3 | Binder constructor (UI) | A web page that lets the pipe major assemble a binder interactively — browsing the tune catalogue, grouping entries into titled sections, and setting the order — and then displays the resulting YAML for copy-paste into `binders.yaml`. This is how the contents of that file are authored. The page never commits anything itself; the pipe major remains in control of what lands in source control. |
 | B4 | Personal binder builder (UI) | A web page where any band member can browse the tune catalogue, pick the tunes they need, reorder them, group them into titled sections, name the binder, and request a PDF. No login required — a shareable URL encodes the binder definition. The binder constructor (B3) and the personal binder builder share the same tune-selection UI component; they differ only in their output (YAML vs. PDF). |
 | B5 | Personalised PDF generation | Given a binder definition, the server re-engraves each selected entry from its ABC source with `%%ceolkit:pagenumber` set to the page it opens on, then feeds the pages to `SVGPDFKit`, so footers reflect position within the *personal* binder rather than the master. Each titled section gets a generated title page ahead of it, the same page official binders use (C4); a title page is counted but prints no number, the way a book's part titles are, and so is a table of contents (#47). The numbering has to be re-engraved rather than patched in afterwards: CeolKit outlines every glyph it draws, so a rendered footer holds no text to rewrite (#19). |
@@ -276,6 +276,7 @@ field. Every binder it names is assembled on each build and uploaded to Box; not
 binders:
   - name: "2026 Band Binder"          # shown in the UI and the build log
     output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
+    pack: true                        # optional: consecutive short tunes share a sheet (#48)
     sections:
       - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
                                       # here, the binder's cover, set over two lines (#46)
@@ -292,6 +293,7 @@ binders:
           - tune: MarchOfTheRBL
           - tune: Moonstar
             parts: ["Melody", "Seconds"]   # optional; defaults to every part of the tune
+            break: before                  # optional; opens a page of its own anyway (#48)
       - title: "Massed Bands / WUSPBA"
         entries:
           - tune: amazing_grace
@@ -313,8 +315,9 @@ tunes are grouped into ordered sections, as in `binders.yaml`; a section with a 
 title page ahead of it and a section with a null or blank title does not. A section that holds
 no entries is a title page and nothing else, and a `title` written as a list of strings is one
 title page of several lines (#46). A section carrying `"toc": true` is the binder's table of
-contents, and its title is the heading over the listing rather than a title page (#47). The
-resulting PDF is
+contents, and its title is the heading over the listing rather than a title page (#47). A spec
+carrying `"pack": true` lets consecutive short tunes share a sheet, and an entry carrying
+`"break": "before"` opts back out of that for one tune (#48). The resulting PDF is
 never uploaded to Box. The `branch` field anchors the
 entire binder to a specific year's arrangements. Each entry identifies a tune by its slug (stable
 across years) and one or more parts by name. Together, `branch + tune_slug + part` uniquely
@@ -329,8 +332,10 @@ identifies the exact PDF to include.
       "entries": [ { "tune_slug": "amazing_grace", "parts": ["Melody"] } ] },
     { "title": "Parade Set",
       "entries": [ { "tune_slug": "archie_beag",        "parts": ["Harmony 1"] },
-                   { "tune_slug": "scotland_the_brave", "parts": ["Melody", "Harmony 1"] } ] }
-  ]
+                   { "tune_slug": "scotland_the_brave", "parts": ["Melody", "Harmony 1"],
+                     "break": "before" } ] }
+  ],
+  "pack": true
 }
 ```
 

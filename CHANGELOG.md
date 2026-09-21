@@ -8,6 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Short tunes can share a page in an assembled binder (#48)
+
+- A binder may now be **packed**: two short tunes in a row share a sheet instead of each taking
+  a page of its own. `binders.yaml` asks for it with `pack: true` beside the binder's `output`,
+  a personal binder asks with `"pack": true`, and both the binder constructor and the personal
+  builder offer it as "Pack short tunes onto shared pages".
+- It is off unless asked for, and it is a choice per binder rather than a rule. A tune starting
+  half way down a page cannot be pulled out and handed to one piper; a tune that would sit
+  across a fold may be better off starting fresh; and an official binder may well want "every
+  tune starts on its own page" as house style while a practice binder wants the paper back.
+- One entry at a time opts back out with **`break: before`** (`"break": "before"` in a personal
+  spec), which is the tune that has to open a page whatever the binder asked for. Both pages
+  offer it as a per-tune control, shown only while packing is on — with one tune to a page
+  there is nothing to opt out of.
+- **CeolKit already packed; our pipeline threw it away.** `VerticalLayoutEngine` opens a page
+  only when the one it is on cannot hold the next tune's title block and first system together
+  — but we only ever handed it one tune, so every tune arrived at assembly already committed to
+  whole sheets, most of them mostly blank, and nothing downstream could recover the space
+  without laying the music out again. A packed binder is therefore engraved a **run** at a time:
+  a maximal stretch of consecutive tunes with nothing between them that owns a page anyway.
+  Title pages and the table of contents end a run, which costs nothing because they were going
+  to take a page regardless.
+- **Concatenating ABC files is not appending them.** Several `%%ceolkit:` directives are written
+  in a file preamble and scoped to the file, so laid end to end a `%%ceolkit:scale 0.85` in one
+  tune would silently resize every tune after it. Each file's preamble is therefore hoisted into
+  its own tunes' headers, where ABC v2.2 §4.23 scopes it to the tune it was written for and
+  CeolKit honours that (sbeitzel/CeolKit#153). A packed binder prints what the separate renders
+  printed, only packed.
+- Two things are hoisted with care. `I:abc-include` is expanded before the move, because a blank
+  line in a style sheet means nothing in a file preamble but *ends a tune header*; and
+  `%%landscape` is re-stated where CeolKit can honour it, since a page cannot change size
+  part-way down and a change of orientation is only expressible beside a page break
+  (sbeitzel/CeolKit#158). A portrait tune following a landscape one therefore opens a fresh
+  page, which is the only thing it could do.
+- **The table of contents still tells the truth.** Which page a tune starts on stops being index
+  arithmetic once tunes share sheets, and nothing in the emitted SVG says it — so the run is
+  rendered through `renderDocument(_:)` and the page is read back from CeolKit's placement map
+  (sbeitzel/CeolKit#152). A listed tune names the page its music is actually printed on, and
+  that page prints that number.
+- Nothing about an unpacked binder changed, and packing never makes a binder longer. A tune too
+  tall to fit under the one before it opens its own page; a tune with no ABC on record arrives
+  as whole pages the build already made and cannot join a run, so it is set alone while its
+  neighbours still pack; and a run that cannot be engraved as one document falls back to
+  engraving its tunes one at a time, which is a thicker binder and not a wrong one.
+- Over the real `svpb-music` 2027 corpus, the "Full Binder" comes out 56 pages packed against
+  61 loose. Most of that binder is full-page landscape tunes; a binder of jigs and short marches
+  has far more to give back.
+
 #### A binder can carry a table of contents (#47)
 
 - A binder section may now declare itself the binder's **table of contents**. It expands at

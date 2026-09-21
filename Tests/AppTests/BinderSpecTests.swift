@@ -125,6 +125,49 @@ final class BinderSpecTests: XCTestCase {
         XCTAssertEqual(decoded.sections.prefix(2).map(\.contentsHeading), ["Contents", "Narrow"])
     }
 
+    /// Packing is written only where it is asked for, so a spec stored or shared before
+    /// #48 encodes byte-identically — and `break: before` behaves the same way per entry.
+    func testPackingIsWrittenOnlyWhereItIsAskedFor() throws {
+        let plain = BinderSpec(name: "B", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [BinderEntry(tuneSlug: "a", parts: ["Melody"])]),
+        ])
+        let object = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(plain)) as? [String: Any]
+        XCTAssertNil(object?["pack"], "a binder that does not pack said so anyway")
+        let entries = try XCTUnwrap((object?["sections"] as? [[String: Any]])?[0]["entries"]
+                                    as? [[String: Any]])
+        XCTAssertNil(entries[0]["break"], "an entry with no break said so anyway")
+
+        let packed = BinderSpec(name: "B", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [
+                BinderEntry(tuneSlug: "a", parts: ["Melody"]),
+                BinderEntry(tuneSlug: "b", parts: ["Melody"], pageBreak: .before),
+            ]),
+        ], pack: true)
+        let data = try JSONEncoder().encode(packed)
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(written["pack"] as? Bool, true)
+
+        let decoded = try JSONDecoder().decode(BinderSpec.self, from: data)
+        XCTAssertTrue(decoded.pack)
+        XCTAssertEqual(decoded.entries.map(\.breaksBefore), [false, true])
+    }
+
+    /// A spec written before packing existed asks for none of it.
+    func testASpecWithoutPackingDoesNotPack() throws {
+        let json = #"{"name":"B","branch":"2026","sections":[{"title":null,"entries":[{"tune_slug":"a","parts":[]}]}]}"#
+        let spec = try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8))
+        XCTAssertFalse(spec.pack)
+        XCTAssertFalse(spec.entries[0].breaksBefore)
+    }
+
+    /// `break` names what it does in the file a musician edits, and only `before` is a
+    /// thing to ask for — anything else is a typo rather than a silently ignored option.
+    func testAnUnknownBreakIsRejected() {
+        let json = #"{"name":"B","branch":"2026","sections":[{"title":null,"entries":[{"tune_slug":"a","parts":[],"break":"after"}]}]}"#
+        XCTAssertThrowsError(try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8)))
+    }
+
     /// The shapes a hand-written or older spec may use to decline one.
     func testTocIsAbsentUnlessDeclared() throws {
         for written in ["", #""toc":null,"#, #""toc":false,"#] {
