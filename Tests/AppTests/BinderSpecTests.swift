@@ -5,7 +5,9 @@ import XCTest
 @testable import App
 
 /// `BinderSpec` gained sections after binders had already been stored and shared
-/// in the flat shape. Both shapes have to keep decoding.
+/// in the flat shape, and titles became multi-line after that (#46). Every shape
+/// written so far has to keep decoding, and a one-line title has to keep encoding
+/// as the bare string it was written as.
 final class BinderSpecTests: XCTestCase {
 
     func testDecodesSections() throws {
@@ -18,9 +20,56 @@ final class BinderSpecTests: XCTestCase {
         let spec = try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8))
 
         XCTAssertEqual(spec.sections.count, 2)
-        XCTAssertNil(spec.sections[0].dividerTitle)
-        XCTAssertEqual(spec.sections[1].dividerTitle, "Parade Set")
+        XCTAssertNil(spec.sections[0].titlePage)
+        XCTAssertEqual(spec.sections[1].titlePage, "Parade Set")
         XCTAssertEqual(spec.entries.map(\.tuneSlug), ["a", "b", "c"])
+    }
+
+    /// A title page is a section that holds no tunes (#46), and the front matter
+    /// of a binder is however many of those it opens with.
+    func testDecodesTitleOnlySections() throws {
+        let json = #"""
+        {"name":"B","branch":"2027","sections":[
+          {"title":["SVPB Music","2027"],"entries":[]},
+          {"title":"G4 Tunes","entries":[]},
+          {"title":"G4 Medley","entries":[{"tune_slug":"g4_medley_2027","parts":[]}]}
+        ]}
+        """#
+        let spec = try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8))
+
+        XCTAssertEqual(spec.sections.map(\.titlePage),
+                       [["SVPB Music", "2027"], "G4 Tunes", "G4 Medley"])
+        XCTAssertEqual(spec.sections.map(\.entries.count), [0, 0, 1])
+        XCTAssertEqual(spec.entries.map(\.tuneSlug), ["g4_medley_2027"])
+    }
+
+    /// A multi-line title is written as a list and a one-line title as a string,
+    /// and both come back as the same type.
+    func testTitleDecodesFromAStringOrAList() throws {
+        let one = try JSONDecoder().decode(BinderTitle.self, from: Data(#""Parade Set""#.utf8))
+        XCTAssertEqual(one.pageLines, ["Parade Set"])
+
+        let two = try JSONDecoder().decode(BinderTitle.self, from: Data(#"["SVPB Music","2027"]"#.utf8))
+        XCTAssertEqual(two.pageLines, ["SVPB Music", "2027"])
+        XCTAssertEqual(two.display, "SVPB Music / 2027")
+    }
+
+    /// A one-line title has to encode as the bare string it arrived as: stored
+    /// `binder_requests` rows and shared URLs written before #46 must not change
+    /// shape just by being read and written back.
+    func testOneLineTitleEncodesAsAString() throws {
+        let encoder = JSONEncoder()
+        XCTAssertEqual(String(decoding: try encoder.encode(BinderTitle(["Parade Set"])), as: UTF8.self),
+                       #""Parade Set""#)
+        XCTAssertEqual(String(decoding: try encoder.encode(BinderTitle(["SVPB Music", "2027"])), as: UTF8.self),
+                       #"["SVPB Music","2027"]"#)
+
+        let spec = BinderSpec(name: "B", branch: "2027", sections: [
+            BinderSection(title: ["SVPB Music", "2027"], entries: []),
+            BinderSection(title: "Parade", entries: [BinderEntry(tuneSlug: "a", parts: [])]),
+        ])
+        let decoded = try JSONDecoder().decode(BinderSpec.self, from: try encoder.encode(spec))
+        XCTAssertEqual(decoded.sections.map(\.title), spec.sections.map(\.title))
     }
 
     /// Stored rows and shared URLs from before sections carry only `entries`.
@@ -29,7 +78,7 @@ final class BinderSpecTests: XCTestCase {
         let spec = try JSONDecoder().decode(BinderSpec.self, from: Data(json.utf8))
 
         XCTAssertEqual(spec.sections.count, 1)
-        XCTAssertNil(spec.sections[0].dividerTitle)
+        XCTAssertNil(spec.sections[0].titlePage)
         XCTAssertEqual(spec.entries.map(\.tuneSlug), ["a", "b"])
         XCTAssertEqual(spec.entries[1].parts, ["Harmony 1"])
     }
@@ -51,12 +100,16 @@ final class BinderSpecTests: XCTestCase {
         XCTAssertEqual(decoded.sections.first?.title, "Parade")
     }
 
-    /// A blank title means no divider, however it was typed.
-    func testBlankTitlesHaveNoDivider() {
-        for title in [nil, "", "   ", "\n\t"] {
-            XCTAssertNil(BinderSection(title: title, entries: []).dividerTitle, "\(String(describing: title))")
+    /// A blank title means no title page, however it was typed — including a
+    /// list whose lines are all blank.
+    func testBlankTitlesHaveNoTitlePage() {
+        let blanks: [BinderTitle?] = [nil, "", "   ", "\n\t", [], ["", "  "]]
+        for title in blanks {
+            XCTAssertNil(BinderSection(title: title, entries: []).titlePage, "\(String(describing: title))")
         }
-        XCTAssertEqual(BinderSection(title: "  Reels \n", entries: []).dividerTitle, "Reels")
+        XCTAssertEqual(BinderSection(title: "  Reels \n", entries: []).titlePage, "Reels")
+        XCTAssertEqual(BinderSection(title: ["  SVPB   Music ", "", " 2027"], entries: []).titlePage,
+                       ["SVPB Music", "2027"], "Blank lines and runs of spaces survived")
     }
 
     /// The same compatibility, through the database column rather than JSON in

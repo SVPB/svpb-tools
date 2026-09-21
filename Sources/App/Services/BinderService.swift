@@ -16,7 +16,8 @@ import Vapor
 ///
 /// Each entry's tune is re-engraved by `TunePageRenderer` at the page number it opens on
 /// within *this* binder, then the pages are fed in order to `SVGPDFConverter`. A titled
-/// section gets a generated divider page (`DividerPageRenderer`) ahead of its first tune.
+/// section gets a generated title page (`TitlePageRenderer`) ahead of its first tune, and a
+/// section holding no tunes at all is a title page and nothing else (#46).
 ///
 /// Re-engraving rather than reusing the build's pages is what makes the page numbers
 /// right (#19). CeolKit outlines every glyph it draws, so a footer reading "1" is path
@@ -26,8 +27,10 @@ import Vapor
 /// per-tune PDFs, and they are what a binder falls back to when a tune has no ABC on
 /// record; those pages number from 1 and say so in the log.
 ///
-/// Divider pages are counted but not numbered, the way a book's part titles are: the
-/// tune after a divider is numbered as though the divider were a page, because it is one.
+/// Title pages are counted but not numbered, the way a book's part titles are: the tune
+/// after a title page is numbered as though the title page were a page, because it is one.
+/// That holds for a binder's cover too — three pages of front matter means the first tune
+/// opens on page 4 (#46).
 ///
 /// Personalised binder PDFs are written to `<musicWorkspace>/binders/<id>.pdf` and the
 /// path is persisted in the `BinderRequest` record so the download endpoint can serve the
@@ -35,7 +38,7 @@ import Vapor
 actor BinderService {
 
     private let musicWorkspaceURL: URL
-    private let dividerRenderer = DividerPageRenderer()
+    private let titleRenderer = TitlePageRenderer()
     private let tuneRenderer = TunePageRenderer()
 
     init(musicWorkspacePath: String) {
@@ -68,7 +71,7 @@ actor BinderService {
         logger.info("[BinderService] \(requestID): building '\(spec.name)' — branch '\(spec.branch)', \(spec.sections.count) section(s), \(spec.entries.count) entr(ies)")
 
         let binderPages = try await pages(for: spec, label: requestID.uuidString, db: db, logger: logger)
-        let tunePageCount = binderPages.count(where: { if case .divider = $0 { false } else { true } })
+        let tunePageCount = binderPages.count(where: { if case .titlePage = $0 { false } else { true } })
 
         logger.info("[BinderService] \(requestID): collected \(binderPages.count) page(s) total, \(tunePageCount) of them tune pages")
         guard tunePageCount > 0 else {
@@ -101,66 +104,99 @@ actor BinderService {
         /// A page the build produced, reused because the tune could not be re-engraved.
         /// Its footer numbers from 1 within its own tune.
         case prebuilt(slug: String, path: String)
-        /// A generated divider page ahead of a titled section.
-        case divider(title: String, svg: String)
+        /// A generated page carrying nothing but a title.
+        case titlePage(title: BinderTitle, svg: String)
 
         var source: SVGSource {
             switch self {
             case .tune(_, let svg): .string(svg)
             case .prebuilt(_, let path): .fileURL(URL(fileURLWithPath: path))
-            case .divider(_, let svg): .string(svg)
+            case .titlePage(_, let svg): .string(svg)
             }
         }
 
-        /// The tune this page belongs to, or `nil` for a divider.
+        /// The tune this page belongs to, or `nil` for a title page.
         var slug: String? {
             switch self {
             case .tune(let slug, _): slug
             case .prebuilt(let slug, _): slug
-            case .divider: nil
+            case .titlePage: nil
             }
         }
     }
 
-    /// Resolves `spec` to the binder's pages, in order: each section's tune pages,
-    /// preceded by a divider page when the section is titled.
+    /// Resolves `spec` to the binder's pages, in order: each section's title page, then
+    /// the pages of its tunes.
+    ///
+    /// A section that holds no entries is a title page and nothing else, and goes in
+    /// unconditionally — that is how a binder gets a cover, and how two title pages come
+    /// to sit on consecutive pages (#46). A section that *does* hold entries keeps its
+    /// title back until one of them resolves, so a section whose tunes all fail to resolve
+    /// leaves no title standing over nothing.
     ///
     /// Every tune is engraved at the page number it lands on, so the count of pages
     /// already collected *is* the numbering: the next page to be produced prints
     /// `pages.count + 1`. That is why an entry is resolved before it is engraved —
-    /// whether the divider ahead of it goes in decides what number it opens on.
+    /// whether the title page ahead of it goes in decides what number it opens on.
+    /// Title pages are counted this way but print no number of their own.
     func pages(for spec: BinderSpec, label: String, db: Database, logger: Logger) async throws -> [Page] {
         var pages: [Page] = []
 
         for (sectionIndex, section) in spec.sections.enumerated() {
-            // The divider goes in only once the section has a page to follow it,
-            // so a section whose tunes all fail to resolve leaves no orphan title.
-            var pendingDivider = section.dividerTitle
+            let titlePage = section.titlePage
+
+            // A section with no tunes is the title page. Nothing is waiting on a tune
+            // that might never resolve, so it goes in as soon as it is reached.
+            guard !section.entries.isEmpty else {
+                guard let titlePage else {
+                    logger.warning("[BinderService] \(label): section \(sectionIndex + 1) has neither a title nor any tunes — skipping it")
+                    continue
+                }
+                append(titlePage, to: &pages, section: sectionIndex, label: label, logger: logger)
+                continue
+            }
+
+            // The title goes in only once the section has a page to follow it, so a
+            // section whose tunes all fail to resolve leaves no orphan title.
+            var pending = titlePage
 
             for entry in section.entries {
                 guard let resolution = try await resolve(entry, branch: spec.branch,
                                                          label: label, db: db, logger: logger) else { continue }
 
-                if let title = pendingDivider {
-                    pendingDivider = nil
-                    do {
-                        pages.append(.divider(title: title, svg: try dividerRenderer.render(title: title)))
-                        logger.debug("[BinderService] \(label): adding divider page '\(title)' ahead of section \(sectionIndex + 1)")
-                    } catch {
-                        // A binder missing a divider is still a usable binder.
-                        logger.error("[BinderService] \(label): divider page '\(title)' failed to render — omitting it: \(error)")
-                    }
+                if let title = pending {
+                    pending = nil
+                    append(title, to: &pages, section: sectionIndex, label: label, logger: logger)
                 }
 
                 pages.append(contentsOf: engrave(resolution, firstPageNumber: pages.count + 1,
                                                  label: label, logger: logger))
             }
 
-            if let title = pendingDivider {
-                logger.warning("[BinderService] \(label): section '\(title)' has no pages — omitting its divider")
+            if let title = pending {
+                logger.warning("[BinderService] \(label): section '\(title.display)' has tunes but none of them resolved — omitting its title page")
             }
         }
         return pages
+    }
+
+    /// Engraves one title page and appends it, or logs why it could not be drawn.
+    ///
+    /// A binder missing a title page is still a usable binder, so a title that fails to
+    /// render costs a page rather than the whole build.
+    private func append(
+        _ title: BinderTitle,
+        to pages: inout [Page],
+        section: Int,
+        label: String,
+        logger: Logger
+    ) {
+        do {
+            pages.append(.titlePage(title: title, svg: try titleRenderer.render(title: title)))
+            logger.debug("[BinderService] \(label): adding title page '\(title.display)' for section \(section + 1)")
+        } catch {
+            logger.error("[BinderService] \(label): title page '\(title.display)' failed to render — omitting it: \(error)")
+        }
     }
 
     // MARK: - Official binder assembly
@@ -169,7 +205,7 @@ actor BinderService {
     struct Assembly: Sendable {
         /// Where the binder PDF was written.
         let url: URL
-        /// Pages in the finished binder, dividers included.
+        /// Pages in the finished binder, title pages included.
         let pageCount: Int
         /// Slugs the binder names that contributed no pages, in the order the file
         /// names them. The build logs these: a typo must cost a visible warning

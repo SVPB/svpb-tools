@@ -8,5 +8,11 @@
 </div>
 <p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
 <ul class="binder-entries" id="binder-entries"></ul>
-<!-- Shown only on pages that turn sections on. -->
-<button type="button" class="btn btn-add-section" id="add-section" hidden>+ Add section</button>
+<!-- Shown only on pages that turn sections on. A title page is a section with
+     no tunes under it, so both controls add the same thing and differ in what
+     they leave the catalogue aimed at. -->
+<div class="add-controls">
+  <button type="button" class="btn btn-add-section" id="add-section" hidden>+ Add section</button>
+  <button type="button" class="btn btn-add-section" id="add-title-page" hidden
+          title="A page of text on its own — a cover, or a heading with no tunes under it">+ Add title page</button>
+</div>

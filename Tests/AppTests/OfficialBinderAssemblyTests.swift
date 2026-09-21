@@ -222,7 +222,7 @@ final class OfficialBinderAssemblyTests: XCTestCase {
 
         XCTAssertEqual(spec.name, "2026 Band Binder")
         XCTAssertEqual(spec.branch, "2026")
-        XCTAssertEqual(spec.sections.map(\.dividerTitle), ["Grade 4 Tunes"])
+        XCTAssertEqual(spec.sections.map(\.titlePage), ["Grade 4 Tunes"])
         XCTAssertEqual(spec.entries.map(\.tuneSlug), ["march", "reel"])
         XCTAssertEqual(spec.entries.map(\.parts), [[], []],
                        "An official entry asks for the tune, not for parts of it (#20)")

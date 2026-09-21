@@ -50,10 +50,10 @@ The two headline improvements over Gen.1 are:
 | # | Feature | Description |
 |---|---------|-------------|
 | B1 | Tune catalogue | The server parses the ABC source files after each build and maintains a SQLite catalogue of every tune and every named part/voice within it, scoped to the branch (year) that was just built. The same tune slug may appear in multiple branches with differing arrangements. |
-| B2 | Canonical binder definitions | The pipe major defines the official band binders in `binders.yaml`, committed to the root of the relevant branch of `svpb-music`. One file declares one or more binders; each binder names its output PDF and an ordered list of sections, and each section carries a title (rendered as a divider page) and an ordered list of tunes. The repository is the sole source of truth: the server reads this file from the working directory during the build, assembles the binders it names (C4), and stores the definitions in SQLite alongside the tune catalogue. |
+| B2 | Canonical binder definitions | The pipe major defines the official band binders in `binders.yaml`, committed to the root of the relevant branch of `svpb-music`. One file declares one or more binders; each binder names its output PDF and an ordered list of sections, and each section carries a title (rendered as a title page) and an ordered list of tunes — or a title and no tunes, which is a title page standing on its own (#46). The repository is the sole source of truth: the server reads this file from the working directory during the build, assembles the binders it names (C4), and stores the definitions in SQLite alongside the tune catalogue. |
 | B3 | Binder constructor (UI) | A web page that lets the pipe major assemble a binder interactively — browsing the tune catalogue, grouping entries into titled sections, and setting the order — and then displays the resulting YAML for copy-paste into `binders.yaml`. This is how the contents of that file are authored. The page never commits anything itself; the pipe major remains in control of what lands in source control. |
 | B4 | Personal binder builder (UI) | A web page where any band member can browse the tune catalogue, pick the tunes they need, reorder them, group them into titled sections, name the binder, and request a PDF. No login required — a shareable URL encodes the binder definition. The binder constructor (B3) and the personal binder builder share the same tune-selection UI component; they differ only in their output (YAML vs. PDF). |
-| B5 | Personalised PDF generation | Given a binder definition, the server re-engraves each selected entry from its ABC source with `%%ceolkit:pagenumber` set to the page it opens on, then feeds the pages to `SVGPDFKit`, so footers reflect position within the *personal* binder rather than the master. Each titled section gets a generated divider page ahead of it, the same page official binders use (C4); a divider is counted but prints no number, the way a book's part titles are. The numbering has to be re-engraved rather than patched in afterwards: CeolKit outlines every glyph it draws, so a rendered footer holds no text to rewrite (#19). |
+| B5 | Personalised PDF generation | Given a binder definition, the server re-engraves each selected entry from its ABC source with `%%ceolkit:pagenumber` set to the page it opens on, then feeds the pages to `SVGPDFKit`, so footers reflect position within the *personal* binder rather than the master. Each titled section gets a generated title page ahead of it, the same page official binders use (C4); a title page is counted but prints no number, the way a book's part titles are. The numbering has to be re-engraved rather than patched in afterwards: CeolKit outlines every glyph it draws, so a rendered footer holds no text to rewrite (#19). |
 | B6 | Binder download link | The generated personalised PDF is served directly from the TNG server as a download, and so exists only on the server and on the member's own computer. It is never pushed to Box: Box holds the official binders named in `binders.yaml` and nothing else. |
 | B7 | Binder URL sharing | A binder definition can be encoded in a URL so a band member can share their configuration with a section leader or print it later without re-selecting everything. |
 
@@ -277,7 +277,9 @@ binders:
   - name: "2026 Band Binder"          # shown in the UI and the build log
     output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
     sections:
-      - title: "Grade 4 Tunes"        # rendered as a divider page ahead of the section
+      - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
+                                      # here, the binder's cover, set over two lines (#46)
+      - title: "Grade 4 Tunes"        # rendered as a title page ahead of the section
         entries:
           - tune: g4_medley_2026      # tune slug = the .abc filename without its extension
           - tune: g4_msr_march_2026
@@ -306,7 +308,9 @@ binders:
 
 This is the shape submitted by the personal binder builder and stored in `BinderRequest`. Its
 tunes are grouped into ordered sections, as in `binders.yaml`; a section with a `title` gets a
-divider page ahead of it and a section with a null or blank title does not. The resulting PDF is
+title page ahead of it and a section with a null or blank title does not. A section that holds
+no entries is a title page and nothing else, and a `title` written as a list of strings is one
+title page of several lines (#46). The resulting PDF is
 never uploaded to Box. The `branch` field anchors the
 entire binder to a specific year's arrangements. Each entry identifies a tune by its slug (stable
 across years) and one or more parts by name. Together, `branch + tune_slug + part` uniquely
@@ -425,7 +429,7 @@ untitled section.
     to one part however many it names, so a spec written when the builder still offered part tags
     puts its tune in the binder once rather than once per voice (#24).
   - Re-engrave each entry with `%%ceolkit:pagenumber` set to the page it opens on — the count of
-    pages already collected, dividers included — and feed the resulting SVGs to
+    pages already collected, title pages included — and feed the resulting SVGs to
     `SVGPDFConverter` with page-number injection switched off. A tune with no readable ABC falls
     back to the build's pages, unnumbered, and says so in the log. So does a tune whose
     `%%footer` names neither `$P` nor `${pagenumber}` and therefore prints no number at all.

@@ -90,6 +90,7 @@ TuneSelector.init({
         const saved = Array.isArray(spec.sections)
           ? spec.sections
           : [{ title: '', entries: spec.entries || [] }];
+        // `title` is a string or, since #46, a list of lines; `load` takes either.
         await TuneSelector.load(saved.map(s => ({
           title: s.title || '',
           entries: (s.entries || []).map(e => ({ tuneSlug: e.tune_slug, parts: e.parts })),
@@ -172,10 +173,19 @@ function buildSpec(branch, name) {
   return {
     name,
     branch,
-    sections: TuneSelector.sections().map(s => ({
-      title: s.title.trim() || null,
-      entries: s.entries.map(e => ({ tune_slug: e.tuneSlug, parts: e.parts })),
-    })),
+    // A section with neither a title nor any tunes prints nothing; one with a
+    // title and no tunes is a title page and goes in as it stands (#46). One
+    // line is written as a string, as every spec before #46 was, so a binder
+    // shared today decodes the same way as one shared last week.
+    sections: TuneSelector.sections()
+      .filter(s => s.entries.length > 0 || TuneSelector.titleLines(s).length > 0)
+      .map(s => {
+        const title = TuneSelector.titleLines(s);
+        return {
+          title: title.length > 1 ? title : (title[0] || null),
+          entries: s.entries.map(e => ({ tune_slug: e.tuneSlug, parts: e.parts })),
+        };
+      }),
   };
 }
 

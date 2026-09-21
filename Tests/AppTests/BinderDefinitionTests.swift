@@ -50,6 +50,50 @@ final class BinderDefinitionTests: XCTestCase {
         XCTAssertEqual(entries[1].parts, ["Melody", "Seconds"])
     }
 
+    /// A section with no `entries` is a title page and nothing else (#46), and a
+    /// `title` written as a list is one title page of several lines.
+    func testTitleOnlySectionsAndMultiLineTitles() throws {
+        let yaml = """
+        binders:
+          - name: "2027 Band Binder"
+            output: 2027_binder.pdf
+            sections:
+              - title: ["SVPB Music", "2027"]
+              - title: "G4 Tunes"
+                entries: []
+              - title: "G4 Medley"
+                entries:
+                  - tune: g4_medley_2027
+        """
+        let sections = try BinderDefinitionLoader.decode(yaml).binders[0].sections
+
+        XCTAssertEqual(sections.map(\.title), [["SVPB Music", "2027"], "G4 Tunes", "G4 Medley"])
+        XCTAssertEqual(sections.map(\.entries.count), [0, 0, 1])
+
+        // And the spec the assembler builds from carries all three through.
+        let spec = try BinderDefinitionLoader.decode(yaml).binders[0].spec(branch: "2027")
+        XCTAssertEqual(spec.sections.map(\.titlePage), [["SVPB Music", "2027"], "G4 Tunes", "G4 Medley"])
+        XCTAssertEqual(spec.entries.map(\.tuneSlug), ["g4_medley_2027"])
+    }
+
+    /// A section is a title page, a run of tunes, or both. A blank title over no
+    /// tunes is none of those, and a binder of title pages alone cannot be built.
+    func testRejectsSectionsAndBindersThatWouldPrintNothing() {
+        let yaml = """
+        binders:
+          - name: "Titles Only"
+            output: titles.pdf
+            sections:
+              - title: "Front Matter"
+              - title: "  "
+        """
+        XCTAssertThrowsError(try BinderDefinitionLoader.decode(yaml)) { error in
+            let message = "\(error)"
+            XCTAssertTrue(message.contains("binders[0].sections[1] has a blank title"), message)
+            XCTAssertTrue(message.contains("binders[0] 'Titles Only' has no tunes"), message)
+        }
+    }
+
     func testMissingKeyNamesItsPath() {
         let yaml = """
         binders:
@@ -73,13 +117,15 @@ final class BinderDefinitionTests: XCTestCase {
     }
 
     func testRejectsUnusableOutputs() {
+        // Each binder holds a tune, so the only thing left to object to is its output.
+        let section = #"sections: [{ title: "S", entries: [{ tune: t }] }]"#
         let yaml = """
         binders:
-          - { name: "A", output: a.pdf, sections: [] }
-          - { name: "B", output: A.PDF, sections: [] }
-          - { name: "C", output: ../escape.pdf, sections: [] }
-          - { name: "D", output: d.txt, sections: [] }
-          - { name: " ", output: e.pdf, sections: [] }
+          - { name: "A", output: a.pdf, \(section) }
+          - { name: "B", output: A.PDF, \(section) }
+          - { name: "C", output: ../escape.pdf, \(section) }
+          - { name: "D", output: d.txt, \(section) }
+          - { name: " ", output: e.pdf, \(section) }
         """
         XCTAssertThrowsError(try BinderDefinitionLoader.decode(yaml)) { error in
             let message = "\(error)"

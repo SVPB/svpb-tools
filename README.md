@@ -50,7 +50,9 @@ binders:
   - name: "2026 Band Binder"          # shown in the UI and the build log
     output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
     sections:
-      - title: "Grade 4 Tunes"        # rendered as a divider page ahead of the section
+      - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
+                                      # here, the binder's cover, set over two lines
+      - title: "Grade 4 Tunes"        # rendered as a title page ahead of the section
         entries:
           - tune: g4_medley_2026      # tune slug = the .abc filename without its extension
           - tune: g4_msr_march_2026
@@ -80,8 +82,16 @@ binders:
 - `tune` is the tune's slug: the `.abc` filename without its extension.
 - `parts` is optional. Omit it to include every part of the tune, which is what the official
   binder normally wants.
-- Each `title` is rendered as a divider page ahead of that section's tunes, and page footers
-  number pages within the binder.
+- Each `title` is rendered as a title page ahead of that section's tunes, and page footers
+  number pages within the binder. A title page is counted but prints no number of its own,
+  the way a book's part titles are, so a cover and two headings mean the first tune opens on
+  page 4.
+- A section may leave `entries` out altogether. It is then a title page and nothing else —
+  which is how a binder gets a cover that belongs to the binder rather than to the tunes after
+  it, and how two title pages come to sit on consecutive pages. A binder still needs at least
+  one tune somewhere: title pages alone are not a binder, and the build says so.
+- A `title` written as a list is one title page of several lines, engraved as a block with the
+  first line largest. A plain string is one line, as before.
 - The pipe major does not have to write this by hand: the binder constructor page
   (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit.
 
