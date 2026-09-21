@@ -52,6 +52,8 @@ binders:
     sections:
       - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
                                       # here, the binder's cover, set over two lines
+      - toc: true                     # the table of contents: every section and tune,
+                                      # with the page it starts on
       - title: "Grade 4 Tunes"        # rendered as a title page ahead of the section
         entries:
           - tune: g4_medley_2026      # tune slug = the .abc filename without its extension
@@ -92,6 +94,26 @@ binders:
   one tune somewhere: title pages alone are not a binder, and the build says so.
 - A `title` written as a list is one title page of several lines, engraved as a block with the
   first line largest. A plain string is one line, as before.
+- A section may instead say `toc: true`. It is then the binder's **table of contents**: one line
+  per titled section and one per tune, each naming it and the page it starts on, with the tunes
+  set one step in under their section. It holds no tunes of its own, and its `title` — which it
+  need not have — is the heading printed over the listing rather than a title page:
+
+  ```yaml
+  - toc: true                  # headed "Contents"
+  - title: "What's Inside"     # headed "What's Inside"
+    toc: true
+  - toc:
+      include: [tunes]         # only the tunes; `[sections]` is the other way to narrow it
+  ```
+
+  The contents pages are paper like any other, so they are counted into every number after them;
+  they print no number of their own, as a title page does not. A listing always covers the whole
+  binder, wherever in it the pages sit, so a binder may carry more than one and each says the
+  same thing. Only what the binder actually holds is listed: a tune whose slug the catalogue
+  cannot supply is not in the binder, and so is not in the contents. A cover — a title page with
+  no tunes under it — introduces nothing and is not listed either. A name too long for its line
+  is cut, and says so with an ellipsis.
 - The pipe major does not have to write this by hand: the binder constructor page
   (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit.
 

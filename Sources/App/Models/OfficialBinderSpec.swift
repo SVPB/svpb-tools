@@ -12,6 +12,7 @@ import Foundation
 ///     output: 2026_binder.pdf
 ///     sections:
 ///       - title: ["SVPB Music", "2026"]   # front matter: a title page, no tunes
+///       - toc: true                      # the table of contents (#47)
 ///       - title: "Grade 4 Tunes"
 ///         entries:
 ///           - tune: g4_medley_2026
@@ -21,7 +22,7 @@ import Foundation
 ///
 /// This is a different type from the personal `BinderSpec` on purpose: entries
 /// here say `tune:`, not `tune_slug:`, `parts` is optional, and every section
-/// has a title.
+/// that is not a table of contents has a title.
 struct BindersFile: Codable, Sendable {
 
     /// The binders the file declares, in file order.
@@ -40,7 +41,8 @@ struct OfficialBinder: Codable, Sendable {
     /// the binder is written and uploaded under, so it must be a bare filename.
     let output: String
 
-    /// Ordered sections, each introduced by a title page.
+    /// Ordered sections: each a title page, a titled run of tunes, or the binder's
+    /// table of contents (#47).
     let sections: [OfficialBinderSection]
 }
 
@@ -51,6 +53,10 @@ struct OfficialBinderSection: Codable, Sendable {
 
     /// The title printed on the section's title page. One line written as a
     /// string, or several written as a list and engraved as a stacked block.
+    ///
+    /// Empty only on a `toc:` section, where the title is the heading over the
+    /// listing and a section that wants the default heading writes none.
+    /// `BinderDefinitionLoader` rejects every other section without one.
     let title: BinderTitle
 
     /// Ordered tunes in this section.
@@ -60,15 +66,29 @@ struct OfficialBinderSection: Codable, Sendable {
     /// puts two title pages on consecutive pages.
     let entries: [OfficialBinderEntry]
 
-    init(title: BinderTitle, entries: [OfficialBinderEntry] = []) {
+    /// The table of contents this section is (#47), or `nil` when it is not one.
+    ///
+    /// ```yaml
+    /// sections:
+    ///   - title: ["SVPB Music", "2027"]   # the cover
+    ///   - toc: true                       # the contents, headed "Contents"
+    ///   - title: "G4 Tunes"
+    ///     entries: [...]
+    /// ```
+    let toc: TableOfContentsSpec?
+
+    init(title: BinderTitle = BinderTitle([]), entries: [OfficialBinderEntry] = [],
+         toc: TableOfContentsSpec? = nil) {
         self.title = title
         self.entries = entries
+        self.toc = toc
     }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        title = try container.decode(BinderTitle.self, forKey: .title)
+        title = try container.decodeIfPresent(BinderTitle.self, forKey: .title) ?? BinderTitle([])
         entries = try container.decodeIfPresent([OfficialBinderEntry].self, forKey: .entries) ?? []
+        toc = try TableOfContentsSpec.decode(from: container, forKey: .toc)
     }
 }
 
@@ -99,7 +119,9 @@ extension OfficialBinder {
     /// same problem either way — so `binders.yaml`'s shape is mapped onto the personal
     /// spec rather than duplicating `BinderService`.
     ///
-    /// Every section of an official binder has a title, so every one gets a title page.
+    /// Every section of an official binder that is not a table of contents has a title,
+    /// so every one of those gets a title page; a `toc:` section's title is the heading
+    /// over its listing instead, and it may have none.
     /// Entries carry **no parts**: per-part rendering is deferred past MVP (#20), and an
     /// empty `parts` list is how a spec asks for the tune's one set of pages. Honouring
     /// `parts:` today would repeat the whole score once per named part, since every
@@ -111,8 +133,9 @@ extension OfficialBinder {
             branch: branch,
             sections: sections.map { section in
                 BinderSection(
-                    title: section.title,
-                    entries: section.entries.map { BinderEntry(tuneSlug: $0.tune, parts: []) }
+                    title: section.title.isEmpty ? nil : section.title,
+                    entries: section.entries.map { BinderEntry(tuneSlug: $0.tune, parts: []) },
+                    toc: section.toc
                 )
             }
         )

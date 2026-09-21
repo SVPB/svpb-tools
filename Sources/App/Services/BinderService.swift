@@ -39,6 +39,7 @@ actor BinderService {
 
     private let musicWorkspaceURL: URL
     private let titleRenderer = TitlePageRenderer()
+    private let tocRenderer = TableOfContentsRenderer()
     private let tuneRenderer = TunePageRenderer()
 
     init(musicWorkspacePath: String) {
@@ -71,7 +72,10 @@ actor BinderService {
         logger.info("[BinderService] \(requestID): building '\(spec.name)' — branch '\(spec.branch)', \(spec.sections.count) section(s), \(spec.entries.count) entr(ies)")
 
         let binderPages = try await pages(for: spec, label: requestID.uuidString, db: db, logger: logger)
-        let tunePageCount = binderPages.count(where: { if case .titlePage = $0 { false } else { true } })
+        // Pages the binder generated — title pages, contents pages — are not a binder
+        // on their own, so only the pages that came from a tune count towards having
+        // something to bind.
+        let tunePageCount = binderPages.count { $0.slug != nil }
 
         logger.info("[BinderService] \(requestID): collected \(binderPages.count) page(s) total, \(tunePageCount) of them tune pages")
         guard tunePageCount > 0 else {
@@ -106,27 +110,66 @@ actor BinderService {
         case prebuilt(slug: String, path: String)
         /// A generated page carrying nothing but a title.
         case titlePage(title: BinderTitle, svg: String)
+        /// A generated page of the binder's table of contents, and the lines it
+        /// carries — which nothing can read back out of the outlined SVG (#47).
+        case contents(entries: [TableOfContentsRenderer.Entry], svg: String)
 
         var source: SVGSource {
             switch self {
             case .tune(_, let svg): .string(svg)
             case .prebuilt(_, let path): .fileURL(URL(fileURLWithPath: path))
             case .titlePage(_, let svg): .string(svg)
+            case .contents(_, let svg): .string(svg)
             }
         }
 
-        /// The tune this page belongs to, or `nil` for a title page.
+        /// The tune this page belongs to, or `nil` for a page the binder itself
+        /// generated — a title page, or a page of the contents.
         var slug: String? {
             switch self {
             case .tune(let slug, _): slug
             case .prebuilt(let slug, _): slug
-            case .titlePage: nil
+            case .titlePage, .contents: nil
             }
         }
     }
 
+    // MARK: - The plan
+
+    /// What a binder will hold, in order, before any of it has a page number.
+    ///
+    /// A table of contents is why this exists. Its numbers come from the pages
+    /// around it, and its own pages move every number after it, so neither can
+    /// be settled in one pass over the spec. The way out is that the *count* of
+    /// contents lines is known before anything is drawn: resolving the spec to
+    /// a plan settles what the binder holds, reserving the contents pages
+    /// settles how long it is, and only then does anything take a number.
+    private enum PlanItem {
+        /// A title page, and whether the contents lists it — which it does when
+        /// the title stands over tunes, and does not when it is a page of its
+        /// own, such as the binder's cover.
+        case titlePage(BinderTitle, section: Int, listed: Bool)
+        /// The binder's table of contents, headed as its section asked.
+        case contents(TableOfContentsSpec, heading: String)
+        /// One tune, resolved but not yet engraved: it cannot be, until the
+        /// page it opens on is known.
+        case tune(Resolution)
+    }
+
+    /// One line a table of contents will carry, before its page number is known.
+    private struct ListedItem {
+        /// Index into the plan of the thing this line names, which is what the
+        /// line's page number is read from once the plan has been laid out.
+        let item: Int
+        /// How far the line is indented: 0 for a section, 1 for a tune under one.
+        let level: Int
+        /// The name printed on the line.
+        let text: String
+    }
+
     /// Resolves `spec` to the binder's pages, in order: each section's title page, then
-    /// the pages of its tunes.
+    /// the pages of its tunes, with the binder's table of contents wherever it asked to
+    /// sit.
     ///
     /// A section that holds no entries is a title page and nothing else, and goes in
     /// unconditionally — that is how a binder gets a cover, and how two title pages come
@@ -138,27 +181,42 @@ actor BinderService {
     /// already collected *is* the numbering: the next page to be produced prints
     /// `pages.count + 1`. That is why an entry is resolved before it is engraved —
     /// whether the title page ahead of it goes in decides what number it opens on.
-    /// Title pages are counted this way but print no number of their own.
+    /// Title pages and contents pages are counted this way but print no number of their
+    /// own.
     func pages(for spec: BinderSpec, label: String, db: Database, logger: Logger) async throws -> [Page] {
-        var pages: [Page] = []
+        let items = try await plan(for: spec, label: label, db: db, logger: logger)
+        return layOut(items, label: label, logger: logger)
+    }
+
+    /// Resolves `spec` to what the binder will hold, without engraving any of it.
+    ///
+    /// Nothing here needs a page number, and nothing here produces one: the point of the
+    /// pass is to settle *what* is in the binder, since that is what decides how long the
+    /// table of contents is and therefore what every number after it will be.
+    private func plan(for spec: BinderSpec, label: String, db: Database, logger: Logger) async throws -> [PlanItem] {
+        var plan: [PlanItem] = []
 
         for (sectionIndex, section) in spec.sections.enumerated() {
-            let titlePage = section.titlePage
+            // A contents section is the table of contents, not a title page: its title
+            // is the heading printed over the listing.
+            if let toc = section.toc {
+                plan.append(.contents(toc, heading: section.contentsHeading))
+            }
 
             // A section with no tunes is the title page. Nothing is waiting on a tune
             // that might never resolve, so it goes in as soon as it is reached.
             guard !section.entries.isEmpty else {
-                guard let titlePage else {
+                if let titlePage = section.titlePage {
+                    plan.append(.titlePage(titlePage, section: sectionIndex, listed: false))
+                } else if section.toc == nil {
                     logger.warning("[BinderService] \(label): section \(sectionIndex + 1) has neither a title nor any tunes — skipping it")
-                    continue
                 }
-                append(titlePage, to: &pages, section: sectionIndex, label: label, logger: logger)
                 continue
             }
 
             // The title goes in only once the section has a page to follow it, so a
             // section whose tunes all fail to resolve leaves no orphan title.
-            var pending = titlePage
+            var pending = section.titlePage
 
             for entry in section.entries {
                 guard let resolution = try await resolve(entry, branch: spec.branch,
@@ -166,18 +224,110 @@ actor BinderService {
 
                 if let title = pending {
                     pending = nil
-                    append(title, to: &pages, section: sectionIndex, label: label, logger: logger)
+                    plan.append(.titlePage(title, section: sectionIndex, listed: true))
                 }
-
-                pages.append(contentsOf: engrave(resolution, firstPageNumber: pages.count + 1,
-                                                 label: label, logger: logger))
+                plan.append(.tune(resolution))
             }
 
             if let title = pending {
                 logger.warning("[BinderService] \(label): section '\(title.display)' has tunes but none of them resolved — omitting its title page")
             }
         }
+        return plan
+    }
+
+    /// Turns a plan into the binder's pages, numbering everything as it goes.
+    ///
+    /// Contents pages are *reserved* rather than rendered in place: their count follows
+    /// from the number of lines the listing will carry, which the plan already settles, so
+    /// the slots can be counted into the numbering before there is anything to put in
+    /// them. Rendering them last, once every listed thing has a page, is what keeps the
+    /// numbers a contents page prints and the numbers its own presence caused from
+    /// chasing each other.
+    private func layOut(_ plan: [PlanItem], label: String, logger: Logger) -> [Page] {
+        var pages: [Page] = []
+        /// Plan index → the binder page that thing starts on. A thing that produced no
+        /// page at all — a title that failed to render — is simply absent, and the
+        /// contents leave it out rather than pointing at the page after it.
+        var starts: [Int: Int] = [:]
+        var reserved: [(slot: Int, count: Int, toc: TableOfContentsSpec, heading: String)] = []
+
+        for (index, item) in plan.enumerated() {
+            switch item {
+            case .titlePage(let title, let section, _):
+                let before = pages.count
+                append(title, to: &pages, section: section, label: label, logger: logger)
+                if pages.count > before { starts[index] = before + 1 }
+
+            case .contents(let toc, let heading):
+                let count = tocRenderer.pageCount(forEntries: listing(plan, for: toc).count)
+                starts[index] = pages.count + 1
+                reserved.append((slot: pages.count, count: count, toc: toc, heading: heading))
+                pages.append(contentsOf: repeatElement(.contents(entries: [], svg: ""), count: count))
+                logger.debug("[BinderService] \(label): reserving \(count) page(s) from \(pages.count - count + 1) for '\(heading)'")
+
+            case .tune(let resolution):
+                let engraved = engrave(resolution, firstPageNumber: pages.count + 1,
+                                       label: label, logger: logger)
+                if !engraved.isEmpty { starts[index] = pages.count + 1 }
+                pages.append(contentsOf: engraved)
+            }
+        }
+
+        for slot in reserved {
+            let entries = listing(plan, for: slot.toc).compactMap { listed in
+                starts[listed.item].map {
+                    TableOfContentsRenderer.Entry(text: listed.text, level: listed.level, page: $0)
+                }
+            }
+            let drawn: [TableOfContentsRenderer.Page]
+            do {
+                drawn = try tocRenderer.render(heading: slot.heading, entries: entries,
+                                               pageCount: slot.count)
+                logger.debug("[BinderService] \(label): '\(slot.heading)' lists \(entries.count) entr(ies) over \(drawn.count) page(s)")
+            } catch {
+                // The slot was counted into every page number after it, so it stays a
+                // page: a blank contents page is a poor binder, but dropping it would
+                // make every number the binder prints one too high.
+                logger.error("[BinderService] \(label): '\(slot.heading)' failed to render — leaving its \(slot.count) reserved page(s) blank: \(error)")
+                drawn = Array(repeating: tocRenderer.blankPage(), count: slot.count)
+            }
+            for (offset, page) in drawn.enumerated() where slot.slot + offset < pages.count {
+                pages[slot.slot + offset] = .contents(entries: page.entries, svg: page.svg)
+            }
+        }
         return pages
+    }
+
+    /// The lines `toc` will carry, in binder order and without their page numbers.
+    ///
+    /// Read from the *plan* rather than from the spec, so the contents name what the
+    /// binder actually holds: a tune that did not resolve is not in the plan and so is
+    /// not in the listing (#47).
+    ///
+    /// A section is listed when its title page stands over tunes. A title page standing
+    /// on its own — a cover, or a divider with nothing under it — introduces nothing, so
+    /// nothing is what it is listed as. Tunes are set one level in under the sections
+    /// they belong to, and flush left in a listing that has no section lines to indent
+    /// them under — whether because `include:` left sections out, or because the binder
+    /// has no titled sections to name.
+    private func listing(_ plan: [PlanItem], for toc: TableOfContentsSpec) -> [ListedItem] {
+        let namesSections = toc.listsSections && plan.contains {
+            if case .titlePage(_, _, let listed) = $0 { listed } else { false }
+        }
+        let tuneLevel = namesSections ? 1 : 0
+        return plan.enumerated().compactMap { index, item in
+            switch item {
+            case .titlePage(let title, _, let listed):
+                guard listed, toc.listsSections else { return nil }
+                return ListedItem(item: index, level: 0, text: title.oneLine)
+            case .tune(let resolution):
+                guard toc.listsTunes else { return nil }
+                return ListedItem(item: index, level: tuneLevel, text: resolution.displayName)
+            case .contents:
+                return nil
+            }
+        }
     }
 
     /// Engraves one title page and appends it, or logs why it could not be drawn.
@@ -277,6 +427,9 @@ actor BinderService {
     /// One entry, and what its pages can be engraved from.
     private struct Resolution {
         let slug: String
+        /// The tune's title, or its slug where the ABC gave none: what a table of
+        /// contents names it as (#47).
+        let displayName: String
         let partName: String
         /// The tune's ABC source, when the catalogue has one to re-engrave.
         let abcURL: URL?
@@ -316,6 +469,10 @@ actor BinderService {
             return nil
         }
         let abcURL = tune.abcPath.map { URL(fileURLWithPath: $0) }
+        // The catalogue's title comes from the ABC `T:` header, which a file need not
+        // carry; the slug is the filename, which it always does.
+        let titled = tune.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = titled.isEmpty ? entry.tuneSlug : titled
 
         // Named parts first, in the order the entry names them, so an entry that asks for
         // one particular part still gets that part's record. An entry that names none —
@@ -353,7 +510,7 @@ actor BinderService {
                 continue
             }
             logger.debug("[BinderService] \(label): resolved \(paths.count) page(s) for '\(entry.tuneSlug)' / '\(part.name)'")
-            return Resolution(slug: entry.tuneSlug, partName: part.name,
+            return Resolution(slug: entry.tuneSlug, displayName: displayName, partName: part.name,
                               abcURL: abcURL, prebuiltPaths: paths)
         }
 

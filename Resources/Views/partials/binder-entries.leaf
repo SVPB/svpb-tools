@@ -9,10 +9,13 @@
 <p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
 <ul class="binder-entries" id="binder-entries"></ul>
 <!-- Shown only on pages that turn sections on. A title page is a section with
-     no tunes under it, so both controls add the same thing and differ in what
-     they leave the catalogue aimed at. -->
+     no tunes under it, so those two controls add the same thing and differ in
+     what they leave the catalogue aimed at; a table of contents is a third kind
+     of page, which lists the whole binder wherever it sits. -->
 <div class="add-controls">
   <button type="button" class="btn btn-add-section" id="add-section" hidden>+ Add section</button>
   <button type="button" class="btn btn-add-section" id="add-title-page" hidden
           title="A page of text on its own — a cover, or a heading with no tunes under it">+ Add title page</button>
+  <button type="button" class="btn btn-add-section" id="add-toc" hidden
+          title="Every section and tune in the binder, with the page it starts on">+ Add table of contents</button>
 </div>

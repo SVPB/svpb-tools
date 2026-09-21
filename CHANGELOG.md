@@ -8,6 +8,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### A binder can carry a table of contents (#47)
+
+- A binder section may now declare itself the binder's **table of contents**. It expands at
+  assembly into one line per titled section and one per tune, each naming it and the page it
+  starts on: the name flush left, the number flush right, and a run of spaced periods filling
+  the gap. Tunes sit one step in under the section they belong to, so the listing reads as the
+  binder's shape rather than as a flat list.
+- `binders.yaml` writes it as `- toc: true`, beside the title pages and titled sections it
+  already had. `toc: { include: [tunes] }` — or `[sections]` — narrows what is listed. A
+  contents section's `title`, which it need not have, is the heading printed over the listing
+  rather than a title page of its own; without one the heading is "Contents".
+- A contents page is paper like any other, so it is counted into every page number after it,
+  and it prints no number of its own, exactly as a title page does not.
+- **Assembly became two passes.** A table of contents needs the page numbers and moves them, so
+  neither can be settled in one walk over the spec. Rendering and re-counting in a loop would
+  not settle either: adding a contents page can push a line onto another page, which changes
+  the count again. Instead the count of contents *lines* is known before anything is drawn —
+  resolving the spec settles what the binder holds, the contents pages are reserved from that
+  count, everything takes its number over the full ordered list, and the listing is drawn into
+  the reserved slots last.
+- Only what the binder actually holds is listed. A tune the catalogue cannot supply never
+  reaches the binder and so never reaches the contents, and a section that lost all of its
+  tunes takes its own line with it. A cover — a title page with no tunes under it — introduces
+  nothing and is not listed. A tune is named by its ABC `T:` title, falling back to its slug.
+- A listing always covers the whole binder wherever in it the pages sit, so a binder may carry
+  more than one and each says the same thing.
+- The numbers right-align on one margin however many digits they carry, so they read down the
+  page as a column. A name too long for its line is cut rather than shrunk or wrapped, and says
+  so with an ellipsis: one size down the whole listing would make the column of numbers mean
+  something else, and a wrapped name would put a number beside the wrong line.
+- The page holds to the same outlines contract as every other page in a binder — every glyph a
+  `<path>`, drawn through CeolKit's `TextOutliner` in the face the engraver sets tune titles in
+  — because no non-browser rasteriser honours `@font-face` and the runtime image installs no
+  fonts at all.
+- `binders.yaml` gained two checks: a section that is a table of contents and also names tunes
+  is rejected, since a table of contents is a page of its own and the file would not say where
+  the tunes were meant to go; and so is `include: []`, which would print a heading and nothing
+  under it.
+- The binder constructor and the personal binder builder both gained **"+ Add table of
+  contents"** beside "+ Add section" and "+ Add title page". Its header is tinted and marked,
+  it does not become the section the catalogue adds tunes to, and it is kept out of every way a
+  tune could be moved into it — the move-to-section menu, the reorder arrows at a section
+  boundary, and the section a removed section's tunes are handed to.
+
 #### Title pages are pages, not a property of the tunes after them (#46)
 
 - A binder section may now hold **no tunes at all**. Such a section is a title page and nothing

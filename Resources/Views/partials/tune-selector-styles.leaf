@@ -37,6 +37,9 @@
   .binder-entries .section-header textarea.section-title { flex: 1; margin: 0; font-weight: 600; min-width: 0; resize: vertical; font-family: inherit; font-size: inherit; line-height: 1.3; overflow: hidden; }
   .binder-entries .section-header.title-page { background: #f6f1e8; }
   .binder-entries .section-header.title-page.active { background: #f0e6d2; border-left-color: #8a6d3b; }
+  .binder-entries .section-header.contents { background: #e8f1f6; }
+  .binder-entries .section-header.contents.active { background: #d6e8f2; border-left-color: #2b6d8a; }
+  .binder-entries .section-header.contents .title-page-marker { color: #2b6d8a; }
   .title-page-marker { color: #8a6d3b; font-size: 0.9rem; line-height: 1; padding: 0 6px; cursor: default; }
   .fold-btn { background: none!important; border: none!important; color: #555!important; cursor: pointer; font-size: 0.9rem!important; line-height: 1; padding: 0 4px!important; }
   .section-count { color: #555; font-size: 0.78rem; white-space: nowrap; margin: 0 4px; }

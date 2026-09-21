@@ -228,6 +228,40 @@ final class OfficialBinderAssemblyTests: XCTestCase {
                        "An official entry asks for the tune, not for parts of it (#20)")
     }
 
+    /// A `binders.yaml` that declares a table of contents assembles with one, and
+    /// the pages it takes are counted into the binder's length (#47).
+    func testADeclaredTableOfContentsIsAssembledIntoTheBinder() async throws {
+        try commit([
+            "march.abc": abc("Test March"),
+            "reel.abc": abc("Test Reel"),
+            "binders.yaml": Data("""
+            binders:
+              - name: "2026 Band Binder"
+                output: 2026_binder.pdf
+                sections:
+                  - title: ["SVPB Music", "2026"]
+                  - toc: true
+                  - title: "Grade 4 Tunes"
+                    entries:
+                      - tune: march
+                  - title: "Parade Tunes"
+                    entries:
+                      - tune: reel
+            """.utf8),
+        ])
+
+        await service.syncCatalogue(branch: branch, db: app.db, logger: app.logger)
+
+        let build = try await onlyBuild()
+        XCTAssertEqual(build.status, .success, "Nothing failed:\n\(build.log ?? "")")
+        // The cover, the contents, two title pages, and a page of tune apiece.
+        XCTAssertTrue(build.log?.contains("[binder] Assembled 2026_binder.pdf — 6 page(s)") ?? false,
+                      "The contents page was not counted into the binder:\n\(build.log ?? "")")
+
+        let url = await service.binderOutputDirectory(for: branch).appendingPathComponent("2026_binder.pdf")
+        XCTAssertTrue(try Data(contentsOf: url).starts(with: Data("%PDF".utf8)))
+    }
+
     // MARK: - Fixtures
 
     private func abc(_ title: String) -> Data {

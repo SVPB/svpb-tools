@@ -35,6 +35,12 @@ import Vapor
 /// that belongs to the binder rather than to the tunes after it, and how two
 /// title pages come to sit on consecutive pages — each is its own section.
 ///
+/// ## Table of contents
+///
+/// A section may declare itself the binder's table of contents (#47) rather
+/// than being a title page or a run of tunes. It expands at assembly into one
+/// line per listed thing, each carrying the page it starts on.
+///
 /// ## The flat shape
 ///
 /// Binders created before sections existed were stored, and shared by URL, as a
@@ -135,6 +141,10 @@ public struct BinderTitle: Codable, Sendable, Equatable,
     /// The title on one line, for logs and error messages.
     public var display: String { pageLines.joined(separator: " / ") }
 
+    /// The title as one run of text, for a line that has no room to stack it —
+    /// a contents entry, or the heading over a table of contents (#47).
+    public var oneLine: String { pageLines.joined(separator: " ") }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let single = try? container.decode(String.self) {
@@ -154,6 +164,90 @@ public struct BinderTitle: Codable, Sendable, Equatable,
     }
 }
 
+// MARK: - TableOfContentsSpec
+
+/// A declared table of contents: the pages listing what the binder holds and
+/// where each of them starts (#47).
+///
+/// Written as a flag where nothing more is wanted, or as a mapping that narrows
+/// what is listed:
+/// ```yaml
+/// - toc: true
+/// - toc:
+///     include: [tunes]
+/// ```
+/// A contents listing always covers the **whole** binder, wherever in it the
+/// contents pages sit — a binder may declare more than one, and each says the
+/// same thing.
+public struct TableOfContentsSpec: Codable, Sendable, Equatable {
+
+    /// A kind of thing a contents listing names.
+    public enum Listing: String, Codable, Sendable, CaseIterable {
+        /// The title page over a run of tunes, listed at the page it occupies.
+        case sections
+        /// Each tune, listed at the page it opens on.
+        case tunes
+    }
+
+    /// What this listing names, in the order the kinds nest. Both by default.
+    public let include: [Listing]
+
+    /// - Parameter include: The kinds to list. Order and repeats are ignored:
+    ///   the value is normalised to `Listing.allCases` order.
+    public init(include: [Listing] = Listing.allCases) {
+        self.include = Listing.allCases.filter(include.contains)
+    }
+
+    /// Whether section titles get a line of their own.
+    public var listsSections: Bool { include.contains(.sections) }
+
+    /// Whether each tune gets a line of its own.
+    public var listsTunes: Bool { include.contains(.tunes) }
+
+    /// True when the listing would name nothing at all, which is a contents
+    /// page carrying only its heading.
+    public var isEmpty: Bool { include.isEmpty }
+
+    enum CodingKeys: String, CodingKey {
+        case include
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(include: try container.decodeIfPresent([Listing].self, forKey: .include)
+            ?? Listing.allCases)
+    }
+
+    /// Encodes back to the shape it was written in: the bare `true` when it
+    /// lists everything, and the mapping only when it has been narrowed. A spec
+    /// stored or shared before narrowing existed is unchanged by a round trip.
+    public func encode(to encoder: any Encoder) throws {
+        guard include != Listing.allCases else {
+            var container = encoder.singleValueContainer()
+            try container.encode(true)
+            return
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(include, forKey: .include)
+    }
+
+    /// The contents declaration under `key`, or `nil` where there is none.
+    ///
+    /// `toc: true` and `toc: { include: … }` both declare one; `toc: false`,
+    /// `toc: null`, and an absent key all decline one, so a section can say
+    /// "not a table of contents" as plainly as it says the opposite.
+    static func decode<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key
+    ) throws -> TableOfContentsSpec? {
+        guard container.contains(key), try !container.decodeNil(forKey: key) else { return nil }
+        if let declared = try? container.decode(Bool.self, forKey: key) {
+            return declared ? TableOfContentsSpec() : nil
+        }
+        return try container.decode(TableOfContentsSpec.self, forKey: key)
+    }
+}
+
 // MARK: - BinderSection
 
 /// A run of consecutive tunes in a binder, optionally introduced by a title page.
@@ -162,25 +256,64 @@ public struct BinderTitle: Codable, Sendable, Equatable,
 /// tunes that simply follows the previous section's; a section with a title and
 /// no entries is a title page on its own, which is what makes binder front
 /// matter and consecutive title pages expressible (#46).
+///
+/// A section may instead declare itself the binder's table of contents (#47).
+/// That is a third kind of thing rather than a title page with a list under it:
+/// its `title`, if it has one, is the heading printed over the listing rather
+/// than a title page of its own, and it holds no tunes.
 public struct BinderSection: Codable, Content, Sendable {
 
     /// The title page ahead of this section. `nil`, empty, or all-whitespace
     /// means the section has no title page.
+    ///
+    /// On a contents section this is the heading over the listing instead, and
+    /// a section without one is headed ``TableOfContentsRenderer/defaultHeading``.
     public let title: BinderTitle?
 
     /// Ordered list of tune+part selections in this section. Empty when the
     /// section is a title page and nothing more.
     public let entries: [BinderEntry]
 
-    public init(title: BinderTitle?, entries: [BinderEntry]) {
+    /// The table of contents this section is, or `nil` when it is not one (#47).
+    public let toc: TableOfContentsSpec?
+
+    public init(title: BinderTitle?, entries: [BinderEntry], toc: TableOfContentsSpec? = nil) {
         self.title = title
         self.entries = entries
+        self.toc = toc
     }
 
-    /// The title page to engrave ahead of this section, or `nil` when there is none.
+    /// The title page to engrave ahead of this section, or `nil` when there is
+    /// none — which a contents section never has, its title being a heading.
     public var titlePage: BinderTitle? {
-        guard let title, !title.isEmpty else { return nil }
+        guard toc == nil, let title, !title.isEmpty else { return nil }
         return BinderTitle(title.pageLines)
+    }
+
+    /// The heading printed over this section's contents listing.
+    public var contentsHeading: String {
+        guard let title, !title.isEmpty else { return TableOfContentsRenderer.defaultHeading }
+        return title.oneLine
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case title, entries, toc
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decodeIfPresent(BinderTitle.self, forKey: .title)
+        entries = try container.decodeIfPresent([BinderEntry].self, forKey: .entries) ?? []
+        toc = try TableOfContentsSpec.decode(from: container, forKey: .toc)
+    }
+
+    /// Writes `toc` only when there is one, so every spec written before a
+    /// binder could carry a contents listing encodes byte-identically.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encode(entries, forKey: .entries)
+        try container.encodeIfPresent(toc, forKey: .toc)
     }
 }
 

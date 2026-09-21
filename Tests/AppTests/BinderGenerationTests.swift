@@ -279,14 +279,175 @@ final class BinderGenerationTests: XCTestCase {
         XCTAssertEqual(describe(pages), ["air"])
     }
 
+    // MARK: - Table of contents (#47)
+
+    /// The listing names what the binder holds and where each of it starts, and
+    /// its own pages are counted into every number after them.
+    ///
+    /// A title page standing over tunes is a section and is listed. The cover is
+    /// a title page standing over nothing, so it introduces nothing and is not.
+    func testContentsListsTheBinderAndIsCountedIntoItsNumbers() async throws {
+        let spec = BinderSpec(name: "2027 Band Binder", branch: "2026", sections: [
+            BinderSection(title: ["SVPB Music", "2027"], entries: []),
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+            BinderSection(title: "G4 Tunes", entries: [entry("march"), entry("reel")]),
+            BinderSection(title: "Slow Airs", entries: [entry("jig")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), [
+            "title: SVPB Music / 2027",
+            "contents: [G4 Tunes 3, >march 4, >reel 5, Slow Airs 6, >jig 7]",
+            "title: G4 Tunes",
+            "march",
+            "reel",
+            "title: Slow Airs",
+            "jig",
+        ])
+        // The cover and the contents are paper too: the first tune opens on 4.
+        XCTAssertEqual(printedPageNumbers(pages), [4, 5, 7])
+    }
+
+    /// A contents page is not numbered, any more than a title page is — and it
+    /// is not a tune page either, so a binder of contents alone is no binder.
+    func testContentsIsNotATunePage() async throws {
+        let spec = BinderSpec(name: "Contents only", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+            BinderSection(title: "Gone", entries: [entry("no_such_tune")]),
+        ])
+        let request = BinderRequest(definition: spec)
+        try await request.save(on: app.db)
+
+        await service.generateBinder(requestID: try request.requireID(), db: app.db, logger: app.logger)
+
+        let reloaded = try await BinderRequest.find(request.id, on: app.db)
+        XCTAssertNil(reloaded?.pdfPath, "A binder of contents pages alone was produced")
+    }
+
+    /// The listing is built from the pages the binder actually got, so a tune
+    /// that did not resolve is not listed — and neither is the title over a
+    /// section that lost all of its tunes.
+    func testUnresolvedTunesAreLeftOutOfTheListing() async throws {
+        let spec = BinderSpec(name: "Gaps", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+            BinderSection(title: "Present", entries: [entry("no_such_tune"), entry("march")]),
+            BinderSection(title: "Absent", entries: [entry("also_missing")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), [
+            "contents: [Present 2, >march 3]",
+            "title: Present",
+            "march",
+        ])
+    }
+
+    /// A tune is listed by its title, and by its slug where the ABC gave none.
+    func testTunesAreListedByTitleFallingBackToSlug() async throws {
+        try await seedTune("stb", branch: branch, title: "Scotland the Brave")
+        try await seedTune("untitled_tune", branch: branch, untitled: true)
+
+        let spec = BinderSpec(name: "Names", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+            BinderSection(title: nil, entries: [entry("stb"), entry("untitled_tune")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(contents(pages).first?.map(\.text), ["Scotland the Brave", "untitled_tune"])
+    }
+
+    /// `include:` narrows what is listed. With no sections in the listing there
+    /// is nothing for the tunes to sit under, so they are set flush left — which
+    /// is also what a binder with no titled sections gets.
+    func testAListingCanNameTunesOnly() async throws {
+        let spec = BinderSpec(name: "Tunes only", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec(include: [.tunes])),
+            BinderSection(title: "G4 Tunes", entries: [entry("march")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["contents: [march 3]", "title: G4 Tunes", "march"])
+        XCTAssertEqual(contents(pages).first?.first?.level, 0, "A tune with no section over it is still indented")
+    }
+
+    /// A listing too long for one page takes a second, and the second page's
+    /// worth of paper is counted into the numbering like the first's.
+    func testALongListingReservesEveryPageItNeeds() async throws {
+        let renderer = TableOfContentsRenderer()
+        // Two lines per section — its title and its one tune — so this is the
+        // smallest binder whose listing does not fit on one page.
+        let sectionCount = renderer.linesOnFirstPage / 2 + 1
+        let spec = BinderSpec(name: "Long", branch: "2026", sections:
+            [BinderSection(title: nil, entries: [], toc: TableOfContentsSpec())]
+            + (1 ... sectionCount).map {
+                BinderSection(title: BinderTitle(["Set \($0)"]), entries: [entry("march")])
+            })
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        let listings = contents(pages)
+
+        XCTAssertEqual(listings.count, 2, "The listing did not reserve a second page")
+        XCTAssertEqual(listings[0].count, renderer.linesOnFirstPage)
+        XCTAssertEqual(listings[1].count, sectionCount * 2 - renderer.linesOnFirstPage)
+        XCTAssertEqual(pages.count, 2 + sectionCount * 2)
+        // Two contents pages ahead of it, so "Set 1" opens on 3 and its tune on 4.
+        XCTAssertEqual(listings[0].first, .init(text: "Set 1", level: 0, page: 3))
+        XCTAssertEqual(listings[0].dropFirst().first, .init(text: "march", level: 1, page: 4))
+        XCTAssertEqual(printedPageNumbers(pages).first, 4)
+    }
+
+    /// A binder may declare more than one, and each says the same thing: every
+    /// listing covers the whole binder, wherever in it the pages sit.
+    func testEveryListingCoversTheWholeBinder() async throws {
+        let spec = BinderSpec(name: "Twice", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+            BinderSection(title: "Set", entries: [entry("march")]),
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        let listings = contents(pages)
+        XCTAssertEqual(listings.count, 2)
+        XCTAssertEqual(listings[0], listings[1])
+        // Both pages are counted, and the second one is itself page 4.
+        XCTAssertEqual(listings[0], [.init(text: "Set", level: 0, page: 2),
+                                     .init(text: "march", level: 1, page: 3)])
+        XCTAssertEqual(pages.count, 4)
+    }
+
+    /// A contents section carrying a title is headed with it; one without is
+    /// headed "Contents". Either way it is a heading, not a title page.
+    func testTheHeadingComesFromTheSectionTitle() async throws {
+        for (title, heading) in [(BinderTitle?.none, "Contents"), (BinderTitle("What's Inside"), "What's Inside")] {
+            let spec = BinderSpec(name: "Headed", branch: "2026", sections: [
+                BinderSection(title: title, entries: [], toc: TableOfContentsSpec()),
+                BinderSection(title: nil, entries: [entry("march")]),
+            ])
+            let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+            XCTAssertEqual(describe(pages), ["contents: [march 2]", "march"],
+                           "A contents section drew a title page of its own")
+            guard case .contents(_, let svg) = pages[0] else { return XCTFail("Not a contents page") }
+            let outlined = try TextOutliner.outline(heading, face: .libertinusSerifRegular, fontSize: 24)
+            XCTAssertTrue(svg.contains(outlined.svg), "The page is not headed '\(heading)'")
+        }
+    }
+
     // MARK: - Helpers
+
+    /// The lines each contents page carries, in binder order.
+    private func contents(_ pages: [BinderService.Page]) -> [[TableOfContentsRenderer.Entry]] {
+        pages.compactMap { page in
+            guard case .contents(let entries, _) = page else { return nil }
+            return entries
+        }
+    }
 
     private func entry(_ slug: String) -> BinderEntry {
         BinderEntry(tuneSlug: slug, parts: ["Melody"])
     }
 
-    /// Tune pages by slug, title pages by their text, so a test reads as the
-    /// binder's contents.
+    /// Tune pages by slug, title pages by their text, contents pages by the lines
+    /// they carry, so a test reads as the binder's contents.
     private func describe(_ pages: [BinderService.Page]) -> [String] {
         pages.map { page in
             switch page {
@@ -296,6 +457,10 @@ final class BinderGenerationTests: XCTestCase {
                 "prebuilt: \(slug)"
             case .titlePage(let title, let svg):
                 svg.contains("title-page") ? "title: \(title.display)" : "malformed title: \(title.display)"
+            case .contents(let entries, let svg):
+                svg.contains("table-of-contents")
+                    ? "contents: [\(entries.map { "\(String(repeating: ">", count: $0.level))\($0.text) \($0.page)" }.joined(separator: ", "))]"
+                    : "malformed contents"
             }
         }
     }
@@ -317,6 +482,7 @@ final class BinderGenerationTests: XCTestCase {
     /// Writes a tune's ABC where the build would, engraves it, and records both in the
     /// catalogue — the shape `BinderService` re-engraves from and falls back to.
     private func seedTune(_ slug: String, branch: Branch, pages: Int = 1,
+                          title: String? = nil, untitled: Bool = false,
                           extraParts: [String] = []) async throws {
         let body = "ABcd efga | gfed cBAG | ABcd efga | g2 f2 e2 d2 |]"
         let abc = """
@@ -343,7 +509,12 @@ final class BinderGenerationTests: XCTestCase {
             svgPaths.append(url.path)
         }
 
-        let tune = try Tune(branch: branch, slug: slug, title: slug, abcPath: abcURL.path)
+        // A catalogued tune is titled from its ABC `T:` header, which is the slug
+        // here unless a test asks for something else; `untitled` is the tune whose
+        // file carried no title at all.
+        let tune = try Tune(branch: branch, slug: slug,
+                            title: untitled ? nil : (title ?? slug),
+                            abcPath: abcURL.path)
         try await tune.save(on: app.db)
         // Every part points at the same pages, which is what the build produces today:
         // one PDF per `.abc` file, the whole multi-voice score, recorded against each
