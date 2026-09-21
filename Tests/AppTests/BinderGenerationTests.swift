@@ -432,6 +432,121 @@ final class BinderGenerationTests: XCTestCase {
         }
     }
 
+    // MARK: - Packing (#48)
+
+    /// The saving the issue is about: three tunes that each took a page of their own come
+    /// back sharing one, and a binder that never asked stays exactly as it was.
+    func testPackingPutsShortTunesOnOneSheet() async throws {
+        let sections = [BinderSection(title: nil,
+                                      entries: [entry("march"), entry("reel"), entry("jig")])]
+
+        let loose = try await service.pages(
+            for: BinderSpec(name: "Loose", branch: "2026", sections: sections),
+            label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(loose), ["march", "reel", "jig"])
+
+        let packed = try await service.pages(
+            for: BinderSpec(name: "Packed", branch: "2026", sections: sections, pack: true),
+            label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(packed), ["march + reel + jig"])
+        XCTAssertEqual(printedPageNumbers(packed), [1])
+    }
+
+    /// The override: one tune says it must open a page, and the run stops ahead of it. The
+    /// tunes on either side of the break still pack among themselves.
+    func testBreakBeforeOpensAPageOfItsOwn() async throws {
+        let spec = BinderSpec(name: "Broken", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [
+                entry("march"),
+                BinderEntry(tuneSlug: "reel", parts: ["Melody"], pageBreak: .before),
+                entry("jig"),
+            ]),
+        ], pack: true)
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["march", "reel + jig"])
+        XCTAssertEqual(printedPageNumbers(pages), [1, 2])
+    }
+
+    /// A title page owns a page anyway, so it ends the run ahead of it — which costs
+    /// nothing, and keeps a section's tunes from climbing onto the sheet before its title.
+    func testATitlePageEndsTheRun() async throws {
+        let spec = BinderSpec(name: "Sectioned", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [entry("march")]),
+            BinderSection(title: "Second Set", entries: [entry("reel"), entry("jig")]),
+        ], pack: true)
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["march", "title: Second Set", "reel + jig"])
+        // The title page is paper: the packed run after it opens on 3.
+        XCTAssertEqual(printedPageNumbers(pages), [1, 3])
+    }
+
+    /// The reason #48 needed CeolKit to report where a tune landed: under packing the page
+    /// a tune starts on is not index arithmetic any more, and a table of contents that
+    /// guessed would point at the wrong sheet. Every listed tune names the page its music
+    /// is actually printed on.
+    func testTheContentsAgreeWithThePackedPages() async throws {
+        let found = try await Branch.find("2026", on: app.db)
+        try await seedTune("tall", branch: try XCTUnwrap(found), pages: 2)
+
+        let spec = BinderSpec(name: "Listed", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec(include: [.tunes])),
+            BinderSection(title: nil, entries: [entry("march"), entry("reel"),
+                                                entry("tall"), entry("jig")]),
+        ], pack: true)
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        let listing = try XCTUnwrap(contents(pages).first)
+
+        XCTAssertEqual(listing.map(\.text), ["march", "reel", "tall", "jig"])
+        for line in listing {
+            let page = try XCTUnwrap(pages[safe: line.page - 1],
+                                     "the contents send a reader to page \(line.page), which the binder does not have")
+            XCTAssertTrue(page.slugs.contains(line.text),
+                          "the contents send a reader to page \(line.page) for '\(line.text)', which is not on it")
+            // And the sheet itself prints that number, which is what a reader turns to.
+            guard case .tune(_, let svg) = page,
+                  let match = svg.firstMatch(of: /ceolkit-meta: \{"page": (\d+)/) else {
+                return XCTFail("Page \(line.page) is not an engraved tune page")
+            }
+            XCTAssertEqual(Int(match.1), line.page)
+        }
+        // Two short tunes ahead of a two-page one: the listing is not four consecutive pages.
+        XCTAssertLessThan(pages.count, 1 + 5)
+    }
+
+    /// A tune with no ABC to re-engrave arrives as whole pages the build already made, so
+    /// it cannot join a run. It is engraved alone and the tunes around it still pack.
+    func testATuneWithNoABCIsNotPackedButItsNeighboursAre() async throws {
+        let found = try await Tune.query(on: app.db).filter(\.$slug == "reel").first()
+        let tune = try XCTUnwrap(found)
+        tune.abcPath = nil
+        try await tune.save(on: app.db)
+
+        let spec = BinderSpec(name: "Mixed", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [entry("reel"), entry("march"), entry("jig")]),
+        ], pack: true)
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["prebuilt: reel", "march + jig"])
+    }
+
+    /// An official binder carries the choice through from `binders.yaml`, entry overrides
+    /// and all — the mapping onto the personal spec is the only place it could be lost.
+    func testAnOfficialBinderCarriesPackingThrough() {
+        let binder = OfficialBinder(name: "Band", output: "band.pdf", sections: [
+            OfficialBinderSection(title: "Set", entries: [
+                OfficialBinderEntry(tune: "march"),
+                OfficialBinderEntry(tune: "reel", pageBreak: .before),
+            ]),
+        ], pack: true)
+
+        let spec = binder.spec(branch: "2026")
+        XCTAssertTrue(spec.pack)
+        XCTAssertEqual(spec.entries.map(\.breaksBefore), [false, true])
+    }
+
     // MARK: - Helpers
 
     /// The lines each contents page carries, in binder order.
@@ -448,17 +563,26 @@ final class BinderGenerationTests: XCTestCase {
 
     /// Tune pages by slug, title pages by their text, contents pages by the lines
     /// they carry, so a test reads as the binder's contents.
+    ///
+    /// A page names the tunes that *open* on it, so a tune running over several pages
+    /// names itself only on the first: the rest are described as the tune they carry on
+    /// from, which is what a reader of the list wants to see. A packed page (#48) that
+    /// two tunes share names both.
     private func describe(_ pages: [BinderService.Page]) -> [String] {
-        pages.map { page in
+        var carried = ""
+        return pages.map { page in
             switch page {
-            case .tune(let slug, _):
-                slug
+            case .tune(let slugs, _):
+                if !slugs.isEmpty { carried = slugs.joined(separator: " + ") }
+                return carried
             case .prebuilt(let slug, _):
-                "prebuilt: \(slug)"
+                carried = slug
+                return "prebuilt: \(slug)"
             case .titlePage(let title, let svg):
-                svg.contains("title-page") ? "title: \(title.display)" : "malformed title: \(title.display)"
+                return svg.contains("title-page")
+                    ? "title: \(title.display)" : "malformed title: \(title.display)"
             case .contents(let entries, let svg):
-                svg.contains("table-of-contents")
+                return svg.contains("table-of-contents")
                     ? "contents: [\(entries.map { "\(String(repeating: ">", count: $0.level))\($0.text) \($0.page)" }.joined(separator: ", "))]"
                     : "malformed contents"
             }
@@ -522,5 +646,15 @@ final class BinderGenerationTests: XCTestCase {
         for name in ["Melody"] + extraParts {
             try await Part(tune: tune, name: name, svgPaths: svgPaths).save(on: app.db)
         }
+    }
+}
+
+// MARK: -
+
+private extension Collection {
+    /// The element at `index`, or `nil` where there is none — so a test that reads a page
+    /// number back out of a contents line fails rather than traps when the number is wrong.
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

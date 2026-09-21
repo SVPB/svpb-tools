@@ -49,6 +49,7 @@ and targets. The branch it is committed to *is* the year, so the file carries no
 binders:
   - name: "2026 Band Binder"          # shown in the UI and the build log
     output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
+    pack: true                        # optional: let short tunes share a sheet
     sections:
       - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
                                       # here, the binder's cover, set over two lines
@@ -65,6 +66,7 @@ binders:
           - tune: MarchOfTheRBL
           - tune: Moonstar
             parts: ["Melody", "Seconds"]   # optional; defaults to every part of the tune
+            break: before                  # optional; this tune opens a page of its own
       - title: "Massed Bands / WUSPBA"
         entries:
           - tune: amazing_grace
@@ -114,8 +116,17 @@ binders:
   cannot supply is not in the binder, and so is not in the contents. A cover — a title page with
   no tunes under it — introduces nothing and is not listed either. A name too long for its line
   is cut, and says so with an ellipsis.
+- `pack: true` lets **two short tunes in a row share a sheet** instead of each taking a page of
+  its own. It is off unless asked for, and it is a choice per binder rather than a rule: a tune
+  starting half way down a page cannot be pulled out and handed to one piper, and an official
+  binder may well want "every tune starts on its own page" as house style. Where a binder packs,
+  one entry at a time opts back out with `break: before`, which is for the tune that would
+  otherwise sit awkwardly across a fold. Title pages and the table of contents own a page anyway,
+  so they always start the tunes after them fresh — and a tune too tall to fit under the one
+  before it opens its own page whatever the binder asked for.
 - The pipe major does not have to write this by hand: the binder constructor page
-  (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit.
+  (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit, packing
+  included.
 
 ---
 

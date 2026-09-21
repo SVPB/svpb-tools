@@ -25,7 +25,7 @@ final class BinderPageTests: XCTestCase {
     private let sharedElementIDs = [
         "sel-branch", "binder-name", "search-tunes",
         "tune-list", "binder-entries", "empty-msg", "add-section",
-        "fold-all-sections", "add-title-page",
+        "fold-all-sections", "add-title-page", "binder-pack",
     ]
 
     func testConstructorPageRenders() async throws {
@@ -58,6 +58,30 @@ final class BinderPageTests: XCTestCase {
             XCTAssertTrue(html.contains("e.g. My 2026 Binder"))
             XCTAssertTrue(html.contains("id=\"download-section\""))
             XCTAssertFalse(html.contains("#import("))
+        }
+    }
+
+    /// Both pages offer packing (#48), and each writes it into its own output: the
+    /// constructor into `binders.yaml`, the builder into the spec it posts and shares.
+    func testBothPagesOfferPacking() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains("Pack short tunes onto shared pages"),
+                              "\(path) has no packing control")
+                XCTAssertTrue(html.contains(".break-btn"),
+                              "\(path) lost the per-entry break styles")
+                XCTAssertTrue(html.contains("TuneSelector.packs()"),
+                              "\(path) does not read the packing choice back out")
+            }
+        }
+        try await app.test(.GET, "binder-constructor") { res async in
+            XCTAssertTrue(res.body.string.contains("pack: true"))
+            XCTAssertTrue(res.body.string.contains("break: before"))
+        }
+        try await app.test(.GET, "binder-builder") { res async in
+            XCTAssertTrue(res.body.string.contains("spec.pack = true"))
+            XCTAssertTrue(res.body.string.contains("entry.break = 'before'"))
         }
     }
 

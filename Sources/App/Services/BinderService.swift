@@ -19,6 +19,14 @@ import Vapor
 /// section gets a generated title page (`TitlePageRenderer`) ahead of its first tune, and a
 /// section holding no tunes at all is a title page and nothing else (#46).
 ///
+/// A binder that asks to be **packed** (#48) is engraved a *run* at a time instead — a
+/// maximal stretch of consecutive tunes with nothing between them that owns a page anyway —
+/// and `TuneRunRenderer` hands the whole run to CeolKit as one document, so two short tunes
+/// in a row share a sheet. An entry saying `break: before` ends the run ahead of it, which
+/// is how one tune opts back out of sharing. Everything else is unchanged: the runs are
+/// numbered from the pages already collected, exactly as single tunes are, and a run that
+/// cannot be engraved as one document falls back to engraving its tunes one at a time.
+///
 /// Re-engraving rather than reusing the build's pages is what makes the page numbers
 /// right (#19). CeolKit outlines every glyph it draws, so a footer reading "1" is path
 /// geometry by the time a binder sees it and no downstream tool can rewrite it — which is
@@ -41,6 +49,7 @@ actor BinderService {
     private let titleRenderer = TitlePageRenderer()
     private let tocRenderer = TableOfContentsRenderer()
     private let tuneRenderer = TunePageRenderer()
+    private let runRenderer = TuneRunRenderer()
 
     init(musicWorkspacePath: String) {
         self.musicWorkspaceURL = URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
@@ -69,13 +78,13 @@ actor BinderService {
         }
 
         let spec = request.definition
-        logger.info("[BinderService] \(requestID): building '\(spec.name)' — branch '\(spec.branch)', \(spec.sections.count) section(s), \(spec.entries.count) entr(ies)")
+        logger.info("[BinderService] \(requestID): building '\(spec.name)' — branch '\(spec.branch)', \(spec.sections.count) section(s), \(spec.entries.count) entr(ies)\(spec.pack ? ", packed" : "")")
 
         let binderPages = try await pages(for: spec, label: requestID.uuidString, db: db, logger: logger)
         // Pages the binder generated — title pages, contents pages — are not a binder
         // on their own, so only the pages that came from a tune count towards having
         // something to bind.
-        let tunePageCount = binderPages.count { $0.slug != nil }
+        let tunePageCount = binderPages.count(where: \.isMusic)
 
         logger.info("[BinderService] \(requestID): collected \(binderPages.count) page(s) total, \(tunePageCount) of them tune pages")
         guard tunePageCount > 0 else {
@@ -103,8 +112,11 @@ actor BinderService {
 
     /// One page of an assembled binder, in the order it will appear.
     enum Page {
-        /// A tune page engraved for this binder, so its footer numbers from the binder.
-        case tune(slug: String, svg: String)
+        /// A page of music engraved for this binder, so its footer numbers from the
+        /// binder. `slugs` names the tunes that *start* on it: one for an unpacked
+        /// page, several where a packed run put two short tunes on one sheet, and
+        /// none where the page only carries the rest of the tune before it (#48).
+        case tune(slugs: [String], svg: String)
         /// A page the build produced, reused because the tune could not be re-engraved.
         /// Its footer numbers from 1 within its own tune.
         case prebuilt(slug: String, path: String)
@@ -123,13 +135,24 @@ actor BinderService {
             }
         }
 
-        /// The tune this page belongs to, or `nil` for a page the binder itself
-        /// generated — a title page, or a page of the contents.
-        var slug: String? {
+        /// The tunes that open on this page, in the order they appear down it.
+        /// Empty for a page the binder itself generated — a title page, or a page
+        /// of the contents — and for a page that only continues a packed run.
+        var slugs: [String] {
             switch self {
-            case .tune(let slug, _): slug
-            case .prebuilt(let slug, _): slug
-            case .titlePage, .contents: nil
+            case .tune(let slugs, _): slugs
+            case .prebuilt(let slug, _): [slug]
+            case .titlePage, .contents: []
+            }
+        }
+
+        /// Whether this page carries music at all, as opposed to something the
+        /// binder generated for itself. Not the same question as ``slugs``: a tune
+        /// running over three pages opens only the first of them.
+        var isMusic: Bool {
+            switch self {
+            case .tune, .prebuilt: true
+            case .titlePage, .contents: false
             }
         }
     }
@@ -185,7 +208,7 @@ actor BinderService {
     /// own.
     func pages(for spec: BinderSpec, label: String, db: Database, logger: Logger) async throws -> [Page] {
         let items = try await plan(for: spec, label: label, db: db, logger: logger)
-        return layOut(items, label: label, logger: logger)
+        return layOut(items, packing: spec.pack, label: label, logger: logger)
     }
 
     /// Resolves `spec` to what the binder will hold, without engraving any of it.
@@ -244,7 +267,7 @@ actor BinderService {
     /// them. Rendering them last, once every listed thing has a page, is what keeps the
     /// numbers a contents page prints and the numbers its own presence caused from
     /// chasing each other.
-    private func layOut(_ plan: [PlanItem], label: String, logger: Logger) -> [Page] {
+    private func layOut(_ plan: [PlanItem], packing: Bool, label: String, logger: Logger) -> [Page] {
         var pages: [Page] = []
         /// Plan index → the binder page that thing starts on. A thing that produced no
         /// page at all — a title that failed to render — is simply absent, and the
@@ -252,12 +275,17 @@ actor BinderService {
         var starts: [Int: Int] = [:]
         var reserved: [(slot: Int, count: Int, toc: TableOfContentsSpec, heading: String)] = []
 
-        for (index, item) in plan.enumerated() {
-            switch item {
+        // A while loop rather than a for-in, because a packed binder takes its tunes a
+        // *run* at a time: consecutive tunes are engraved as one document so that short
+        // ones share pages (#48), and only that render knows how many items it consumed.
+        var index = 0
+        while index < plan.count {
+            switch plan[index] {
             case .titlePage(let title, let section, _):
                 let before = pages.count
                 append(title, to: &pages, section: section, label: label, logger: logger)
                 if pages.count > before { starts[index] = before + 1 }
+                index += 1
 
             case .contents(let toc, let heading):
                 let count = tocRenderer.pageCount(forEntries: listing(plan, for: toc).count)
@@ -265,12 +293,21 @@ actor BinderService {
                 reserved.append((slot: pages.count, count: count, toc: toc, heading: heading))
                 pages.append(contentsOf: repeatElement(.contents(entries: [], svg: ""), count: count))
                 logger.debug("[BinderService] \(label): reserving \(count) page(s) from \(pages.count - count + 1) for '\(heading)'")
+                index += 1
 
-            case .tune(let resolution):
-                let engraved = engrave(resolution, firstPageNumber: pages.count + 1,
+            case .tune:
+                let length = Self.runLength(in: plan, from: index, packing: packing)
+                let run = plan[index ..< index + length].compactMap { item -> Resolution? in
+                    guard case .tune(let resolution) = item else { return nil }
+                    return resolution
+                }
+                let engraved = engrave(run, firstPageNumber: pages.count + 1,
                                        label: label, logger: logger)
-                if !engraved.isEmpty { starts[index] = pages.count + 1 }
-                pages.append(contentsOf: engraved)
+                for (offset, start) in engraved.starts.enumerated() {
+                    if let start { starts[index + offset] = pages.count + start + 1 }
+                }
+                pages.append(contentsOf: engraved.pages)
+                index += length
             }
         }
 
@@ -384,10 +421,10 @@ actor BinderService {
     ) async throws -> Assembly {
         let spec = binder.spec(branch: branch)
         let label = binder.output
-        logger.info("[BinderService] \(label): assembling '\(binder.name)' — branch '\(branch)', \(spec.sections.count) section(s), \(spec.entries.count) entr(ies)")
+        logger.info("[BinderService] \(label): assembling '\(binder.name)' — branch '\(branch)', \(spec.sections.count) section(s), \(spec.entries.count) entr(ies)\(spec.pack ? ", packed" : "")")
 
         let binderPages = try await pages(for: spec, label: label, db: db, logger: logger)
-        let resolved = Set(binderPages.compactMap(\.slug))
+        let resolved = Set(binderPages.flatMap(\.slugs))
         guard resolved.count > 0 else {
             throw Abort(.unprocessableEntity,
                         reason: "no tune in '\(binder.name)' resolved to any pages")
@@ -427,6 +464,9 @@ actor BinderService {
     /// One entry, and what its pages can be engraved from.
     private struct Resolution {
         let slug: String
+        /// Whether the entry asked for this tune to open a page of its own (#48).
+        /// Nothing to honour in a binder that does not pack, where it always does.
+        let breaksBefore: Bool
         /// The tune's title, or its slug where the ABC gave none: what a table of
         /// contents names it as (#47).
         let displayName: String
@@ -510,12 +550,108 @@ actor BinderService {
                 continue
             }
             logger.debug("[BinderService] \(label): resolved \(paths.count) page(s) for '\(entry.tuneSlug)' / '\(part.name)'")
-            return Resolution(slug: entry.tuneSlug, displayName: displayName, partName: part.name,
+            return Resolution(slug: entry.tuneSlug, breaksBefore: entry.breaksBefore,
+                              displayName: displayName, partName: part.name,
                               abcURL: abcURL, prebuiltPaths: paths)
         }
 
         logger.warning("[BinderService] \(label): no part of '\(entry.tuneSlug)' has any pages — skipping")
         return nil
+    }
+
+    /// How many consecutive plan items the run starting at `index` holds.
+    ///
+    /// One, unless the binder packs — an unpacked binder is a binder of one-tune runs,
+    /// which is exactly the one-tune-per-page assembly every binder had before #48.
+    ///
+    /// A run stops at anything that is not a tune, because a title page and a table of
+    /// contents each own a page anyway and so cost nothing as a boundary; at a tune whose
+    /// entry asked to open a page of its own (`break: before`); and at a tune with no ABC
+    /// on record, whose pages come from the build already committed to whole sheets and
+    /// cannot be packed into anything.
+    private static func runLength(in plan: [PlanItem], from index: Int, packing: Bool) -> Int {
+        guard packing, case .tune(let first) = plan[index], first.abcURL != nil else { return 1 }
+        var length = 1
+        while index + length < plan.count,
+              case .tune(let next) = plan[index + length],
+              !next.breaksBefore, next.abcURL != nil {
+            length += 1
+        }
+        return length
+    }
+
+    /// The pages for one run, engraved so the first of them prints `firstPageNumber`.
+    ///
+    /// Returns the pages and, per resolution, the offset within them of the page that
+    /// tune opens on — or `nil` where it produced no pages at all. The offsets are what
+    /// a table of contents is numbered from, and under packing they are the only record
+    /// of where a tune landed: two tunes sharing a sheet share an offset.
+    ///
+    /// A run of more than one tune is engraved as one document. If that fails — for any
+    /// of the reasons `TuneRunRenderer.Failure` names, or anything reading the sources
+    /// threw — the run falls back to engraving its tunes one at a time, which is a
+    /// thicker binder and not a wrong one.
+    private func engrave(
+        _ resolutions: [Resolution],
+        firstPageNumber: Int,
+        label: String,
+        logger: Logger
+    ) -> (pages: [Page], starts: [Int?]) {
+        if resolutions.count > 1,
+           let packed = pack(resolutions, firstPageNumber: firstPageNumber,
+                             label: label, logger: logger) {
+            return packed
+        }
+        var pages: [Page] = []
+        var starts: [Int?] = []
+        for resolution in resolutions {
+            let engraved = engrave(resolution, firstPageNumber: firstPageNumber + pages.count,
+                                   label: label, logger: logger)
+            starts.append(engraved.isEmpty ? nil : pages.count)
+            pages.append(contentsOf: engraved)
+        }
+        return (pages, starts)
+    }
+
+    /// Engraves a run as one packed document, or `nil` where it could not be.
+    ///
+    /// Every resolution in a run has an ABC source — `runLength(in:from:packing:)` will
+    /// not put one without into a run of more than one — so a run that gets here and has
+    /// none is a programming error rather than a binder's problem, and it declines.
+    private func pack(
+        _ resolutions: [Resolution],
+        firstPageNumber: Int,
+        label: String,
+        logger: Logger
+    ) -> (pages: [Page], starts: [Int?])? {
+        let sources = resolutions.compactMap { resolution in
+            resolution.abcURL.map { TuneRunRenderer.Source(slug: resolution.slug, url: $0) }
+        }
+        let named = resolutions.map(\.slug).joined(separator: ", ")
+        guard sources.count == resolutions.count else {
+            logger.error("[BinderService] \(label): a run of \(named) reached packing without an ABC source for every tune — engraving them one to a page instead")
+            return nil
+        }
+
+        do {
+            let rendering = try runRenderer.render(sources, firstPageNumber: firstPageNumber)
+            // Which tunes open which page, so a sheet two short tunes share names both.
+            var opening: [Int: [String]] = [:]
+            for (index, start) in rendering.starts.enumerated() {
+                opening[start, default: []].append(resolutions[index].slug)
+            }
+            if !rendering.printsPageNumbers {
+                logger.warning("[BinderService] \(label): one of \(named) asks for a footer that names neither $P nor ${pagenumber}, so some of these \(rendering.pages.count) page(s) print no page number — they are numbered from \(firstPageNumber), they just do not say so")
+            }
+            logger.debug("[BinderService] \(label): packed \(resolutions.count) tune(s) (\(named)) onto \(rendering.pages.count) page(s) from page \(firstPageNumber)")
+            return (pages: rendering.pages.enumerated().map {
+                        .tune(slugs: opening[$0.offset] ?? [], svg: $0.element)
+                    },
+                    starts: rendering.starts.map(Optional.some))
+        } catch {
+            logger.error("[BinderService] \(label): packing \(resolutions.count) tune(s) (\(named)) failed — engraving them one to a page instead: \(error)")
+            return nil
+        }
     }
 
     /// The pages for one resolved part, engraved so the first prints `firstPageNumber`.
@@ -547,7 +683,10 @@ actor BinderService {
                 logger.warning("[BinderService] \(label): '\(resolution.slug)' asks for a footer that names neither $P nor ${pagenumber}, so its \(rendering.pages.count) page(s) print no page number — they are numbered from \(firstPageNumber), they just do not say so")
             }
             logger.debug("[BinderService] \(label): engraved \(rendering.pages.count) page(s) of '\(resolution.slug)' / '\(resolution.partName)' from page \(firstPageNumber)")
-            return rendering.pages.map { .tune(slug: resolution.slug, svg: $0) }
+            // Only the first page opens the tune; the rest carry the rest of it.
+            return rendering.pages.enumerated().map {
+                .tune(slugs: $0.offset == 0 ? [resolution.slug] : [], svg: $0.element)
+            }
         } catch {
             logger.error("[BinderService] \(label): re-engraving '\(resolution.slug)' from \(abcURL.path) failed — reusing the build's \(fallback.count) page(s), whose footers number from 1: \(error)")
             return fallback

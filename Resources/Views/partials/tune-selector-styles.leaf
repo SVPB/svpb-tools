@@ -47,6 +47,11 @@
   .btn { padding: 0.5rem 1.2rem; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
   .btn-primary { background: #1a1a2e; color: #fff; }
   .btn-primary:hover { background: #2a2a4e; }
+  /* Packing (#48): one binder-wide choice, and a per-tune opt-out on each row. */
+  .pack-option { display: flex; align-items: center; gap: 0.4rem; font-weight: 400; font-size: 0.82rem; color: #444; margin: 0.6rem 0 0; cursor: pointer; }
+  .pack-option input { margin: 0; }
+  .break-btn { background: none!important; border: 1px solid transparent!important; color: #aaa!important; cursor: pointer; font-size: 0.9rem!important; line-height: 1; padding: 1px 5px!important; }
+  .break-btn[aria-pressed="true"] { color: #3730a3!important; border-color: #a5b4fc!important; background: #eef2ff!important; }
   .add-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .btn-add-section { margin-top: 0.5rem; background: #fff; color: #3730a3; border: 1px dashed #a5b4fc; font-size: 0.85rem; }
   .btn-add-section:hover { background: #eef2ff; }

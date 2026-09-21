@@ -136,8 +136,11 @@ async function generateYAML() {
     'binders:',
     `  - name: ${q(name)}`,
     `    output: ${q(output)}`,
-    '    sections:',
   ];
+  // `pack:` is written only where it is asked for, so a file generated for a
+  // binder that does not pack reads exactly as one generated before #48 did.
+  if (TuneSelector.packs()) lines.push('    pack: true');
+  lines.push('    sections:');
   sections.forEach(section => {
     // One line stays a bare string, the shape every binders.yaml so far is
     // written in; several become the list that engraves as a stacked block.
@@ -157,7 +160,11 @@ async function generateYAML() {
     // A title page has no entries, and an empty `entries:` key would be a null.
     if (section.entries.length > 0) {
       lines.push('        entries:');
-      section.entries.forEach(entry => lines.push(`          - tune: ${q(entry.tuneSlug)}`));
+      section.entries.forEach(entry => {
+        lines.push(`          - tune: ${q(entry.tuneSlug)}`);
+        // Only meaningful in a packed binder, so only written in one.
+        if (TuneSelector.packs() && entry.pageBreak) lines.push('            break: before');
+      });
     }
   });
 

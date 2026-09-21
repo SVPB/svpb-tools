@@ -8,6 +8,13 @@
 </div>
 <p id="empty-msg" style="color:#888; font-size:0.88rem; margin:0 0 0.5rem;">No tunes selected yet.</p>
 <ul class="binder-entries" id="binder-entries"></ul>
+<!-- Binder-wide: consecutive short tunes may share a sheet instead of each taking
+     one of its own. Off by default, because a tune starting half way down a page
+     cannot be pulled out and handed to one piper. -->
+<label class="pack-option" title="Two short tunes in a row share a sheet. A tune that must start fresh says so with its own control.">
+  <input type="checkbox" id="binder-pack">
+  Pack short tunes onto shared pages
+</label>
 <!-- Shown only on pages that turn sections on. A title page is a section with
      no tunes under it, so those two controls add the same thing and differ in
      what they leave the catalogue aimed at; a table of contents is a third kind

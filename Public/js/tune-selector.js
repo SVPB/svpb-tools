@@ -33,6 +33,13 @@
  * each carrying the page it starts on. It holds no tunes, and its title is the
  * heading printed over the listing rather than a title page of its own.
  *
+ * A binder may ask for its tunes to be packed (#48): consecutive short tunes
+ * then share a sheet instead of each taking one of its own. That is one choice
+ * for the whole binder, and each entry may opt back out of it — the tune that
+ * has to start a page of its own carries `pageBreak: true`, which a page writes
+ * as `break: before`. The per-entry control only appears while packing is on,
+ * because with one tune to a page there is nothing to opt out of.
+ *
  * A section can be folded down to its header row so a tall binder stays
  * navigable. Folding is display only: it never touches the selection, the
  * ordering, or anything a page generates from them.
@@ -45,7 +52,7 @@ const TuneSelector = (() => {
   // ── State ────────────────────────────────────────────────────────────────
   // `sections` is never reassigned: callers hold on to the array returned by
   // `TuneSelector.sections()`, so resetting has to mutate it in place.
-  const sections = [];     // [{title: string, toc: boolean, entries: [{tuneSlug, title, parts: [string]}]}]
+  const sections = [];     // [{title: string, toc: boolean, entries: [{tuneSlug, title, parts: [string], pageBreak: boolean}]}]
   let active = 0;          // index of the section the catalogue adds tunes to
   let sectionsEnabled = false;
   let untitledSections = true;   // a blank section title is allowed, and means no title page
@@ -81,6 +88,8 @@ const TuneSelector = (() => {
   const newSection = (toc = false) => ({ title: '', entries: [], toc });
   /** A section that is the binder's table of contents (#47). */
   const isContents = section => sectionsEnabled && !!section.toc;
+  /** Whether the binder asks for consecutive short tunes to share pages (#48). */
+  const packs = () => el('binder-pack').checked;
   /**
    * A section with a title and no tunes is a title page and nothing else.
    *
@@ -304,6 +313,19 @@ const TuneSelector = (() => {
       li.appendChild(sel);
     }
 
+    // The one thing an entry may say about its own page: that it must have one
+    // (#48). Only while packing is on — with a tune to a page it says nothing.
+    if (packs()) {
+      const breaks = !!entry.pageBreak;
+      const toggle = button('⤓', breaks
+        ? 'Starts a new page — click to let it share'
+        : 'Shares a page where it fits — click to start it on a new page',
+        'break-btn', () => { entry.pageBreak = !entry.pageBreak; renderBinder(); });
+      toggle.setAttribute('aria-pressed', String(breaks));
+      toggle.setAttribute('aria-label', `Start ${entry.title} on a new page`);
+      li.appendChild(toggle);
+    }
+
     // Remove
     li.appendChild(button('✕', 'Remove', '', () => {
       section.entries.splice(eIdx, 1);
@@ -385,7 +407,9 @@ const TuneSelector = (() => {
         sections.splice(active + 1, 0, newSection());
         active += 1;
       }
-      sections[active].entries.push({ tuneSlug: slug, title, parts: detail.parts.map(p => p.name) });
+      sections[active].entries.push({
+        tuneSlug: slug, title, parts: detail.parts.map(p => p.name), pageBreak: false,
+      });
       // Show the section the tune just went into, rather than swallowing it.
       setFolded(sections[active], false);
       renderBinder();
@@ -509,8 +533,8 @@ const TuneSelector = (() => {
 
   /**
    * Replaces the selection with `saved`, a list of
-   * `{title, toc?, entries: [{tuneSlug, parts?}]}` in binder order, where `title` is a
-   * string or a list of lines. Tunes missing from the current branch's catalogue
+   * `{title, toc?, entries: [{tuneSlug, parts?, pageBreak?}]}` in binder order, where
+   * `title` is a string or a list of lines. Tunes missing from the current branch's catalogue
    * are dropped, but a section that keeps none of them is kept when it has a
    * title: it is a title page, not an empty section (#46). The branch must
    * already be selected and its tunes loaded.
@@ -535,6 +559,7 @@ const TuneSelector = (() => {
           tuneSlug: e.tuneSlug,
           title: tuneLabel(tune),
           parts: detail.parts.map(p => p.name),
+          pageBreak: !!e.pageBreak,
         });
       }
       if (sectionsEnabled || sections.length === 0) sections.push(section);
@@ -547,6 +572,7 @@ const TuneSelector = (() => {
 
   function clear() {
     resetSections();
+    el('binder-pack').checked = false;
     onClear();
     setStatus('');
     renderBinder();
@@ -588,6 +614,9 @@ const TuneSelector = (() => {
     el('add-section').addEventListener('click', addSection);
     el('add-title-page').addEventListener('click', addTitlePage);
     el('add-toc').addEventListener('click', addTableOfContents);
+    // Turning packing on and off changes what each entry row offers, so the list
+    // is redrawn; nothing about the selection itself moves.
+    el('binder-pack').addEventListener('change', renderBinder);
     el('fold-all-sections').addEventListener('click', () => {
       // Whatever the button offers, it does to every section at once.
       const shut = sections.some(s => !folded.has(s));
@@ -644,6 +673,10 @@ const TuneSelector = (() => {
     titleLines,
     /** Whether a section is the binder's table of contents rather than tunes (#47). */
     isContents,
+    /** Whether the binder asks for short tunes to share pages (#48). */
+    packs,
+    /** Sets that choice — for a page restoring a shared binder. */
+    setPacks: on => { el('binder-pack').checked = !!on; renderBinder(); },
     /** Every selected entry in binder order, across sections (a fresh array). */
     entries: allEntries,
     /** The catalogue for the currently selected branch. */
