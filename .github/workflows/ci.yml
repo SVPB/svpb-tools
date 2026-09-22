@@ -21,10 +21,16 @@ jobs:
       # pipeline tests fail without it. No font packages are needed: CeolKit
       # writes glyph geometry into every SVG (TextRendering.outlines), so
       # rsvg-convert never consults fontconfig for a face.
+      #
+      # qpdf is for the tests, not the product: cairo writes PDF 1.5 with its
+      # objects in compressed streams, so a test asserting a page's media box
+      # has nothing to read until qpdf expands them (Tests/AppTests/PageSizes.swift).
+      # Without it those assertions skip, which on this backend is the platform
+      # that ships going unchecked.
       - name: Install runtime dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends librsvg2-bin
+          apt-get install -y --no-install-recommends librsvg2-bin qpdf
 
       - name: Build
         run: swift build --build-tests

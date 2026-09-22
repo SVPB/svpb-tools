@@ -25,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the build tree goes in a Docker volume rather than `.build`, whose Linux module cache is
   stamped with the absolute path it was built at — mount the repository anywhere but `/build`
   and a shared `.build` fails with `missing required module 'SwiftShims'`.
+- The image and CI also install `qpdf`, for the tests rather than for the product. cairo
+  writes PDF 1.5 with its objects in compressed streams, so a test asserting a converted
+  page's media box had nothing to read on the very backend that ships; `qpdf` expands them
+  and the assertion runs on both. Without the tool the check skips rather than fails.
 - `.dockerignore` keeps `.build` — seven gigabytes of it — out of the build context, which
   every image build here was sending.
 

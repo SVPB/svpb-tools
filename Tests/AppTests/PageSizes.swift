@@ -18,8 +18,7 @@ struct PDFPageSize: Equatable, CustomStringConvertible {
 /// The page an SVG document declares for itself, read off its root `<svg>`.
 ///
 /// This is the size `ConversionOptions.pageSize == nil` binds the page at, so asserting on
-/// it says what the PDF will be without needing to read the PDF — which matters because
-/// the PDF can only be read on one of the two backends (see `pdfPageSizes`).
+/// it says what the PDF will be without opening the PDF.
 ///
 /// Only `pt` is understood, which is deliberate: a unitless length is a CSS pixel, and a
 /// page that states its size in pixels is the #62 bug, not a case to be lenient about.
@@ -29,18 +28,49 @@ func declaredPageSize(ofSVG svg: String) -> PDFPageSize? {
     return PDFPageSize(width: width, height: height)
 }
 
-/// The media box of every page of `pdf`, in order, or `[]` where the file does not say in
-/// plain bytes.
+/// The media box of every page of `pdf`, in order.
 ///
-/// CoreGraphics writes one uncompressed `/Type /Page` dictionary per page, each carrying
-/// that page's `/MediaBox`, which is what this reads. Only page dictionaries count:
-/// CoreGraphics also records a document-level default media box, which is the size of no
-/// particular page and would have a one-page landscape PDF report a second, portrait one.
+/// Both of SVGPDFKit's backends write one `/Type /Page` dictionary per page carrying that
+/// page's `/MediaBox`, but only CoreGraphics writes them where they can be read: librsvg's
+/// cairo backend writes PDF 1.5, with its objects inside compressed `/ObjStm` streams. So a
+/// file that yields nothing on the first pass is handed to `qpdf` and read again.
 ///
-/// librsvg's cairo backend — SVGPDFKit's Linux path — writes PDF 1.5 with its objects
-/// inside compressed `/ObjStm` streams, so there is nothing to match and this comes back
-/// empty rather than wrong. `pdfPageSizesOrSkip` is the form to use in a test.
+/// Only page dictionaries count. CoreGraphics also records a document-level default media
+/// box, which is the size of no particular page and would have a one-page landscape PDF
+/// report a second, portrait one.
+///
+/// Comes back empty where the objects are compressed and `qpdf` is not installed;
+/// `pdfPageSizesOrSkip` is the form to use in a test.
 func pdfPageSizes(_ pdf: Data) -> [PDFPageSize] {
+    let direct = pageSizes(inPDFBytes: pdf)
+    if !direct.isEmpty { return direct }
+    guard let uncompressed = uncompressedWithQPDF(pdf) else { return [] }
+    return pageSizes(inPDFBytes: uncompressed)
+}
+
+/// `pdfPageSizes`, skipping the test where the page dictionaries cannot be read at all.
+///
+/// That is a machine with compressed-object PDFs and no `qpdf`: CI and
+/// `Scripts/linux-tests.sh` both install it, so this skips only where someone runs the
+/// suite by hand without it. What holds with or without the tool is the page each document
+/// declares (`declaredPageSize(ofSVG:)`) and the absence of a `pageSizeMismatch`
+/// diagnostic — and since a `nil` `pageSize` makes the media box the declared page, those
+/// cover the same contract.
+func pdfPageSizesOrSkip(_ pdf: Data) throws -> [PDFPageSize] {
+    let sizes = pdfPageSizes(pdf)
+    try XCTSkipIf(sizes.isEmpty, """
+        This PDF keeps its page dictionaries in compressed object streams — what librsvg's \
+        cairo backend writes — and qpdf, which would decompress them, is not on PATH. \
+        Install it, or run the suite through Scripts/linux-tests.sh.
+        """)
+    return sizes
+}
+
+// MARK: - Private
+
+/// The media boxes written in plain bytes, which is all of them once the objects are not
+/// in compressed streams.
+private func pageSizes(inPDFBytes pdf: Data) -> [PDFPageSize] {
     // Latin-1 maps every byte to exactly one scalar and never fails, so the ASCII object
     // dictionaries survive the binary content streams between them.
     guard let text = String(data: pdf, encoding: .isoLatin1) else { return [] }
@@ -57,19 +87,53 @@ func pdfPageSizes(_ pdf: Data) -> [PDFPageSize] {
     }
 }
 
-/// `pdfPageSizes`, skipping the test where the PDF keeps its page dictionaries compressed.
-///
-/// That is the Linux rsvg-convert path, so an assertion made through this one is checked on
-/// Apple and skipped on Linux. What holds on both is the page each document *declares*
-/// (`declaredPageSize(ofSVG:)`) and the absence of a `pageSizeMismatch` diagnostic — and
-/// since a `nil` `pageSize` makes the media box the declared page, those cover the same
-/// contract on the backend this cannot read.
-func pdfPageSizesOrSkip(_ pdf: Data) throws -> [PDFPageSize] {
-    let sizes = pdfPageSizes(pdf)
-    try XCTSkipIf(sizes.isEmpty, """
-        This PDF keeps its page dictionaries in compressed object streams, which is what \
-        librsvg's cairo backend writes, so its media boxes cannot be read from the bytes. \
-        The declared page sizes and the conversion diagnostics are asserted on both backends.
-        """)
-    return sizes
+/// `pdf` with its object streams expanded and its streams uncompressed, or `nil` where
+/// `qpdf` is not installed or could not read the file.
+private func uncompressedWithQPDF(_ pdf: Data) -> Data? {
+    guard let qpdf = executable(named: "qpdf") else { return nil }
+
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("page-sizes-\(UUID().uuidString)", isDirectory: true)
+    guard (try? FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)) != nil
+    else { return nil }
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let input = directory.appendingPathComponent("in.pdf")
+    let output = directory.appendingPathComponent("out.pdf")
+    guard (try? pdf.write(to: input)) != nil else { return nil }
+
+    let process = Process()
+    process.executableURL = qpdf
+    process.arguments = ["--object-streams=disable", "--stream-data=uncompress",
+                         input.path, output.path]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+
+    // Waited on through a semaphore rather than `waitUntilExit()`, which polls a RunLoop
+    // whose deadlines are not enforced in a container on Docker Desktop — the hang
+    // `Scripts/linux-tests.sh` preloads a shim to avoid. A test helper should not need
+    // the shim to be in place to finish.
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    guard (try? process.run()) != nil else { return nil }
+    guard finished.wait(timeout: .now() + 60) == .success else {
+        process.terminate()
+        return nil
+    }
+
+    // qpdf exits 3 on warnings it recovered from, and still writes the file.
+    guard process.terminationStatus == 0 || process.terminationStatus == 3 else { return nil }
+    return try? Data(contentsOf: output)
+}
+
+/// The first `name` on `PATH`, or `nil` where there is none.
+private func executable(named name: String) -> URL? {
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/local/bin"
+    for directory in path.split(separator: ":") {
+        let candidate = URL(fileURLWithPath: String(directory), isDirectory: true)
+            .appendingPathComponent(name)
+        if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+    }
+    return nil
 }

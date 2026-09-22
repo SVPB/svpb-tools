@@ -16,8 +16,11 @@
 #     Scripts/linux-tests.sh --filter BinderTests   # arguments reach swift test
 FROM swift:6.3-noble AS test
 
+# qpdf is for the tests rather than the product: cairo writes PDF 1.5 with its
+# objects in compressed streams, so a test asserting a page's media box has
+# nothing to read until qpdf expands them (Tests/AppTests/PageSizes.swift).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends librsvg2-bin \
+ && apt-get install -y --no-install-recommends librsvg2-bin qpdf \
  && rm -rf /var/lib/apt/lists/*
 
 # The repository is mounted here, read-write because SwiftPM wants to update

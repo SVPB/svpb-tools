@@ -47,8 +47,12 @@ Scripts/linux-tests.sh --filter EngravedPageSize     # one suite
 The build tree lives in the `tng_linux_build` volume, so runs are incremental;
 `docker volume rm tng_linux_build` starts clean.
 
-Reading a converted PDF's page geometry works on one backend only: CoreGraphics writes
+Reading a converted PDF's page geometry differs by backend: CoreGraphics writes
 uncompressed page dictionaries, while librsvg's cairo backend writes PDF 1.5 with its
-objects inside compressed `/ObjStm` streams. `Tests/AppTests/PageSizes.swift` is where that
-lives — assert the page a document *declares* and the converter's diagnostics, which hold
-on both, and use `pdfPageSizesOrSkip` for the end-to-end media-box check.
+objects inside compressed `/ObjStm` streams. `Tests/AppTests/PageSizes.swift` handles both
+— it reads the bytes directly where it can, and runs `qpdf --object-streams=disable
+--stream-data=uncompress` first where it cannot. That is why the image and CI install
+`qpdf`; without it `pdfPageSizesOrSkip` skips rather than failing, so a hand-run suite on a
+machine without the tool still passes. What needs no tool at all, and is the better thing
+to assert, is the page a document *declares* and the converter's diagnostics: with
+`pageSize` nil the media box is the declared page.
