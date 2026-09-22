@@ -1,5 +1,6 @@
 import CeolKitSVGRenderer
 import Foundation
+import Logging
 import SVGPDFKit
 import XCTest
 @testable import App
@@ -241,9 +242,8 @@ final class TableOfContentsRendererTests: XCTestCase {
             entry("G4 Tunes", page: 2),
             entry("Scotland the Brave", level: 1, page: 3),
         ])
-        var options = ConversionOptions()
-        options.injectPageNumbers = false
-        let pdf = try SVGPDFConverter(options: options).convert(sources: pages.map { .string($0.svg) })
+        let converter = SVGPDFConverter(options: .engravedPages(logger: Logger(label: "test")))
+        let pdf = try converter.makePDF(sources: pages.map { .string($0.svg) }).pdfData
         XCTAssertTrue(pdf.starts(with: Array("%PDF".utf8)))
         XCTAssertGreaterThan(pdf.count, 1000)
     }

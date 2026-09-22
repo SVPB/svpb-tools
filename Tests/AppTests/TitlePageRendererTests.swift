@@ -1,5 +1,6 @@
 import CeolKitSVGRenderer
 import Foundation
+import Logging
 import SVGPDFKit
 import XCTest
 @testable import App
@@ -191,7 +192,8 @@ final class TitlePageRendererTests: XCTestCase {
     // MARK: - Output
 
     func testTitlePageConvertsToPDF() throws {
-        let pdf = try SVGPDFConverter().convert(source: .string(renderer.render(title: ["Massed Bands", "2027"])))
+        let pdf = try SVGPDFConverter(options: .engravedPages(logger: Logger(label: "test")))
+            .makePDF(source: .string(renderer.render(title: ["Massed Bands", "2027"]))).pdfData
         XCTAssertTrue(pdf.starts(with: Data("%PDF".utf8)))
     }
 
@@ -201,7 +203,8 @@ final class TitlePageRendererTests: XCTestCase {
         #if canImport(CoreGraphics)
         throw XCTSkip("Not applicable on Apple platforms; CoreGraphics outlines every glyph regardless.")
         #else
-        let pdf = try SVGPDFConverter().convert(source: .string(renderer.render(title: ["Massed Bands", "2027"])))
+        let pdf = try SVGPDFConverter(options: .engravedPages(logger: Logger(label: "test")))
+            .makePDF(source: .string(renderer.render(title: ["Massed Bands", "2027"]))).pdfData
         let text = String(data: pdf, encoding: .isoLatin1) ?? ""
         let fonts = Set(text.matches(of: /\/BaseFont\s*\/(?:[A-Z]{6}\+)?([A-Za-z0-9\-]+)/).map { String($0.1) })
         XCTAssertTrue(fonts.isEmpty, "Title page PDF embeds fonts: \(fonts.sorted())")

@@ -1,0 +1,13 @@
+# The build context is only ever Package.swift, Sources, Tests, Resources,
+# Public and Scripts (see Dockerfile, dev.dockerfile, test.dockerfile). `.build`
+# alone is several gigabytes, and sending it makes every image build crawl.
+.build/
+.git/
+.swiftpm/
+.vscode/
+.claude/
+data/
+state/
+*.sqlite
+.DS_Store
+.env.development

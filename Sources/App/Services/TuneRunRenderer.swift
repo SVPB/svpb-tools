@@ -105,8 +105,13 @@ struct TuneRunRenderer: Sendable {
         }
     }
 
-    /// Letter, to match the pages `BuildService` renders, the pages `TunePageRenderer`
-    /// engraves, and the `PageSize` that `SVGPDFConverter` lays each one onto.
+    /// Letter — the page a run is engraved on where its sources do not say otherwise, as in
+    /// `TunePageRenderer`.
+    ///
+    /// The run's own `%%landscape` handling above overrides it, per page, so one run can
+    /// produce pages of both orientations. Each goes into the PDF at the size it was
+    /// engraved (`ConversionOptions.engravedPages(logger:)`), so a packed run needs no
+    /// agreement about orientation between the tunes it packs (#62).
     private let config = SVGRenderConfig(pageSize: .letter)
 
     // MARK: - Rendering

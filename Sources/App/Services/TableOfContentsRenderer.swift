@@ -79,7 +79,9 @@ struct TableOfContentsRenderer: Sendable {
     /// The heading over a listing whose section declares none.
     static let defaultHeading = "Contents"
 
-    /// Letter, to match the tune pages `BuildService` renders.
+    /// Portrait letter, whatever the tunes it lists do. A binder carries mixed page sizes
+    /// because `%%landscape` is the tune's to set (#62); a contents page is prose and is set
+    /// the way a book's is.
     private let pageSize = PageSize.letter
 
     /// The face CeolKit sets tune titles in, so a contents page and a tune page
@@ -274,8 +276,11 @@ struct TableOfContentsRenderer: Sendable {
         let width = fmt(pageSize.width)
         let height = fmt(pageSize.height)
         return ([
+            // Points, for the reason `TitlePageRenderer` gives at the same line: an
+            // unqualified 612 is 612 CSS pixels, and the conversion takes each page from
+            // what its own SVG declares (#62).
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 \(width) \(height)\""
-                + " width=\"\(width)\" height=\"\(height)\">",
+                + " width=\"\(width)pt\" height=\"\(height)pt\">",
             "  <g class=\"table-of-contents\">",
         ] + body + [
             "  </g>",
