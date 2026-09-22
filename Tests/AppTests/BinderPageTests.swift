@@ -76,8 +76,11 @@ final class BinderPageTests: XCTestCase {
             }
         }
         try await app.test(.GET, "binder-constructor") { res async in
-            XCTAssertTrue(res.body.string.contains("pack: true"))
-            XCTAssertTrue(res.body.string.contains("break: before"))
+            // The file is written on the server now (#60), so what the page has
+            // to carry is the choice and the per-entry opt-out, in the shape the
+            // endpoint takes.
+            XCTAssertTrue(res.body.string.contains("pack: b.pack"))
+            XCTAssertTrue(res.body.string.contains("entry.break = 'before'"))
         }
         try await app.test(.GET, "binder-builder") { res async in
             XCTAssertTrue(res.body.string.contains("spec.pack = true"))
@@ -168,11 +171,13 @@ final class BinderPageTests: XCTestCase {
         }
     }
 
-    /// The constructor writes `toc: true`; the builder writes it into the spec
-    /// it posts and shares.
+    /// Both pages hand a contents section on; the builder writes the bare flag
+    /// its spec has always carried, and the constructor passes the declaration
+    /// through as it stands, so a `toc:` narrowed with `include:` survives a
+    /// round trip (#60).
     func testEachPageWritesAContentsInItsOwnShape() async throws {
         try await app.test(.GET, "binder-constructor") { res async in
-            XCTAssertTrue(res.body.string.contains("'      - toc: true'"),
+            XCTAssertTrue(res.body.string.contains("section.toc = s.toc"),
                           "the constructor cannot write a table of contents")
         }
         try await app.test(.GET, "binder-builder") { res async in
@@ -199,18 +204,75 @@ final class BinderPageTests: XCTestCase {
         }
     }
 
-    /// The constructor writes the `binders.yaml` shape, not the personal spec.
+    /// The constructor sends the `binders.yaml` shape, not the personal spec.
+    ///
+    /// The YAML itself is written on the server (#60) — so the page's job is to
+    /// map `tuneSlug` back to `tune` at the edge and post the result, and what
+    /// is asserted here is that mapping and the two endpoints it uses.
     func testConstructorEmitsBindersYAMLShape() async throws {
         try await app.test(.GET, "binder-constructor") { res async in
             let html = res.body.string
             XCTAssertTrue(html.contains("id=\"binder-output\""))
-            XCTAssertTrue(html.contains("'binders:'"))
-            XCTAssertTrue(html.contains("- tune: "))
+            XCTAssertTrue(html.contains("{ tune: e.tuneSlug }"))
             // A multi-line title is written as a YAML list, a one-line one as a string.
             XCTAssertTrue(html.contains("title.length > 1"), "the constructor cannot write a multi-line title")
             XCTAssertFalse(html.contains("tune_slug"))
-            XCTAssertFalse(html.contains("parts:`"), "the constructor must not emit parts")
+            XCTAssertTrue(html.contains("/binder-constructor/yaml"))
             XCTAssertTrue(html.contains("/binder-constructor/check"))
+            // String concatenation in the browser is what #60 removed; nothing
+            // in the test suite could execute it.
+            XCTAssertFalse(html.contains("'binders:'"), "the page is building the file by hand again")
+        }
+    }
+
+    /// The constructor holds the whole file, not one binder (#60): a picker over
+    /// every binder it declares, controls to add and remove one, and a Load
+    /// button that reads a pasted file back in.
+    func testConstructorHoldsTheWholeFile() async throws {
+        try await app.test(.GET, "binder-constructor") { res async in
+            let html = res.body.string
+            for id in ["binder-picker", "add-binder", "remove-binder"] {
+                XCTAssertTrue(html.contains("id=\"\(id)\""), "missing #\(id)")
+            }
+            XCTAssertTrue(html.contains("loadYAML()"), "the page cannot load a file back in")
+            XCTAssertTrue(html.contains("function fileBinders()"),
+                          "the page does not send every binder it holds")
+            // The copy instruction is the largest hazard in the feature: a file
+            // appended to an existing one declares every binder twice.
+            XCTAssertTrue(html.contains("Copy it over"), "the page still says to append its output")
+            XCTAssertFalse(html.contains("at the end of that file"))
+        }
+        // The builder composes one binder and has none of this.
+        try await app.test(.GET, "binder-builder") { res async in
+            XCTAssertFalse(res.body.string.contains("id=\"binder-picker\""))
+        }
+    }
+
+    /// The two rules that differ between the pages (#60). The builder keeps the
+    /// behaviour it had: one tune once, and a tune this year lacks quietly dropped.
+    func testOnlyTheConstructorRepeatsTunesAndKeepsUnknownOnes() async throws {
+        try await app.test(.GET, "binder-constructor") { res async in
+            let html = res.body.string
+            XCTAssertTrue(html.contains("repeatableTunes: true"))
+            XCTAssertTrue(html.contains("keepUnknownTunes: true"))
+            XCTAssertTrue(html.contains(".missing-flag"), "an unresolved entry is not marked")
+        }
+        try await app.test(.GET, "binder-builder") { res async in
+            let html = res.body.string
+            XCTAssertFalse(html.contains("repeatableTunes"))
+            XCTAssertFalse(html.contains("keepUnknownTunes"))
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            let js = res.body.string
+            XCTAssertTrue(js.contains("function setSections(list)"),
+                          "a page holding several binders cannot switch between them")
+            XCTAssertTrue(js.contains("Added ×"), "the catalogue cannot say a tune is in twice")
+            XCTAssertTrue(js.contains("declaredParts"),
+                          "a declared parts list is not carried through the component")
+            // The trap: /tunes/:slug 404s on a slug the branch does not have, and
+            // one unresolved entry would abandon the whole load.
+            XCTAssertTrue(js.contains("const parts = tune ? (await getTuneDetail(e.tuneSlug)).parts.map(p => p.name) : [];"),
+                          "the component asks for the detail of a tune it knows is missing")
         }
     }
 

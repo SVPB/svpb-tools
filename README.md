@@ -30,8 +30,9 @@ and parts they need, and download a single PDF with page numbers specific to the
 A personalised binder lives on the server and on the member's own computer — it is never pushed
 to Box.
 
-The pipe major can use the binder constructor page to generate the YAML for an official band
-binder, which is then committed to `binders.yaml` in `svpb-music`.
+The pipe major can use the binder constructor page to write `binders.yaml` for the band's
+official binders, and to read an existing one back in and edit it; the result is committed to
+`binders.yaml` in `svpb-music`.
 
 ---
 
@@ -124,9 +125,22 @@ binders:
   otherwise sit awkwardly across a fold. Title pages and the table of contents own a page anyway,
   so they always start the tunes after them fresh — and a tune too tall to fit under the one
   before it opens its own page whatever the binder asked for.
+- A tune may appear in more than one binder, and in more than one section of the same binder —
+  Amazing Grace can sit in both "Massed Bands" and "Parade Tunes". It is engraved once per
+  entry, at its own page number each time.
 - The pipe major does not have to write this by hand: the binder constructor page
-  (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit, packing
-  included.
+  (`/binder-constructor`) builds it from the tune catalogue for copy-and-commit, packing
+  included. Paste an existing file into its text box and press **Load** to get it back as an
+  editable selection — every binder the file declares, with a picker to move between them.
+
+  What comes out is the **whole file**, so it replaces `binders.yaml` rather than being added
+  to the end of it. Two things about it differ from a hand-written file, and neither changes
+  what it says: the file is regenerated rather than edited, so **comments are lost**, and it is
+  written in the emitter's style — block lists sit level with the key above them, and a value
+  is quoted only where a bare one would read back as something else (`"yes"`, `"1990"`). An
+  entry naming a tune this year's catalogue does not have is kept, marked in the list, and
+  written back out unchanged: on the pipe major's own file that is a typo to fix or a tune not
+  pushed yet, and either way it is not the page's to drop.
 
 ---
 
