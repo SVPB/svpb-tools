@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### The binder constructor reads `binders.yaml` back in (#60)
+
+- The page was write-only: it generated YAML and could check pasted YAML, but threw the decoded
+  structure away. Editing last season's binder meant retyping it from the catalogue or
+  hand-editing the file — the thing the page exists to avoid. **Load** now takes a pasted
+  `binders.yaml` and gives it back as an editable selection.
+- The page holds the **whole file**, not one binder: `binders.yaml` declares every official
+  binder for the year, so there is a picker over them, controls to add and remove one, and
+  `name`, `output` and `pack` belong to the binder in the editor. Generate writes the complete
+  file, and the copy instruction changed accordingly — it **replaces** `binders.yaml` rather
+  than being appended to it. Appending it would declare every binder twice; that fails loudly,
+  on the duplicate `output`, but the page no longer invites it.
+- Three things a round trip must not quietly lose, and now does not:
+  - **A tune this year's catalogue does not have.** Kept as a marked row and written back out
+    unchanged, rather than dropped. The personal binder builder still drops it: a stale shared
+    URL should quietly lose a tune the year lacks, and the pipe major's source file must not.
+  - **The same tune in two sections.** `binders.yaml` may legitimately put Amazing Grace in
+    both "Massed Bands" and "Parade Tunes", and the constructor could not author that at all.
+    It can now: the catalogue row reads `Added ×2` and names the sections. The builder still
+    de-duplicates (#24).
+  - **`parts:` on an entry.** Inert until per-part rendering lands (#20), and carried through
+    the page untouched instead of being discarded.
+- **The file is written on the server.** `BinderDefinitionLoader.encode` is the inverse of the
+  decoder the build uses, so `decode(encode(decode(yaml)))` is something a Swift test can
+  assert; generation used to be string concatenation in the page, where nothing in the test
+  suite could reach it. `POST /binder-constructor/yaml` encodes a set of binders, then decodes
+  and checks its own output — the verdict is about the bytes handed over, not about what the
+  page believes it sent. `POST /binder-constructor/check` now returns the decoded file as well
+  as the verdict, so one call serves both Check and Load.
+- A generated file looks different from a hand-written one, and says the same thing. Comments
+  and spacing are not preserved, because the file is regenerated rather than edited; block
+  lists sit level with the key above them; and a scalar is quoted only where a bare one would
+  read back as something else, so a slug like `yes` or `1990` keeps its quotes and the rest
+  lose them. A golden-file test pins that style.
+
 ## [0.4.0] - 2026-09-22
 
 ### Added

@@ -66,6 +66,45 @@ enum BinderDefinitionLoader {
         return file
     }
 
+    // MARK: - Writing
+
+    /// Writes a `BindersFile` back out as the text of a `binders.yaml`.
+    ///
+    /// The inverse of ``decode(_:)``, so the binder constructor can hand the
+    /// pipe major a file rather than build one by string concatenation in the
+    /// browser, and so `decode(encode(decode(yaml)))` is something a test can
+    /// assert (#60).
+    ///
+    /// Comments and the original spacing are not preserved: the file is
+    /// regenerated from the decoded structure, not edited in place.
+    ///
+    /// The emitter options are the difference between a file a pipe major can
+    /// read and one they cannot:
+    /// - `sortKeys` stays off, so the `encode(to:)` order on each type is the
+    ///   key order in the file;
+    /// - `width: -1` stops a long binder or section title being folded across
+    ///   lines;
+    /// - `allowUnicode` keeps "Sìne Bhàn" as itself instead of `\xEC` escapes.
+    ///
+    /// Quoting is left to Yams, whose resolver already knows that `yes`, `no`,
+    /// `on`, `off` and `1990` would read back as a bool or an int and quotes
+    /// those by itself. So a slug like `yes` stays a string without the
+    /// constructor's old quote-everything rule, and the file carries far fewer
+    /// quotes than the page used to write.
+    static func encode(_ file: BindersFile) throws -> String {
+        let encoder = YAMLEncoder()
+        encoder.options.sortKeys = false
+        encoder.options.width = -1
+        encoder.options.allowUnicode = true
+        do {
+            return try encoder.encode(file)
+        } catch {
+            throw LoadError(description: "could not write \(fileName): \(error)")
+        }
+    }
+
+    // MARK: - Checking
+
     /// Everything wrong with a structurally valid file that would stop its binders
     /// being built: blank names, output filenames that are not a bare `.pdf`
     /// filename, outputs shared by two binders, sections that would print nothing,
