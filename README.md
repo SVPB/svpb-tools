@@ -549,9 +549,12 @@ It waits for the publish workflow for the tag's commit to succeed — pulling a 
 waits for the healthcheck, prints the commit now running, and prunes the superseded image. It exits
 non-zero if any of that fails. `Scripts/deploy.sh --no-wait` skips the build gate.
 
-To see what is running at any other time:
+To see what is running at any other time, look at the page footer or ask the server: images
+built by CI report their commit in `GET /health`, both as `commit` and appended to `version`
+(`0.4.0+a3a6f58`). The same sha is on the image itself:
 
 ```sh
+curl -fsS https://<your-domain>/health
 docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
   $(docker compose ps -q tng)
 ```

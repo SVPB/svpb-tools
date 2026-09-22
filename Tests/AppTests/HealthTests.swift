@@ -28,6 +28,7 @@ final class HealthTests: XCTestCase {
             let body = try res.content.decode(HealthResponse.self)
             XCTAssertEqual(body.status, .ok)
             XCTAssertEqual(body.version, AppVersion.current)
+            XCTAssertEqual(body.commit, AppVersion.commit)
             XCTAssertTrue(body.branches.isEmpty)
             XCTAssertNil(body.lastBuild)
         }
@@ -76,5 +77,35 @@ final class HealthTests: XCTestCase {
             let body = try res.content.decode(HealthResponse.self)
             XCTAssertNil(body.musicRepo)
         }
+    }
+
+    // MARK: - Which commit is this server running? (#65)
+
+    func testVersionCarriesTheShortCommitAsBuildMetadata() {
+        XCTAssertEqual(
+            AppVersion.describe(release: "0.4.0", commit: "a3a6f58c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a"),
+            "0.4.0+a3a6f58")
+    }
+
+    func testVersionWithoutACommitIsTheBareRelease() {
+        XCTAssertEqual(AppVersion.describe(release: "0.4.0", commit: nil), "0.4.0")
+    }
+
+    func testCommitIsReadFromTheEnvironment() {
+        XCTAssertEqual(AppVersion.commit(from: ["TNG_GIT_COMMIT": "a3a6f58c1d2e\n"]), "a3a6f58c1d2e")
+    }
+
+    /// The Dockerfile declares the variable with an empty default, so an image built without
+    /// the build arg has it set to "" — which must read as no commit, not as `0.4.0+`.
+    func testBlankOrMissingCommitIsNoCommit() {
+        XCTAssertNil(AppVersion.commit(from: [:]))
+        XCTAssertNil(AppVersion.commit(from: ["TNG_GIT_COMMIT": ""]))
+        XCTAssertNil(AppVersion.commit(from: ["TNG_GIT_COMMIT": "  "]))
+    }
+
+    func testHealthResponseReportsTheCommitAsItsOwnField() throws {
+        let response = HealthResponse(status: .ok, commit: "a3a6f58c1d2e")
+        let json = String(decoding: try JSONEncoder().encode(response), as: UTF8.self)
+        XCTAssertTrue(json.contains(#""commit":"a3a6f58c1d2e""#), json)
     }
 }
