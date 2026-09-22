@@ -32,6 +32,46 @@ final class TunePageRendererTests: XCTestCase {
         XCTAssertEqual(TunePageRenderer.numbering("X:1\n", from: 0), "%%ceolkit:pagenumber 1\nX:1\n")
     }
 
+    // MARK: - Section labels (#67)
+
+    /// The label goes in beside the page number, and after it: both are the binder's, and
+    /// both have to come before anything the file says so the file's own still wins.
+    func testTheLabelFollowsThePageNumber() {
+        let labelled = TunePageRenderer.numbering("%abc-2.2\nX:1\n", from: 4, label: "Reels")
+        XCTAssertEqual(labelled, "%abc-2.2\n%%ceolkit:pagenumber 4\n%%ceolkit:label \"Reels\"\nX:1\n")
+    }
+
+    /// A tune in an untitled section is given no label at all, not an empty one.
+    func testNoLabelWritesNoDirective() {
+        XCTAssertFalse(TunePageRenderer.numbering("X:1\n", from: 1, label: nil).contains("label"))
+    }
+
+    /// CeolKit keeps everything between the enclosing quotes as written, so a `"` in a
+    /// section name is written as it is: a backslash would be printed, not read as an escape.
+    func testAQuoteInTheNameComesBackAsWritten() {
+        for name in [#"The "Big" Set"#, #"""#, #""Quoted""#, "100% Reels"] {
+            XCTAssertEqual(labels(TunePageRenderer.numbering(Self.tune, from: 1, label: name)), [name])
+        }
+    }
+
+    /// A file that names its own label keeps it: ours is written first, and the last one in
+    /// a header is the one CeolKit uses.
+    func testTheFilesOwnLabelWins() {
+        let own = "%abc-2.2\n%%ceolkit:label \"Mine\"\n" + Self.tune.dropFirst("%abc-2.2\n".count)
+        XCTAssertEqual(labels(TunePageRenderer.numbering(own, from: 1, label: "Binder")).last, "Mine")
+    }
+
+    private static let tune = "%abc-2.2\nX:1\nT:T\nM:4/4\nL:1/4\nK:C\nCDEF|\n"
+
+    /// Every `%%ceolkit:label` the parsed tune carries, in the order they apply.
+    private func labels(_ abc: String) -> [String] {
+        let tune = CeolKitParser().parse(abc, options: .default).score.tunes.first
+        return (tune?.directives ?? []).compactMap {
+            guard case .label(let text) = $0.directive else { return nil }
+            return text
+        }
+    }
+
     // MARK: - Does the footer ask for a number at all?
 
     /// Both style sheets in `svpb-music` are covered: `style.abh` prints no page number,

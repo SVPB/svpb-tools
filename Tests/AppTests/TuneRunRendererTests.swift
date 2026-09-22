@@ -69,6 +69,73 @@ final class TuneRunRendererTests: XCTestCase {
         """)
     }
 
+    /// Each tune carries its own section's label in its header, right after `X:` — never in
+    /// the document preamble, because a run can cross from one section into the next (#67).
+    /// A tune from an untitled section is given none, rather than the one before it.
+    func testEachTuneIsLabelledWithItsOwnSection() {
+        var reel = TuneRunRenderer.takeApart("%abc-2.2\n%%ceolkit:scale 0.85\nX:1\nT:A\nK:D\nAB |]\n",
+                                             includesRelativeTo: directory)
+        reel.label = "Reels"
+        var jig = TuneRunRenderer.takeApart("%abc-2.2\nX:1\nT:B\nK:D\ncd |]\n",
+                                            includesRelativeTo: directory)
+        jig.label = #"The "Big" Jigs"#
+        let untitled = TuneRunRenderer.takeApart("%abc-2.2\nX:1\nT:C\nK:D\nef |]\n",
+                                                 includesRelativeTo: directory)
+
+        XCTAssertEqual(TuneRunRenderer.concatenate([reel, jig, untitled], firstPageNumber: 1), """
+        %abc-2.2
+        %%ceolkit:pagenumber 1
+        X:1
+        %%ceolkit:label "Reels"
+        %%ceolkit:scale 0.85
+        T:A
+        K:D
+        AB |]
+
+        X:2
+        %%ceolkit:label "The "Big" Jigs"
+        T:B
+        K:D
+        cd |]
+
+        X:3
+        T:C
+        K:D
+        ef |]
+
+
+        """)
+    }
+
+    /// What CeolKit makes of it: each tune's label, the quotes in a name intact, and
+    /// nothing left over at file scope for an unlabelled tune to inherit.
+    func testCeolKitReadsEachTunesLabel() {
+        let documents = [(#"Reels"#, "A"), (#"The "Big" Jigs"#, "B"), (nil, "C")].map { label, title in
+            var document = TuneRunRenderer.takeApart("X:1\nT:\(title)\nK:D\nAB |]\n",
+                                                     includesRelativeTo: directory)
+            document.label = label
+            return document
+        }
+        let parsed = CeolKitParser().parse(
+            TuneRunRenderer.concatenate(documents, firstPageNumber: 1), options: .default)
+
+        XCTAssertEqual(parsed.score.tunes.map { tune in
+            tune.directives.compactMap { directive -> String? in
+                guard case .label(let text) = directive.directive else { return nil }
+                return text
+            }
+        }, [["Reels"], [#"The "Big" Jigs"#], []])
+    }
+
+    /// Every tune of a file holding several is labelled, not only the first.
+    func testEveryTuneOfAFileIsLabelled() {
+        var pair = TuneRunRenderer.takeApart("X:1\nT:One\nK:D\nAB |]\n\nX:2\nT:Two\nK:D\ncd |]\n",
+                                             includesRelativeTo: directory)
+        pair.label = "Sets"
+        let run = TuneRunRenderer.concatenate([pair], firstPageNumber: 1)
+        XCTAssertEqual(run.components(separatedBy: #"%%ceolkit:label "Sets""#).count - 1, 2, run)
+    }
+
     /// `%%ceolkit:pagenumber` goes ahead of everything, so a tune that sets its own page
     /// number still wins — the same rule `TunePageRenderer` follows for one tune.
     func testThePageNumberIsClampedAndWrittenFirst() {

@@ -53,10 +53,12 @@ import Foundation
 /// (sbeitzel/CeolKit#152) — which is what keeps a table of contents (#47) honest under packing.
 struct TuneRunRenderer: Sendable {
 
-    /// One tune of a run: the slug the binder knows it by, and the ABC behind it.
+    /// One tune of a run: the slug the binder knows it by, the ABC behind it, and the name
+    /// of the binder section it sits in, for a `${label}` footer mark to print (#67).
     struct Source: Sendable {
         let slug: String
         let url: URL
+        var label: String? = nil
     }
 
     /// What one run contributed to a binder.
@@ -130,9 +132,11 @@ struct TuneRunRenderer: Sendable {
     func render(_ sources: [Source], firstPageNumber: Int) throws -> Rendering {
         guard !sources.isEmpty else { throw Failure.empty }
 
-        let documents = try sources.map {
-            Self.takeApart(try String(contentsOf: $0.url, encoding: .utf8),
-                           includesRelativeTo: $0.url.deletingLastPathComponent())
+        let documents = try sources.map { source in
+            var document = Self.takeApart(try String(contentsOf: source.url, encoding: .utf8),
+                                          includesRelativeTo: source.url.deletingLastPathComponent())
+            document.label = source.label
+            return document
         }
         for (source, document) in zip(sources, documents) where document.tunes.isEmpty {
             throw Failure.noTunes(slug: source.slug)
@@ -215,6 +219,9 @@ extension TuneRunRenderer {
         var tunes: [Tune] = []
         /// Directives written after the last tune, which belong to whatever follows it.
         var trailing: [String] = []
+        /// The name of the binder section the file sits in, which each of its tunes is
+        /// labelled with. Not read from the file: the binder supplies it.
+        var label: String?
     }
 
     /// Cuts `abc` into the pieces ``concatenate(_:firstPageNumber:)`` writes back out.
@@ -346,6 +353,11 @@ extension TuneRunRenderer {
     /// the file it came from stated about it: its preamble, whatever stood in the gap above
     /// it, and — where the run's orientation has to change for it — a `%%newpage` with the
     /// `%%landscape` that only a page boundary can carry.
+    ///
+    /// A document's ``Document/label`` goes into each of its tunes' headers rather than the
+    /// document preamble, where `%%ceolkit:pagenumber` goes: a run can cross from one binder
+    /// section into the next — only a title page ends it, and an untitled section has none
+    /// — and a label in the preamble would name the first section on every page (#67).
     static func concatenate(_ documents: [Document], firstPageNumber: Int) -> String {
         var lines: [String] = []
         if let version = documents.compactMap(\.versionLine).first { lines.append(version) }
@@ -369,6 +381,11 @@ extension TuneRunRenderer {
                     lines.append("%%newpage")
                     lines.append("%%landscape \(wanted ? 1 : 0)")
                     running = wanted
+                }
+                // Ahead of anything the file says, so a label the file sets itself still wins:
+                // the last one in a header is the one CeolKit uses.
+                if let label = document.label {
+                    lines.append(TunePageRenderer.labelDirective(label))
                 }
                 // Source order: what the file before this one left behind, then this file's
                 // preamble, then the gap this tune sits under.

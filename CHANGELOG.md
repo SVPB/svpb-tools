@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### Binder footers can print the section name (#67)
+
+- A binder page can now say which section it belongs to. Each tune is re-engraved with its
+  section's title as `%%ceolkit:label`, which a `${label}` mark in the style sheet's `%%footer`
+  prints — `%%footer "$P\t${label}\t"`, say. Like the page number, it has to be supplied when the
+  page is engraved: the footer is outlines, and the runtime image has no fonts to draw it later.
+- Nothing prints until the svpb-music style sheets put `${label}` in their footers.
+- A tune in an untitled section is given no name, not the name of the section before it. A tune
+  whose own file sets `%%ceolkit:label` keeps its own.
+- In a packed binder the label goes in each tune's header, not the run's preamble, since a run
+  can cross from one section into the next. A page shared by two sections' tunes prints the
+  section of the tune whose music opens it. That only happens when the second section is
+  untitled, because a title page always starts a new page.
+- Pages reused from the build, where a tune could not be re-engraved, print no section name,
+  just as their page numbers start from 1. The fallback log messages now say so.
+- Requires CeolKit 1.7.0 (sbeitzel/CeolKit#168).
+
 #### The server says which commit it is running (#65)
 
 - The droplet runs the `develop` image, so between releases every build it pulled said `0.4.0`,

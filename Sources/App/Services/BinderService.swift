@@ -118,7 +118,7 @@ actor BinderService {
         /// none where the page only carries the rest of the tune before it (#48).
         case tune(slugs: [String], svg: String)
         /// A page the build produced, reused because the tune could not be re-engraved.
-        /// Its footer numbers from 1 within its own tune.
+        /// Its footer numbers from 1 within its own tune, and prints no section name (#67).
         case prebuilt(slug: String, path: String)
         /// A generated page carrying nothing but a title.
         case titlePage(title: BinderTitle, svg: String)
@@ -242,8 +242,11 @@ actor BinderService {
             var pending = section.titlePage
 
             for entry in section.entries {
-                guard let resolution = try await resolve(entry, branch: spec.branch,
+                guard var resolution = try await resolve(entry, branch: spec.branch,
                                                          label: label, db: db, logger: logger) else { continue }
+                // Only this section's own title: an untitled section's tunes print no name,
+                // rather than carrying on with the one before it (#67).
+                resolution.sectionName = section.titlePage?.oneLine
 
                 if let title = pending {
                     pending = nil
@@ -479,6 +482,17 @@ actor BinderService {
         /// The pages the build produced for this part. Never empty: a part with no
         /// pages is a part the build never converted, and a binder skips it.
         let prebuiltPaths: [String]
+        /// The title of the section the entry sits in, which a `${label}` footer mark
+        /// prints (#67). `nil` in a section with no title page.
+        var sectionName: String? = nil
+
+        /// What the build's own pages lack, for a log saying they are being reused: they
+        /// were engraved for the tune alone, not for its place in this binder.
+        var prebuiltFooters: String {
+            sectionName == nil
+                ? "whose footers number from 1"
+                : "whose footers number from 1 and name no section"
+        }
     }
 
     /// The one set of pages a binder entry contributes, or `nil` when the tune cannot be
@@ -628,7 +642,9 @@ actor BinderService {
         logger: Logger
     ) -> (pages: [Page], starts: [Int?])? {
         let sources = resolutions.compactMap { resolution in
-            resolution.abcURL.map { TuneRunRenderer.Source(slug: resolution.slug, url: $0) }
+            resolution.abcURL.map {
+                TuneRunRenderer.Source(slug: resolution.slug, url: $0, label: resolution.sectionName)
+            }
         }
         let named = resolutions.map(\.slug).joined(separator: ", ")
         guard sources.count == resolutions.count else {
@@ -672,14 +688,15 @@ actor BinderService {
         let fallback = resolution.prebuiltPaths.map { Page.prebuilt(slug: resolution.slug, path: $0) }
 
         guard let abcURL = resolution.abcURL else {
-            logger.error("[BinderService] \(label): tune '\(resolution.slug)' has no ABC source on record — reusing the build's \(fallback.count) page(s), whose footers number from 1")
+            logger.error("[BinderService] \(label): tune '\(resolution.slug)' has no ABC source on record — reusing the build's \(fallback.count) page(s), \(resolution.prebuiltFooters)")
             return fallback
         }
 
         do {
-            let rendering = try tuneRenderer.render(abcAt: abcURL, firstPageNumber: firstPageNumber)
+            let rendering = try tuneRenderer.render(abcAt: abcURL, firstPageNumber: firstPageNumber,
+                                                    label: resolution.sectionName)
             guard !rendering.pages.isEmpty else {
-                logger.error("[BinderService] \(label): re-engraving '\(resolution.slug)' from \(abcURL.path) produced no pages — reusing the build's \(fallback.count), whose footers number from 1")
+                logger.error("[BinderService] \(label): re-engraving '\(resolution.slug)' from \(abcURL.path) produced no pages — reusing the build's \(fallback.count), \(resolution.prebuiltFooters)")
                 return fallback
             }
             if !rendering.printsPageNumbers {
@@ -691,7 +708,7 @@ actor BinderService {
                 .tune(slugs: $0.offset == 0 ? [resolution.slug] : [], svg: $0.element)
             }
         } catch {
-            logger.error("[BinderService] \(label): re-engraving '\(resolution.slug)' from \(abcURL.path) failed — reusing the build's \(fallback.count) page(s), whose footers number from 1: \(error)")
+            logger.error("[BinderService] \(label): re-engraving '\(resolution.slug)' from \(abcURL.path) failed — reusing the build's \(fallback.count) page(s), \(resolution.prebuiltFooters): \(error)")
             return fallback
         }
     }

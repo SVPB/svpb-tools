@@ -57,7 +57,9 @@ struct TunePageRenderer: Sendable {
     ///   - firstPageNumber: The binder page this tune opens on. Must be at least 1 —
     ///     `%%ceolkit:pagenumber` rejects anything less and the document would fall back
     ///     to numbering from 1.
-    func render(abcAt url: URL, firstPageNumber: Int) throws -> Rendering {
+    ///   - label: The name of the binder section the tune sits in, for a `${label}`
+    ///     footer mark to print (#67), or `nil` where the section has no title.
+    func render(abcAt url: URL, firstPageNumber: Int, label: String? = nil) throws -> Rendering {
         let abc = try String(contentsOf: url, encoding: .utf8)
 
         // The parser's base directory is the ABC file's own directory so `I:abc-include`
@@ -66,7 +68,8 @@ struct TunePageRenderer: Sendable {
             for: url.deletingLastPathComponent(),
             fileResolver: CeolKitParser.defaultFileResolver
         )
-        let parsed = parser.parse(Self.numbering(abc, from: firstPageNumber), options: .default)
+        let parsed = parser.parse(Self.numbering(abc, from: firstPageNumber, label: label),
+                                  options: .default)
         let pages = try SVGRenderer(config: config).render(parsed.score)
 
         // `tune.footer ?? score.footer` is the template one tune's pages print, per
@@ -92,19 +95,33 @@ struct TunePageRenderer: Sendable {
 
     // MARK: - ABC
 
-    /// `abc` with `%%ceolkit:pagenumber <pageNumber>` added to its preamble.
+    /// `abc` with `%%ceolkit:pagenumber <pageNumber>` — and, where the tune's binder
+    /// section has a name, `%%ceolkit:label` — added to its preamble.
     ///
-    /// The directive goes *after* a leading `%abc` version line, which the standard
+    /// The directives go *after* a leading `%abc` version line, which the standard
     /// requires to be the first line of a file, and before everything else. CeolKit reads
-    /// the directive out of the first tune's directive list — into which the parser folds
-    /// the preamble in source order — and takes the last one it finds, so putting ours
-    /// first means a tune that sets its own page number still wins, as its author meant.
-    static func numbering(_ abc: String, from pageNumber: Int) -> String {
-        let directive = "%%ceolkit:pagenumber \(max(1, pageNumber))\n"
+    /// the page number out of the first tune's directive list — into which the parser folds
+    /// the preamble in source order — and takes the last one it finds, and a file header's
+    /// label is likewise the last one written; so putting ours first means a tune that sets
+    /// its own page number or label still wins, as its author meant.
+    static func numbering(_ abc: String, from pageNumber: Int, label: String? = nil) -> String {
+        var directives = "%%ceolkit:pagenumber \(max(1, pageNumber))\n"
+        if let label { directives += labelDirective(label) + "\n" }
         guard abc.hasPrefix("%abc"), let versionLineEnd = abc.firstIndex(of: "\n") else {
-            return directive + abc
+            return directives + abc
         }
         let rest = abc.index(after: versionLineEnd)
-        return abc[...versionLineEnd] + directive + abc[rest...]
+        return abc[...versionLineEnd] + directives + abc[rest...]
+    }
+
+    /// The `%%ceolkit:label` line that makes a `${label}` footer mark print `label` (#67).
+    ///
+    /// The name is written between quotes and otherwise exactly as given, `"` and all.
+    /// CeolKit strips one enclosing pair and keeps everything between them verbatim, so an
+    /// inner quote needs no escaping — and a backslash written to escape it would be
+    /// printed. The quotes are what keep a name's own leading or trailing quote from being
+    /// taken for the enclosing pair.
+    static func labelDirective(_ label: String) -> String {
+        "%%ceolkit:label \"\(label)\""
     }
 }

@@ -610,6 +610,81 @@ final class BinderGenerationTests: XCTestCase {
         XCTAssertEqual(spec.entries.map(\.breaksBefore), [false, true])
     }
 
+    // MARK: - Section labels (#67)
+
+    /// The footer the band's style sheets would use to name a page's section.
+    private static let labelFooter = #"$P\t${label}\t"#
+
+    /// A two-section binder whose footer names the section: every tune prints its own
+    /// section's title, and a tune in an untitled section prints nothing — not the name
+    /// of the section before it.
+    func testEachTunePrintsItsOwnSectionsTitle() async throws {
+        for slug in ["strathspey", "hornpipe", "air"] {
+            try await seedTune(slug, branch: branch, footer: Self.labelFooter)
+        }
+        let spec = BinderSpec(name: "Labelled", branch: "2026", sections: [
+            BinderSection(title: "Reels", entries: [entry("strathspey")]),
+            BinderSection(title: ["The \"Big\"", "Jigs"], entries: [entry("hornpipe")]),
+            BinderSection(title: nil, entries: [entry("air")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["title: Reels", "strathspey",
+                                         #"title: The "Big" / Jigs"#, "hornpipe", "air"])
+        XCTAssertEqual(try printedLabels(pages),
+                       [try glyphs(ofLabel: "Reels"), try glyphs(ofLabel: #"The "Big" Jigs"#), []])
+        XCTAssertNotEqual(try glyphs(ofLabel: "Reels"), try glyphs(ofLabel: "Jigs"),
+                          "the fingerprint cannot tell two labels apart")
+    }
+
+    /// Packing does not smear one section's name over the next: the untitled section's
+    /// tune, opening a page of its own, prints no name even though it follows a titled one
+    /// with no title page between them to end the run.
+    func testAPackedBinderLabelsEachTuneWithItsOwnSection() async throws {
+        for slug in ["strathspey", "hornpipe"] {
+            try await seedTune(slug, branch: branch, footer: Self.labelFooter)
+        }
+        let spec = BinderSpec(name: "Packed labels", branch: "2026", sections: [
+            BinderSection(title: "Reels", entries: [entry("strathspey")]),
+            BinderSection(title: nil, entries: [
+                BinderEntry(tuneSlug: "hornpipe", parts: ["Melody"], pageBreak: .before),
+            ]),
+        ], pack: true)
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        XCTAssertEqual(describe(pages), ["title: Reels", "strathspey", "hornpipe"])
+        XCTAssertEqual(try printedLabels(pages), [try glyphs(ofLabel: "Reels"), []])
+    }
+
+    /// What each engraved tune page's `${label}` mark draws, as the positions of its glyphs.
+    ///
+    /// The label is outlines like the rest of the footer, and CeolKit numbers its glyph
+    /// definitions per document, so the text cannot be read back and the glyph names cannot
+    /// be compared across documents. Where each glyph is placed can: the same text in the
+    /// same footer on the same page lands in the same places.
+    private func printedLabels(_ pages: [BinderService.Page]) throws -> [[String]] {
+        pages.compactMap { page -> [String]? in
+            guard case .tune(_, let svg) = page else { return nil }
+            return labelGlyphs(in: svg)
+        }
+    }
+
+    /// The glyph positions a page prints for `label`, engraved outside any binder.
+    private func glyphs(ofLabel label: String) throws -> [String] {
+        let abc = "%%footer \"\(Self.labelFooter)\"\n\(TunePageRenderer.labelDirective(label))\n"
+            + "X:1\nT:Reference\nM:4/4\nL:1/8\nK:D\nABcd |]\n"
+        let parsed = CeolKitParser().parse(abc, options: .default)
+        let svg = try XCTUnwrap(try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score).first)
+        return labelGlyphs(in: svg)
+    }
+
+    private func labelGlyphs(in svg: String) -> [String] {
+        guard let group = svg.firstMatch(of: /data-ceolkit-tag="label"[^>]*>(.*?)<\/g>/.dotMatchesNewlines()) else {
+            return []
+        }
+        return group.1.matches(of: /transform="(translate\([^)]*\))/).map { String($0.1) }
+    }
+
     // MARK: - Helpers
 
     /// The lines each contents page carries, in binder order.
@@ -680,13 +755,13 @@ final class BinderGenerationTests: XCTestCase {
     /// catalogue — the shape `BinderService` re-engraves from and falls back to.
     private func seedTune(_ slug: String, branch: Branch, pages: Int = 1,
                           title: String? = nil, untitled: Bool = false,
-                          landscape: Bool = false,
+                          landscape: Bool = false, footer: String = "$P",
                           extraParts: [String] = []) async throws {
         let body = "ABcd efga | gfed cBAG | ABcd efga | g2 f2 e2 d2 |]"
         let abc = """
         %abc-2.2
         %%landscape \(landscape ? 1 : 0)
-        %%footer "$P"
+        %%footer "\(footer)"
         X:1
         T:\(slug)
         M:4/4
