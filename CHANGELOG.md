@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### `Scripts/linux-tests.sh`: the CI suite, in a container, on a developer's machine
+
+- `swift test` on a Mac exercises SVGPDFKit's CoreGraphics path. The droplet runs the
+  rsvg-convert one, and the two have produced different PDFs from byte-identical input —
+  sbeitzel/SVGPDFKit#4 put every page against the top-left corner of its media box on Linux
+  only, which is how the binder margins in #62 went wrong in a way no local build could show.
+  `Scripts/linux-tests.sh` builds `test.dockerfile` — the CI image, Swift 6.3 plus
+  `librsvg2-bin` — and runs the suite there; arguments reach `swift test`.
+- It carries the two things that otherwise make a container run fail in confusing ways.
+  `swift test` under Docker Desktop **hangs part way through**, in XCTest's teardown, because
+  the VM kernel reports `CLOCK_MONOTONIC` at 1 ms resolution and CoreFoundation derives its
+  timebase from that, leaving every CFRunLoop deadline in the past
+  (swift-corelibs-foundation#5485); the script preloads SVGPDFKit's `Scripts/fineres.c` shim,
+  which reports the 1 ns resolution that calculation assumes and changes no clock value. And
+  the build tree goes in a Docker volume rather than `.build`, whose Linux module cache is
+  stamped with the absolute path it was built at — mount the repository anywhere but `/build`
+  and a shared `.build` fails with `missing required module 'SwiftShims'`.
+- `.dockerignore` keeps `.build` — seven gigabytes of it — out of the build context, which
+  every image build here was sending.
+
 #### Short tunes can share a page in an assembled binder (#48)
 
 - A binder may now be **packed**: two short tunes in a row share a sheet instead of each taking
