@@ -45,7 +45,9 @@ struct TitlePageRenderer: Sendable {
         }
     }
 
-    /// Letter, to match the tune pages `BuildService` renders.
+    /// Portrait letter, whatever the tunes around it do. A binder carries mixed page sizes
+    /// because `%%landscape` is the tune's to set (#62), but front matter is prose and is set
+    /// the way a book's is.
     private let pageSize = PageSize.letter
 
     /// The face CeolKit sets tune titles in, so a title page and a tune page are
@@ -97,8 +99,13 @@ struct TitlePageRenderer: Sendable {
         let width = fmt(pageSize.width)
         let height = fmt(pageSize.height)
         return ([
+            // `pt` is not decoration: a unitless length is a user unit, which is a CSS
+            // pixel — 1/96 inch, not 1/72 — so an unqualified 612 would declare this page
+            // at three quarters of the size every coordinate below assumes, and the PDF
+            // conversion takes each page from what its SVG declares (#62). CeolKit says
+            // `pt` on the tune pages this one is bound beside, for the same reason.
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 \(width) \(height)\""
-                + " width=\"\(width)\" height=\"\(height)\">",
+                + " width=\"\(width)pt\" height=\"\(height)pt\">",
             "  <g class=\"title-page\">",
         ] + drawn + [
             "  </g>",

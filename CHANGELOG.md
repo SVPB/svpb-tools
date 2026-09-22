@@ -163,6 +163,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### CeolKit 1.6.0 -> 1.6.1, SVGPDFKit 0.3.0 -> 0.4.0
+
+- Both bumps are what #62 needed. CeolKit 1.6.1 states the engraved page in points on the root
+  `<svg>` (sbeitzel/CeolKit#165), so a page can be read back for what it is; SVGPDFKit 0.4.0 takes
+  `pageSize: nil` — "give each page the size its own SVG declares" (sbeitzel/SVGPDFKit#5) — which
+  is the only way a mixed-orientation binder is expressible in one conversion.
+- 0.4.0 also fixes the Linux page placement that put every page against the top-left corner of its
+  media box and left `2 × margin` as dead space at the right and bottom (sbeitzel/SVGPDFKit#4). It
+  was only ever visible in what the droplet produced; a local build went through CoreGraphics,
+  which centred correctly.
+- `convert(source:)`, `convert(sources:)` and `convert(sources:to:)` are deprecated upstream in
+  favour of `makePDF`, which reports what it could not do. Every call site here moved.
+
 #### `DividerPageRenderer` is now `TitlePageRenderer`, and draws text directly (#46)
 
 - The type is renamed for what it makes: a title page stands on its own, and calling it a divider
@@ -180,6 +193,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   down a Letter page, at up to 45pt.
 
 ### Fixed
+
+#### Binder pages are bound at the size they were engraved (#62)
+
+- The 2027 full binder went to Box as 65 portrait sheets with the music pushed left, shrunk, and
+  five blank inches at the foot of most pages. Measuring the staff lines gave two clusters, neither
+  centred and neither full width: 6.82″ on 48 pages and 6.62″ on 13, against the 7.5″ and 10″
+  CeolKit had engraved.
+- Nothing was wrong with the engraving. `SVGPDFConverter` was handed one page size for the whole
+  document — the default, portrait Letter — for a document whose tunes choose their own
+  orientation, and 65 of the 2027 branch's 84 tunes say `%%landscape 1`. A `792 × 612` page
+  aspect-fitted into portrait Letter less its margins is scaled by `540/792`: three quarters of the
+  binder printed at **68%**, and the 6pt staff gap came out at 4.09pt.
+- The remaining shrink was the margin, counted twice. `ConversionOptions.margin` defaults to 36pt,
+  but the SVG handed over *is* the page and already carries CeolKit's own 36pt margins, so the
+  converter inset the whole page again and scaled it to fit. That is the whole of the 6.62″
+  cluster, where there was no orientation mismatch to blame.
+- **A binder keeps each tune's own orientation**, which is what Gen.1 did and what the pipe major
+  asked for: a musician turns the page without noticing, and re-engraving a landscape tune onto a
+  portrait sheet would throw away 2.5″ of stave and force more systems of smaller music to save a
+  rotation nobody minds. So the page follows the engraving, never the reverse.
+- `ConversionOptions.engravedPages(logger:)` is now the one place that says how this server
+  converts engraved pages, and both callers use it: the per-tune PDFs a build writes and the
+  binders `BinderService` assembles. It sets `pageSize` to `nil`, so each page is the page its own
+  SVG declares; `margin` then does not apply, which is right; and it leaves page-number injection
+  off, since CeolKit numbers its pages in glyph outlines and there is no placeholder to rewrite.
+- Per-tune PDFs were shrinking the same way and are fixed by the same change: a landscape tune now
+  downloads as a landscape PDF.
+- The title and contents pages this server draws itself now state their size in **points** on the
+  root `<svg>`. A unitless 612 is 612 CSS pixels — 1/96 inch, not 1/72 — so front matter that did
+  not say `pt` would have been bound at three quarters of its size once the page came from the
+  document rather than from a constant.
+- `TunePageRenderer` and `TuneRunRenderer` still engrave for Letter, and still let `%%landscape`
+  win; only their comments claimed the two agreed. Packing (#48) needs no agreement about
+  orientation either — a run that turns the page mid-way produces pages of both sizes and each
+  goes into the PDF at the size it came out at.
+- Diagnostics from the converter now reach the Vapor logger rather than stderr, so a page whose
+  size had to be guessed from a `viewBox` — the one way a document can still be mis-sized — lands
+  where the operator reads the rest of the build.
+- One thing to know on the deploy: an SVG left in a branch's output directory by a **pre-1.6.1**
+  build states its page without units, and a binder that falls back to those pages (a tune with no
+  ABC on record) would bind them at three quarters size. Every build rewrites every page, so the
+  first build after this goes out clears it; there is nothing to migrate.
 
 #### The binder builder no longer offers a part to choose, and a binder holds each tune once (#24)
 

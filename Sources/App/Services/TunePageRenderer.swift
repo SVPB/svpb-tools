@@ -41,8 +41,13 @@ struct TunePageRenderer: Sendable {
         let printsPageNumbers: Bool
     }
 
-    /// Letter, to match the pages `BuildService` renders and the `PageSize` that
-    /// `SVGPDFConverter` lays each one onto.
+    /// Letter — the page a tune is engraved on when its own source does not say otherwise.
+    ///
+    /// This is a default, not a promise. `%%landscape` in the ABC wins, per tune, and most
+    /// of the band's tunes set it, so a binder's pages come back in both orientations and
+    /// nothing downstream may assume portrait. The PDF conversion takes each page's size
+    /// from the page CeolKit engraved (`ConversionOptions.engravedPages(logger:)`), which is
+    /// what keeps a landscape tune at full size instead of at 68% of one (#62).
     private let config = SVGRenderConfig(pageSize: .letter)
 
     /// Engraves the tune at `url`, numbered so its first page prints `firstPageNumber`.

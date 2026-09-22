@@ -197,6 +197,69 @@ final class BinderGenerationTests: XCTestCase {
         XCTAssertTrue(try Data(contentsOf: URL(fileURLWithPath: path)).starts(with: Data("%PDF".utf8)))
     }
 
+    // MARK: - Page sizes (#62)
+
+    /// A binder keeps each tune's own orientation: a landscape tune is bound on a landscape
+    /// sheet at full size, not flattened onto a portrait one at 68% (#62). The front matter
+    /// is portrait whatever the tunes do, so one binder carries both.
+    ///
+    /// The page each SVG declares is what the conversion binds it at, so that is what is
+    /// asserted here; `testBinderPDFCarriesMixedPageSizes` confirms it in the PDF.
+    func testBinderPagesKeepEachTunesOrientation() async throws {
+        try await seedTune("wide", branch: branch, landscape: true)
+        let spec = BinderSpec(name: "Mixed", branch: "2026", sections: [
+            BinderSection(title: "Parade Set", entries: [entry("wide"), entry("reel")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+
+        XCTAssertEqual(describe(pages), ["title: Parade Set", "wide", "reel"])
+        XCTAssertEqual(try pages.map { declaredPageSize(ofSVG: try svg(of: $0)) },
+                       [PDFPageSize(width: 612, height: 792),   // the section's title page
+                        PDFPageSize(width: 792, height: 612),   // %%landscape 1
+                        PDFPageSize(width: 612, height: 792)])  // %%landscape 0
+    }
+
+    /// The same binder through to the file the download route serves.
+    func testBinderPDFCarriesMixedPageSizes() async throws {
+        try await seedTune("wide", branch: branch, landscape: true)
+        let spec = BinderSpec(name: "Mixed", branch: "2026", sections: [
+            BinderSection(title: "Parade Set", entries: [entry("wide"), entry("reel")]),
+        ])
+        let request = BinderRequest(definition: spec)
+        try await request.save(on: app.db)
+
+        await service.generateBinder(requestID: try request.requireID(), db: app.db, logger: app.logger)
+
+        let reloaded = try await BinderRequest.find(request.id, on: app.db)
+        let path = try XCTUnwrap(reloaded?.pdfPath, "Binder was not generated")
+        let pdf = try Data(contentsOf: URL(fileURLWithPath: path))
+        // Hoisted out of the assertion: a skip thrown inside an XCTAssert autoclosure is
+        // reported as an unexpected error rather than a skip.
+        let sizes = try pdfPageSizesOrSkip(pdf)
+        XCTAssertEqual(sizes, [PDFPageSize(width: 612, height: 792),
+                               PDFPageSize(width: 792, height: 612),
+                               PDFPageSize(width: 612, height: 792)])
+    }
+
+    /// Packing (#48) needs no agreement about orientation. A run whose tunes disagree is
+    /// engraved as one document all the same — CeolKit turns the page where the run says to
+    /// — and each page is bound at the size it came out at.
+    func testAPackedRunCanMixOrientations() async throws {
+        try await seedTune("wide", branch: branch, landscape: true)
+        let spec = BinderSpec(name: "Packed", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [entry("wide"), entry("reel"), entry("jig")]),
+        ], pack: true)
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+
+        // The landscape tune opens the run, so the portrait pair starts a fresh page and
+        // packs onto it: two sheets, one of each orientation.
+        XCTAssertEqual(describe(pages), ["wide", "reel + jig"])
+        XCTAssertEqual(try pages.map { declaredPageSize(ofSVG: try svg(of: $0)) },
+                       [PDFPageSize(width: 792, height: 612), PDFPageSize(width: 612, height: 792)])
+    }
+
     /// Dividers alone are not a binder.
     func testBinderWithOnlyDividersIsNotProduced() async throws {
         let spec = BinderSpec(name: "Empty", branch: "2026", sections: [
@@ -557,6 +620,16 @@ final class BinderGenerationTests: XCTestCase {
         }
     }
 
+    /// The SVG a page carries, wherever it keeps it: engraved pages and the pages the
+    /// binder draws for itself hold their document, a fallback page names a file.
+    private func svg(of page: BinderService.Page) throws -> String {
+        switch page.source {
+        case .string(let svg): svg
+        case .data(let data): String(decoding: data, as: UTF8.self)
+        case .fileURL(let url): try String(contentsOf: url, encoding: .utf8)
+        }
+    }
+
     private func entry(_ slug: String) -> BinderEntry {
         BinderEntry(tuneSlug: slug, parts: ["Melody"])
     }
@@ -607,10 +680,12 @@ final class BinderGenerationTests: XCTestCase {
     /// catalogue — the shape `BinderService` re-engraves from and falls back to.
     private func seedTune(_ slug: String, branch: Branch, pages: Int = 1,
                           title: String? = nil, untitled: Bool = false,
+                          landscape: Bool = false,
                           extraParts: [String] = []) async throws {
         let body = "ABcd efga | gfed cBAG | ABcd efga | g2 f2 e2 d2 |]"
         let abc = """
         %abc-2.2
+        %%landscape \(landscape ? 1 : 0)
         %%footer "$P"
         X:1
         T:\(slug)

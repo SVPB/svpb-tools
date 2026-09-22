@@ -93,7 +93,7 @@ actor BinderService {
         let svgSources = binderPages.map(\.source)
 
         logger.info("[BinderService] \(requestID): starting PDF conversion")
-        let pdfData = try Self.convert(svgSources)
+        let pdfData = try Self.convert(svgSources, logger: logger)
         logger.info("[BinderService] \(requestID): PDF conversion complete (\(pdfData.count) bytes)")
 
         let bindersDir = musicWorkspaceURL
@@ -435,7 +435,7 @@ actor BinderService {
             missing.append(entry.tuneSlug)
         }
 
-        let pdfData = try Self.convert(binderPages.map(\.source))
+        let pdfData = try Self.convert(binderPages.map(\.source), logger: logger)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(binder.output)
         try pdfData.write(to: url, options: .atomic)
@@ -453,10 +453,13 @@ actor BinderService {
     /// CeolKit never emits and silently changes nothing when it misses
     /// (sbeitzel/SVGPDFKit#3), so leaving injection on would only hide a second,
     /// contradictory numbering scheme behind a no-op.
-    private static func convert(_ sources: [SVGSource]) throws -> Data {
-        var options = ConversionOptions()
-        options.injectPageNumbers = false
-        return try SVGPDFConverter(options: options).convert(sources: sources)
+    ///
+    /// Each page is bound at the size CeolKit engraved it, landscape tunes included, which
+    /// is what `ConversionOptions.engravedPages(logger:)` is for (#62). A binder therefore
+    /// carries mixed page sizes, as every Gen.1 binder did.
+    private static func convert(_ sources: [SVGSource], logger: Logger) throws -> Data {
+        let converter = SVGPDFConverter(options: .engravedPages(logger: logger))
+        return try converter.makePDF(sources: sources).pdfData
     }
 
     // MARK: - Resolution
