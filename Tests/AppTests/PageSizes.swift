@@ -110,10 +110,10 @@ private func uncompressedWithQPDF(_ pdf: Data) -> Data? {
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
 
-    // Waited on through a semaphore rather than `waitUntilExit()`, which polls a RunLoop
-    // whose deadlines are not enforced in a container on Docker Desktop — the hang
-    // `Scripts/linux-tests.sh` preloads a shim to avoid. A test helper should not need
-    // the shim to be in place to finish.
+    // Waited on through a semaphore rather than `waitUntilExit()`, which takes no deadline
+    // and so waits forever by construction. A qpdf that wedges — a broken install, or a
+    // future version that asks something on stdin — then costs a test target that never
+    // exits, where this costs a minute and a skipped assertion.
     let finished = DispatchSemaphore(value: 0)
     process.terminationHandler = { _ in finished.signal() }
     guard (try? process.run()) != nil else { return nil }
