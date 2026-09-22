@@ -49,8 +49,13 @@ and targets. The branch it is committed to *is* the year, so the file carries no
 binders:
   - name: "2026 Band Binder"          # shown in the UI and the build log
     output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
+    pack: true                        # optional: let short tunes share a sheet
     sections:
-      - title: "Grade 4 Tunes"        # rendered as a divider page ahead of the section
+      - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
+                                      # here, the binder's cover, set over two lines
+      - toc: true                     # the table of contents: every section and tune,
+                                      # with the page it starts on
+      - title: "Grade 4 Tunes"        # rendered as a title page ahead of the section
         entries:
           - tune: g4_medley_2026      # tune slug = the .abc filename without its extension
           - tune: g4_msr_march_2026
@@ -61,6 +66,7 @@ binders:
           - tune: MarchOfTheRBL
           - tune: Moonstar
             parts: ["Melody", "Seconds"]   # optional; defaults to every part of the tune
+            break: before                  # optional; this tune opens a page of its own
       - title: "Massed Bands / WUSPBA"
         entries:
           - tune: amazing_grace
@@ -80,10 +86,47 @@ binders:
 - `tune` is the tune's slug: the `.abc` filename without its extension.
 - `parts` is optional. Omit it to include every part of the tune, which is what the official
   binder normally wants.
-- Each `title` is rendered as a divider page ahead of that section's tunes, and page footers
-  number pages within the binder.
+- Each `title` is rendered as a title page ahead of that section's tunes, and page footers
+  number pages within the binder. A title page is counted but prints no number of its own,
+  the way a book's part titles are, so a cover and two headings mean the first tune opens on
+  page 4.
+- A section may leave `entries` out altogether. It is then a title page and nothing else —
+  which is how a binder gets a cover that belongs to the binder rather than to the tunes after
+  it, and how two title pages come to sit on consecutive pages. A binder still needs at least
+  one tune somewhere: title pages alone are not a binder, and the build says so.
+- A `title` written as a list is one title page of several lines, engraved as a block with the
+  first line largest. A plain string is one line, as before.
+- A section may instead say `toc: true`. It is then the binder's **table of contents**: one line
+  per titled section and one per tune, each naming it and the page it starts on, with the tunes
+  set one step in under their section. It holds no tunes of its own, and its `title` — which it
+  need not have — is the heading printed over the listing rather than a title page:
+
+  ```yaml
+  - toc: true                  # headed "Contents"
+  - title: "What's Inside"     # headed "What's Inside"
+    toc: true
+  - toc:
+      include: [tunes]         # only the tunes; `[sections]` is the other way to narrow it
+  ```
+
+  The contents pages are paper like any other, so they are counted into every number after them;
+  they print no number of their own, as a title page does not. A listing always covers the whole
+  binder, wherever in it the pages sit, so a binder may carry more than one and each says the
+  same thing. Only what the binder actually holds is listed: a tune whose slug the catalogue
+  cannot supply is not in the binder, and so is not in the contents. A cover — a title page with
+  no tunes under it — introduces nothing and is not listed either. A name too long for its line
+  is cut, and says so with an ellipsis.
+- `pack: true` lets **two short tunes in a row share a sheet** instead of each taking a page of
+  its own. It is off unless asked for, and it is a choice per binder rather than a rule: a tune
+  starting half way down a page cannot be pulled out and handed to one piper, and an official
+  binder may well want "every tune starts on its own page" as house style. Where a binder packs,
+  one entry at a time opts back out with `break: before`, which is for the tune that would
+  otherwise sit awkwardly across a fold. Title pages and the table of contents own a page anyway,
+  so they always start the tunes after them fresh — and a tune too tall to fit under the one
+  before it opens its own page whatever the binder asked for.
 - The pipe major does not have to write this by hand: the binder constructor page
-  (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit.
+  (`/binder-constructor`) generates it from the tune catalogue for copy-and-commit, packing
+  included.
 
 ---
 
@@ -112,7 +155,7 @@ each value before starting the stack.
 | `TNG_IMAGE_TAG` | Optional. Which published image to run: `develop`, a release version, or unset for `latest` |
 | `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
-| `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository |
+| `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository. The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
 | `BOX_CLIENT_SECRET` | Box OAuth2 application client secret |
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |

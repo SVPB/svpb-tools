@@ -62,10 +62,10 @@
 'use strict';
 
 // Official binders are whole tunes in titled sections: per-part rendering is
-// deferred (#20), and binders.yaml gives every section a divider.
+// deferred (#20), and binders.yaml gives every section a title page — except a
+// table of contents, whose title is a heading and may be left blank (#47).
 TuneSelector.init({
   sections: true,
-  parts: false,
   untitledSections: false,
   setStatus,
   onClear: () => { document.getElementById('yaml-output').value = ''; },
@@ -113,10 +113,19 @@ async function generateYAML() {
   const problem = outputProblem(output);
   if (problem) { setStatus(problem, 'error'); outputInput.classList.add('invalid'); return; }
 
-  // Empty sections have nothing to divide, so they are left out.
-  const sections = TuneSelector.sections().filter(s => s.entries.length > 0);
-  if (sections.length === 0) { setStatus('No tunes selected.', 'error'); return; }
-  const untitled = sections.findIndex(s => !s.title.trim());
+  // A section with neither a title nor any tunes would print nothing, so it is
+  // left out. A section with a title and no tunes is a title page, and stays (#46);
+  // so does a table of contents, which needs neither (#47).
+  const sections = TuneSelector.sections()
+    .filter(s => s.entries.length > 0 || TuneSelector.titleLines(s).length > 0
+              || TuneSelector.isContents(s));
+  if (sections.every(s => s.entries.length === 0)) {
+    setStatus('No tunes selected — a binder of title pages alone cannot be built.', 'error');
+    return;
+  }
+  // A contents section's title is a heading, and it may go without one.
+  const untitled = sections.findIndex(s => !TuneSelector.isContents(s)
+                                        && TuneSelector.titleLines(s).length === 0);
   if (untitled >= 0) {
     setStatus(`Every section needs a title in binders.yaml — section ${untitled + 1} with tunes has none.`, 'error');
     return;
@@ -127,12 +136,36 @@ async function generateYAML() {
     'binders:',
     `  - name: ${q(name)}`,
     `    output: ${q(output)}`,
-    '    sections:',
   ];
+  // `pack:` is written only where it is asked for, so a file generated for a
+  // binder that does not pack reads exactly as one generated before #48 did.
+  if (TuneSelector.packs()) lines.push('    pack: true');
+  lines.push('    sections:');
   sections.forEach(section => {
-    lines.push(`      - title: ${q(section.title.trim())}`);
-    lines.push('        entries:');
-    section.entries.forEach(entry => lines.push(`          - tune: ${q(entry.tuneSlug)}`));
+    // One line stays a bare string, the shape every binders.yaml so far is
+    // written in; several become the list that engraves as a stacked block.
+    const title = TuneSelector.titleLines(section);
+    const contents = TuneSelector.isContents(section);
+    // A table of contents headed "Contents" says nothing more than `toc: true`;
+    // one headed anything else carries its heading as the section's title.
+    if (contents && title.length === 0) {
+      lines.push('      - toc: true');
+      return;
+    }
+    lines.push(`      - title: ${title.length > 1 ? `[${title.map(q).join(', ')}]` : q(title[0])}`);
+    if (contents) {
+      lines.push('        toc: true');
+      return;
+    }
+    // A title page has no entries, and an empty `entries:` key would be a null.
+    if (section.entries.length > 0) {
+      lines.push('        entries:');
+      section.entries.forEach(entry => {
+        lines.push(`          - tune: ${q(entry.tuneSlug)}`);
+        // Only meaningful in a packed binder, so only written in one.
+        if (TuneSelector.packs() && entry.pageBreak) lines.push('            break: before');
+      });
+    }
   });
 
   document.getElementById('yaml-output').value = lines.join('\n') + '\n';

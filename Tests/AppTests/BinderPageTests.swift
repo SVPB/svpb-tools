@@ -25,6 +25,7 @@ final class BinderPageTests: XCTestCase {
     private let sharedElementIDs = [
         "sel-branch", "binder-name", "search-tunes",
         "tune-list", "binder-entries", "empty-msg", "add-section",
+        "fold-all-sections", "add-title-page", "binder-pack",
     ]
 
     func testConstructorPageRenders() async throws {
@@ -60,31 +61,141 @@ final class BinderPageTests: XCTestCase {
         }
     }
 
+    /// Both pages offer packing (#48), and each writes it into its own output: the
+    /// constructor into `binders.yaml`, the builder into the spec it posts and shares.
+    func testBothPagesOfferPacking() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains("Pack short tunes onto shared pages"),
+                              "\(path) has no packing control")
+                XCTAssertTrue(html.contains(".break-btn"),
+                              "\(path) lost the per-entry break styles")
+                XCTAssertTrue(html.contains("TuneSelector.packs()"),
+                              "\(path) does not read the packing choice back out")
+            }
+        }
+        try await app.test(.GET, "binder-constructor") { res async in
+            XCTAssertTrue(res.body.string.contains("pack: true"))
+            XCTAssertTrue(res.body.string.contains("break: before"))
+        }
+        try await app.test(.GET, "binder-builder") { res async in
+            XCTAssertTrue(res.body.string.contains("spec.pack = true"))
+            XCTAssertTrue(res.body.string.contains("entry.break = 'before'"))
+        }
+    }
+
     /// The shared styles partial has to reach both pages.
     func testBothPagesCarryTheSharedStyles() async throws {
         for path in ["binder-constructor", "binder-builder"] {
             try await app.test(.GET, path) { res async in
-                XCTAssertTrue(res.body.string.contains(".part-tag.selected"), "\(path) lost the shared styles")
+                XCTAssertTrue(res.body.string.contains(".binder-entries .section-header.active"),
+                              "\(path) lost the shared styles")
             }
         }
     }
 
-    /// Both pages have sections (#29, #21). The constructor also hides part
-    /// tags, since an official binder takes each tune whole (#20), and needs
-    /// every section titled, since `binders.yaml` has no untitled sections.
-    func testSectionAndPartOptionsPerPage() async throws {
+    /// Both pages have sections (#29, #21). Only the constructor needs every
+    /// section titled, since `binders.yaml` has no untitled sections.
+    func testSectionOptionsPerPage() async throws {
         try await app.test(.GET, "binder-builder") { res async in
             let html = res.body.string
             XCTAssertTrue(html.contains("sections: true"))
             XCTAssertTrue(html.contains(".section-header"), "Section styles missing")
-            XCTAssertFalse(html.contains("parts: false"))
             XCTAssertFalse(html.contains("untitledSections: false"))
         }
         try await app.test(.GET, "binder-constructor") { res async in
             let html = res.body.string
             XCTAssertTrue(html.contains("sections: true"))
-            XCTAssertTrue(html.contains("parts: false"))
             XCTAssertTrue(html.contains("untitledSections: false"))
+        }
+    }
+
+    /// A section can be folded down to its header row (#45), so both pages need
+    /// the grouping markup's styles as well as the fold-everything control.
+    func testBothPagesCanFoldSections() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains(".section-group"), "\(path) lost the section grouping styles")
+                XCTAssertTrue(html.contains(".section-tunes"), "\(path) lost the folded-list styles")
+                XCTAssertTrue(html.contains(".fold-btn"), "\(path) lost the disclosure styles")
+            }
+        }
+    }
+  
+    /// A title page is a first-class thing to add, beside "add section" (#46),
+    /// and the header of a section that is one is marked as such.
+    func testBothPagesOfferATitlePage() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains("id=\"add-title-page\""), "\(path) has no title-page control")
+                XCTAssertTrue(html.contains(".section-header.title-page"),
+                              "\(path) lost the title-page header styles")
+                XCTAssertTrue(html.contains("textarea.section-title"),
+                              "\(path) still styles the title as a single-line input")
+            }
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            let js = res.body.string
+            XCTAssertTrue(js.contains("function addTitlePage()"), "the component cannot add a title page")
+            XCTAssertTrue(js.contains("createElement('textarea')"),
+                          "the component still edits a title on one line")
+        }
+    }
+
+    /// A table of contents is a third kind of thing to add, beside a section and
+    /// a title page (#47), and the header of a section that is one is marked as
+    /// such and kept out of the list of places a tune can go.
+    func testBothPagesOfferATableOfContents() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                let html = res.body.string
+                XCTAssertTrue(html.contains("id=\"add-toc\""), "\(path) has no table-of-contents control")
+                XCTAssertTrue(html.contains(".section-header.contents"),
+                              "\(path) lost the contents header styles")
+                XCTAssertTrue(html.contains("TuneSelector.isContents"),
+                              "\(path) does not write the contents section out")
+            }
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            let js = res.body.string
+            XCTAssertTrue(js.contains("function addTableOfContents()"),
+                          "the component cannot add a table of contents")
+            XCTAssertTrue(js.contains("isContents(sections[targetIdx])"),
+                          "a tune can still be moved into a table of contents")
+        }
+    }
+
+    /// The constructor writes `toc: true`; the builder writes it into the spec
+    /// it posts and shares.
+    func testEachPageWritesAContentsInItsOwnShape() async throws {
+        try await app.test(.GET, "binder-constructor") { res async in
+            XCTAssertTrue(res.body.string.contains("'      - toc: true'"),
+                          "the constructor cannot write a table of contents")
+        }
+        try await app.test(.GET, "binder-builder") { res async in
+            XCTAssertTrue(res.body.string.contains("section.toc = true"),
+                          "the builder cannot write a table of contents")
+        }
+    }
+
+    /// Neither page offers a part to choose (#24): every part of a tune is the
+    /// same multi-voice score until #20, so the tags could only mislead — and
+    /// the builder's default of "all parts selected" put the score in the
+    /// binder once per voice.
+    func testNoPageOffersPartSelection() async throws {
+        for path in ["binder-constructor", "binder-builder"] {
+            try await app.test(.GET, path) { res async in
+                XCTAssertFalse(res.body.string.contains("part-tag"), "\(path) still styles part tags")
+            }
+        }
+        try await app.test(.GET, "js/tune-selector.js") { res async in
+            XCTAssertEqual(res.status, .ok)
+            let js = res.body.string
+            XCTAssertFalse(js.contains("togglePart"), "the component still toggles parts")
+            XCTAssertFalse(js.contains("part-tag"), "the component still renders part tags")
         }
     }
 
@@ -95,6 +206,8 @@ final class BinderPageTests: XCTestCase {
             XCTAssertTrue(html.contains("id=\"binder-output\""))
             XCTAssertTrue(html.contains("'binders:'"))
             XCTAssertTrue(html.contains("- tune: "))
+            // A multi-line title is written as a YAML list, a one-line one as a string.
+            XCTAssertTrue(html.contains("title.length > 1"), "the constructor cannot write a multi-line title")
             XCTAssertFalse(html.contains("tune_slug"))
             XCTAssertFalse(html.contains("parts:`"), "the constructor must not emit parts")
             XCTAssertTrue(html.contains("/binder-constructor/check"))

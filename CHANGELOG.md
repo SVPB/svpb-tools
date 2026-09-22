@@ -6,6 +6,284 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-22
+
+### Added
+
+#### `Scripts/linux-tests.sh`: the CI suite, in a container, on a developer's machine
+
+- `swift test` on a Mac exercises SVGPDFKit's CoreGraphics path. The droplet runs the
+  rsvg-convert one, and the two have produced different PDFs from byte-identical input —
+  sbeitzel/SVGPDFKit#4 put every page against the top-left corner of its media box on Linux
+  only, which is how the binder margins in #62 went wrong in a way no local build could show.
+  `Scripts/linux-tests.sh` builds `test.dockerfile` — the CI image, Swift 6.3 plus
+  `librsvg2-bin` — and runs the suite there; arguments reach `swift test`.
+- It carries the two things that otherwise make a container run fail in confusing ways.
+  `swift test` under Docker Desktop **hangs part way through**, in XCTest's teardown, because
+  the VM kernel reports `CLOCK_MONOTONIC` at 1 ms resolution and CoreFoundation derives its
+  timebase from that, leaving every CFRunLoop deadline in the past
+  (swift-corelibs-foundation#5485); the script preloads SVGPDFKit's `Scripts/fineres.c` shim,
+  which reports the 1 ns resolution that calculation assumes and changes no clock value. And
+  the build tree goes in a Docker volume rather than `.build`, whose Linux module cache is
+  stamped with the absolute path it was built at — mount the repository anywhere but `/build`
+  and a shared `.build` fails with `missing required module 'SwiftShims'`.
+- The image and CI also install `qpdf`, for the tests rather than for the product. cairo
+  writes PDF 1.5 with its objects in compressed streams, so a test asserting a converted
+  page's media box had nothing to read on the very backend that ships; `qpdf` expands them
+  and the assertion runs on both. Without the tool the check skips rather than fails.
+- `.dockerignore` keeps `.build` — seven gigabytes of it — out of the build context, which
+  every image build here was sending.
+
+#### Short tunes can share a page in an assembled binder (#48)
+
+- A binder may now be **packed**: two short tunes in a row share a sheet instead of each taking
+  a page of its own. `binders.yaml` asks for it with `pack: true` beside the binder's `output`,
+  a personal binder asks with `"pack": true`, and both the binder constructor and the personal
+  builder offer it as "Pack short tunes onto shared pages".
+- It is off unless asked for, and it is a choice per binder rather than a rule. A tune starting
+  half way down a page cannot be pulled out and handed to one piper; a tune that would sit
+  across a fold may be better off starting fresh; and an official binder may well want "every
+  tune starts on its own page" as house style while a practice binder wants the paper back.
+- One entry at a time opts back out with **`break: before`** (`"break": "before"` in a personal
+  spec), which is the tune that has to open a page whatever the binder asked for. Both pages
+  offer it as a per-tune control, shown only while packing is on — with one tune to a page
+  there is nothing to opt out of.
+- **CeolKit already packed; our pipeline threw it away.** `VerticalLayoutEngine` opens a page
+  only when the one it is on cannot hold the next tune's title block and first system together
+  — but we only ever handed it one tune, so every tune arrived at assembly already committed to
+  whole sheets, most of them mostly blank, and nothing downstream could recover the space
+  without laying the music out again. A packed binder is therefore engraved a **run** at a time:
+  a maximal stretch of consecutive tunes with nothing between them that owns a page anyway.
+  Title pages and the table of contents end a run, which costs nothing because they were going
+  to take a page regardless.
+- **Concatenating ABC files is not appending them.** Several `%%ceolkit:` directives are written
+  in a file preamble and scoped to the file, so laid end to end a `%%ceolkit:scale 0.85` in one
+  tune would silently resize every tune after it. Each file's preamble is therefore hoisted into
+  its own tunes' headers, where ABC v2.2 §4.23 scopes it to the tune it was written for and
+  CeolKit honours that (sbeitzel/CeolKit#153). A packed binder prints what the separate renders
+  printed, only packed.
+- Two things are hoisted with care. `I:abc-include` is expanded before the move, because a blank
+  line in a style sheet means nothing in a file preamble but *ends a tune header*; and
+  `%%landscape` is re-stated where CeolKit can honour it, since a page cannot change size
+  part-way down and a change of orientation is only expressible beside a page break
+  (sbeitzel/CeolKit#158). A portrait tune following a landscape one therefore opens a fresh
+  page, which is the only thing it could do.
+- **The table of contents still tells the truth.** Which page a tune starts on stops being index
+  arithmetic once tunes share sheets, and nothing in the emitted SVG says it — so the run is
+  rendered through `renderDocument(_:)` and the page is read back from CeolKit's placement map
+  (sbeitzel/CeolKit#152). A listed tune names the page its music is actually printed on, and
+  that page prints that number.
+- Nothing about an unpacked binder changed, and packing never makes a binder longer. A tune too
+  tall to fit under the one before it opens its own page; a tune with no ABC on record arrives
+  as whole pages the build already made and cannot join a run, so it is set alone while its
+  neighbours still pack; and a run that cannot be engraved as one document falls back to
+  engraving its tunes one at a time, which is a thicker binder and not a wrong one.
+- Over the real `svpb-music` 2027 corpus, the "Full Binder" comes out 56 pages packed against
+  61 loose. Most of that binder is full-page landscape tunes; a binder of jigs and short marches
+  has far more to give back.
+
+#### A binder can carry a table of contents (#47)
+
+- A binder section may now declare itself the binder's **table of contents**. It expands at
+  assembly into one line per titled section and one per tune, each naming it and the page it
+  starts on: the name flush left, the number flush right, and a run of spaced periods filling
+  the gap. Tunes sit one step in under the section they belong to, so the listing reads as the
+  binder's shape rather than as a flat list.
+- `binders.yaml` writes it as `- toc: true`, beside the title pages and titled sections it
+  already had. `toc: { include: [tunes] }` — or `[sections]` — narrows what is listed. A
+  contents section's `title`, which it need not have, is the heading printed over the listing
+  rather than a title page of its own; without one the heading is "Contents".
+- A contents page is paper like any other, so it is counted into every page number after it,
+  and it prints no number of its own, exactly as a title page does not.
+- **Assembly became two passes.** A table of contents needs the page numbers and moves them, so
+  neither can be settled in one walk over the spec. Rendering and re-counting in a loop would
+  not settle either: adding a contents page can push a line onto another page, which changes
+  the count again. Instead the count of contents *lines* is known before anything is drawn —
+  resolving the spec settles what the binder holds, the contents pages are reserved from that
+  count, everything takes its number over the full ordered list, and the listing is drawn into
+  the reserved slots last.
+- Only what the binder actually holds is listed. A tune the catalogue cannot supply never
+  reaches the binder and so never reaches the contents, and a section that lost all of its
+  tunes takes its own line with it. A cover — a title page with no tunes under it — introduces
+  nothing and is not listed. A tune is named by its ABC `T:` title, falling back to its slug.
+- A listing always covers the whole binder wherever in it the pages sit, so a binder may carry
+  more than one and each says the same thing.
+- The numbers right-align on one margin however many digits they carry, so they read down the
+  page as a column. A name too long for its line is cut rather than shrunk or wrapped, and says
+  so with an ellipsis: one size down the whole listing would make the column of numbers mean
+  something else, and a wrapped name would put a number beside the wrong line.
+- The page holds to the same outlines contract as every other page in a binder — every glyph a
+  `<path>`, drawn through CeolKit's `TextOutliner` in the face the engraver sets tune titles in
+  — because no non-browser rasteriser honours `@font-face` and the runtime image installs no
+  fonts at all.
+- `binders.yaml` gained two checks: a section that is a table of contents and also names tunes
+  is rejected, since a table of contents is a page of its own and the file would not say where
+  the tunes were meant to go; and so is `include: []`, which would print a heading and nothing
+  under it.
+- The binder constructor and the personal binder builder both gained **"+ Add table of
+  contents"** beside "+ Add section" and "+ Add title page". Its header is tinted and marked,
+  it does not become the section the catalogue adds tunes to, and it is kept out of every way a
+  tune could be moved into it — the move-to-section menu, the reorder arrows at a section
+  boundary, and the section a removed section's tunes are handed to.
+
+#### Title pages are pages, not a property of the tunes after them (#46)
+
+- A binder section may now hold **no tunes at all**. Such a section is a title page and nothing
+  else. Before this a title existed only as a divider ahead of a run of tunes, so a section with
+  nothing in it was silently dropped — which made three ordinary things inexpressible: a cover
+  page belonging to the binder rather than to whatever tunes happened to follow it, two title
+  pages on consecutive pages, and a heading with nothing under it yet.
+- A title may now be **several lines**, written as a list where a string used to go. The lines are
+  engraved as a block, centred, with the first line largest and the rest set smaller at one shared
+  size, each shrinking to fit the page. `title: ["SVPB Music", "2027"]` is a cover; `title: "Parade
+  Set"` is what it always was.
+- Both shapes are accepted wherever a title is read, and a one-line title is written back out as
+  the bare string it came in as. Every `binders.yaml` in the music repository, every stored
+  `binder_requests` row, and every URL shared from the binder builder keeps working untouched.
+- A title page is counted but prints no number, as a divider always was — so a cover and two
+  headings mean the first tune opens on page 4, which is what a reader counts.
+- `binders.yaml` gained two checks the build now applies before accepting a file: a section with a
+  blank title and no tunes prints nothing and is rejected, and a binder of title pages alone is
+  rejected outright, since assembly needs at least one tune page and would otherwise fail long
+  after the file was committed.
+- The binder constructor and the personal binder builder both gained **"+ Add title page"** beside
+  "+ Add section". A title page's header is tinted and marked, has no disclosure triangle — there
+  is nothing under it to fold — and does not become the section the catalogue adds tunes to, since
+  a title page is a page rather than somewhere to put tunes. Section titles are edited in a text
+  box that grows with the lines typed into it.
+
+#### Sections in the binder list can be folded (#45)
+
+- Every section header in "Selected Entries" / "Your Binder" now carries a disclosure triangle
+  that folds the section down to its header row. A real binder runs to many sections of many
+  tunes, and the list was one flat `<ul>` taller than the viewport: moving a tune from an early
+  section to a late one meant scrolling past everything in between, with the header being aimed
+  at off-screen.
+- Folding is display only. It never touches the selection, the order, or the YAML — and because
+  the fold is held against the section itself rather than its position, it survives the rebuild
+  of the list that every add, reorder or retitle triggers, and follows a section that moves.
+- A folded section says how many tunes are under it, so a closed section still reports its size.
+- A tune that arrives in a folded section — added from the catalogue, moved in with the arrows,
+  or sent there by the move-to-section menu — opens that section, so a tune is never swallowed
+  by a fold.
+- A "Fold all" / "Show all" control sits beside the heading once there is more than one section.
+- The disclosure is a real button: reachable from the keyboard, carrying `aria-expanded` and
+  `aria-controls`, and distinct from the click on the header that makes a section active.
+
+#### The server says which music repository it is reading (#34)
+
+- The admin dashboard names the configured music repository directly above the "Known
+  Branches" list it explains. Until now `SVPB_MUSIC_REPO_URL` appeared only in the log line of
+  a *first* clone, so a server whose checkouts already existed never mentioned it again — and a
+  server pointed at a development repository looked exactly like one pointed at the band's.
+  Answering "which one is this?" meant SSHing to the droplet and reading the environment.
+- `GET /health` reports the same value as `music_repo`, so the wiring can be checked from a
+  monitor or a terminal without first finding a login. This is a deliberate exposure on an
+  unauthenticated endpoint: the repository is no secret to the band, and the question is most
+  worth asking by whoever has not signed in yet.
+- A URL that carries credentials as userinfo (`https://x-access-token:…@github.com/…`) is shown
+  with them removed in both places — a rendered page is where a token stops being a secret.
+- An unset `SVPB_MUSIC_REPO_URL` reads "not configured" rather than leaving a gap, because a
+  server wired to no repository is itself the thing worth noticing.
+- Read-only throughout: this adds no way to change the repository from the UI.
+
+### Changed
+
+#### CeolKit 1.6.0 -> 1.6.1, SVGPDFKit 0.3.0 -> 0.4.0
+
+- Both bumps are what #62 needed. CeolKit 1.6.1 states the engraved page in points on the root
+  `<svg>` (sbeitzel/CeolKit#165), so a page can be read back for what it is; SVGPDFKit 0.4.0 takes
+  `pageSize: nil` — "give each page the size its own SVG declares" (sbeitzel/SVGPDFKit#5) — which
+  is the only way a mixed-orientation binder is expressible in one conversion.
+- 0.4.0 also fixes the Linux page placement that put every page against the top-left corner of its
+  media box and left `2 × margin` as dead space at the right and bottom (sbeitzel/SVGPDFKit#4). It
+  was only ever visible in what the droplet produced; a local build went through CoreGraphics,
+  which centred correctly.
+- `convert(source:)`, `convert(sources:)` and `convert(sources:to:)` are deprecated upstream in
+  favour of `makePDF`, which reports what it could not do. Every call site here moved.
+
+#### `DividerPageRenderer` is now `TitlePageRenderer`, and draws text directly (#46)
+
+- The type is renamed for what it makes: a title page stands on its own, and calling it a divider
+  described only one of the places it can appear.
+- It no longer engraves the title by feeding CeolKit a fake tune (`X:1 / T:… / K:none`) and then
+  reverse-engineering the result — scraping `<use transform="translate(…)">` out of the rendered
+  page to find the title's width and moving it down the page. CeolKit 1.5.0 added `TextOutliner`
+  (sbeitzel/CeolKit#146) for exactly this case: text on a page with no music, outlined in the same
+  face and by the same metrics the engraver lays tune titles out with. Each line is one call.
+- With nothing passing through the ABC parser, the escaping that protected the `T:` field is gone.
+  `%` no longer has to become `\%`, a backslash no longer has to be doubled, and a line break can
+  no longer end the field and let the rest of a title be read as ABC. Whitespace within a line is
+  still collapsed, and blank lines are still dropped.
+- A one-line title lands exactly where it did before: centred, on the baseline 0.42 of the way
+  down a Letter page, at up to 45pt.
+
+### Fixed
+
+#### Binder pages are bound at the size they were engraved (#62)
+
+- The 2027 full binder went to Box as 65 portrait sheets with the music pushed left, shrunk, and
+  five blank inches at the foot of most pages. Measuring the staff lines gave two clusters, neither
+  centred and neither full width: 6.82″ on 48 pages and 6.62″ on 13, against the 7.5″ and 10″
+  CeolKit had engraved.
+- Nothing was wrong with the engraving. `SVGPDFConverter` was handed one page size for the whole
+  document — the default, portrait Letter — for a document whose tunes choose their own
+  orientation, and 65 of the 2027 branch's 84 tunes say `%%landscape 1`. A `792 × 612` page
+  aspect-fitted into portrait Letter less its margins is scaled by `540/792`: three quarters of the
+  binder printed at **68%**, and the 6pt staff gap came out at 4.09pt.
+- The remaining shrink was the margin, counted twice. `ConversionOptions.margin` defaults to 36pt,
+  but the SVG handed over *is* the page and already carries CeolKit's own 36pt margins, so the
+  converter inset the whole page again and scaled it to fit. That is the whole of the 6.62″
+  cluster, where there was no orientation mismatch to blame.
+- **A binder keeps each tune's own orientation**, which is what Gen.1 did and what the pipe major
+  asked for: a musician turns the page without noticing, and re-engraving a landscape tune onto a
+  portrait sheet would throw away 2.5″ of stave and force more systems of smaller music to save a
+  rotation nobody minds. So the page follows the engraving, never the reverse.
+- `ConversionOptions.engravedPages(logger:)` is now the one place that says how this server
+  converts engraved pages, and both callers use it: the per-tune PDFs a build writes and the
+  binders `BinderService` assembles. It sets `pageSize` to `nil`, so each page is the page its own
+  SVG declares; `margin` then does not apply, which is right; and it leaves page-number injection
+  off, since CeolKit numbers its pages in glyph outlines and there is no placeholder to rewrite.
+- Per-tune PDFs were shrinking the same way and are fixed by the same change: a landscape tune now
+  downloads as a landscape PDF.
+- The title and contents pages this server draws itself now state their size in **points** on the
+  root `<svg>`. A unitless 612 is 612 CSS pixels — 1/96 inch, not 1/72 — so front matter that did
+  not say `pt` would have been bound at three quarters of its size once the page came from the
+  document rather than from a constant.
+- `TunePageRenderer` and `TuneRunRenderer` still engrave for Letter, and still let `%%landscape`
+  win; only their comments claimed the two agreed. Packing (#48) needs no agreement about
+  orientation either — a run that turns the page mid-way produces pages of both sizes and each
+  goes into the PDF at the size it came out at.
+- Diagnostics from the converter now reach the Vapor logger rather than stderr, so a page whose
+  size had to be guessed from a `viewBox` — the one way a document can still be mis-sized — lands
+  where the operator reads the rest of the build.
+- One thing to know on the deploy: an SVG left in a branch's output directory by a **pre-1.6.1**
+  build states its page without units, and a binder that falls back to those pages (a tune with no
+  ABC on record) would bind them at three quarters size. Every build rewrites every page, so the
+  first build after this goes out clears it; there is nothing to migrate.
+
+#### The binder builder no longer offers a part to choose, and a binder holds each tune once (#24)
+
+- `/binder-builder` showed a clickable part tag per voice and sent the selection with the binder
+  spec, but no choice among them could be honoured: `BuildService` renders one PDF per `.abc` file
+  and gives every `Part` row of a tune the same pages, so "Harmony 1" and "Melody" are both the
+  whole multi-voice score. Deselecting down to one voice changed nothing in the PDF.
+- Worse, every part was selected by **default**, and the binder appended the score once per
+  selected part. A member who touched nothing got each harmonised tune twice or three times over.
+  That was live.
+- The tags and `togglePart` are gone from the shared component, so both pages now take a tune
+  whole. The constructor had already opted out (#21); it simply stops having to.
+- **An entry now resolves to one part however many it names.** The de-duplication is in
+  `BinderService`, not the page, because the specs that name every voice are already out there —
+  in shared URLs, in stored `BinderRequest` rows, in anything built from them. They assemble
+  correctly now. Page numbers count the de-duplicated pages, so three multi-voice tunes are pages
+  1, 2, 3 rather than 1, 4, 7.
+- A named part the build never converted no longer costs the tune its place: the entry falls
+  through to a part that does have pages.
+- The spec still carries `parts`, unchanged: the DTO, the `BinderRequest.definition` column and
+  every shared URL are written in it, and #20 is where the choice comes back — with per-part
+  rendering behind it to make it mean something.
+
 ## [0.3.0] - 2026-09-19
 
 ### Added

@@ -212,7 +212,7 @@ actor BuildService {
                 }
 
                 let pdfURL = outputDir.appendingPathComponent("\(stem).pdf")
-                try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL)
+                try convertToPDF(svgFiles: svgFiles, outputURL: pdfURL, logger: logger)
                 convertedTunes += 1
 
                 // ── catalogue population ────────────────────────────────────
@@ -940,9 +940,14 @@ actor BuildService {
 
     // MARK: - PDF conversion
 
-    private func convertToPDF(svgFiles: [URL], outputURL: URL) throws {
+    /// Renders one tune's engraved pages to its per-tune PDF.
+    ///
+    /// The pages go in at the size CeolKit engraved them — a tune that says
+    /// `%%landscape 1` is a landscape PDF — rather than being fitted onto a page size
+    /// chosen here; see `ConversionOptions.engravedPages(logger:)` (#62).
+    private func convertToPDF(svgFiles: [URL], outputURL: URL, logger: Logger) throws {
         let sources = svgFiles.map { SVGSource.fileURL($0) }
-        let converter = SVGPDFConverter()
-        try converter.convert(sources: sources, to: outputURL)
+        let converter = SVGPDFConverter(options: .engravedPages(logger: logger))
+        _ = try converter.makePDF(sources: sources, to: outputURL)
     }
 }

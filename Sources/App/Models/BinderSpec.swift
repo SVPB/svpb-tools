@@ -4,9 +4,9 @@ import Vapor
 
 /// The machine-readable definition of a personalised binder.
 ///
-/// A binder is always scoped to a single branch (year). Its tunes are grouped
-/// into ordered sections; a section with a title gets a divider page ahead of
-/// it in the generated PDF, and a section without one does not.
+/// A binder is always scoped to a single branch (year). Its contents are grouped
+/// into ordered sections; a titled section gets a title page ahead of it in the
+/// generated PDF, and an untitled one does not.
 ///
 /// Example (encoded as the `definition` JSON column in `BinderRequest`):
 /// ```json
@@ -14,6 +14,7 @@ import Vapor
 ///   "name": "My Binder - March 2026",
 ///   "branch": "2026",
 ///   "sections": [
+///     { "title": ["SVPB Music", "2026"], "entries": [] },
 ///     { "title": null,
 ///       "entries": [ { "tune_slug": "amazing_grace", "parts": ["Melody"] } ] },
 ///     { "title": "Parade Set",
@@ -23,9 +24,31 @@ import Vapor
 /// }
 /// ```
 ///
-/// Sections nest rather than sitting inline as divider markers in one flat list
+/// Sections nest rather than sitting inline as title markers in one flat list
 /// so that this shape matches the `sections` of `binders.yaml`, which the shared
 /// tune-selection component also has to produce for the binder constructor.
+///
+/// ## Title pages
+///
+/// A section that holds no entries is not an error and is not dropped: it is a
+/// title page and nothing else (#46). That is how a binder gets front matter
+/// that belongs to the binder rather than to the tunes after it, and how two
+/// title pages come to sit on consecutive pages — each is its own section.
+///
+/// ## Table of contents
+///
+/// A section may declare itself the binder's table of contents (#47) rather
+/// than being a title page or a run of tunes. It expands at assembly into one
+/// line per listed thing, each carrying the page it starts on.
+///
+/// ## Packing
+///
+/// A binder may ask for its tunes to be **packed** (#48): two short tunes in a
+/// row then share a page instead of each taking one of its own. It is a choice
+/// per binder rather than a rule, because a tune starting half way down a page
+/// cannot be pulled out and handed to one piper, and an official binder may
+/// well want "every tune starts on its own page" as house style. One entry at a
+/// time can opt back out with ``BinderPageBreak/before``.
 ///
 /// ## The flat shape
 ///
@@ -40,13 +63,20 @@ public struct BinderSpec: Codable, Content, Sendable {
     /// Git branch (year) that all entries in this binder draw from.
     public let branch: String
 
-    /// Ordered sections, each an ordered list of tune+part selections.
+    /// Ordered sections, each an ordered list of tune+part selections, a title
+    /// page, or both.
     public let sections: [BinderSection]
 
-    public init(name: String, branch: String, sections: [BinderSection]) {
+    /// Whether consecutive tunes may share a page (#48). `false` — one tune per
+    /// page, as every binder was assembled before packing existed — unless the
+    /// binder asks otherwise.
+    public let pack: Bool
+
+    public init(name: String, branch: String, sections: [BinderSection], pack: Bool = false) {
         self.name = name
         self.branch = branch
         self.sections = sections
+        self.pack = pack
     }
 
     /// Every entry in binder order, across all sections.
@@ -55,13 +85,14 @@ public struct BinderSpec: Codable, Content, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, branch, sections, entries
+        case name, branch, sections, entries, pack
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         branch = try container.decode(String.self, forKey: .branch)
+        pack = try container.decodeIfPresent(Bool.self, forKey: .pack) ?? false
         if let sections = try container.decodeIfPresent([BinderSection].self, forKey: .sections) {
             self.sections = sections
         } else {
@@ -70,37 +101,254 @@ public struct BinderSpec: Codable, Content, Sendable {
         }
     }
 
+    /// Writes `pack` only where it is asked for, so every spec stored or shared
+    /// before packing existed encodes byte-identically.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(branch, forKey: .branch)
         try container.encode(sections, forKey: .sections)
+        if pack { try container.encode(true, forKey: .pack) }
+    }
+}
+
+// MARK: - BinderTitle
+
+/// The text engraved on one title page: one line, or several stacked as a block.
+///
+/// Written as either a string or a list of strings, so every title written
+/// before multi-line titles existed (#46) still decodes:
+/// ```json
+/// "title": "Parade Set"
+/// "title": ["SVPB Music", "2027"]
+/// ```
+/// and a one-line title encodes back to the bare string it came in as, which
+/// keeps stored `BinderRequest` definitions and shared URLs byte-identical
+/// across this change.
+public struct BinderTitle: Codable, Sendable, Equatable,
+                           ExpressibleByStringLiteral, ExpressibleByArrayLiteral {
+
+    /// The lines as written, before any tidying. See ``pageLines``.
+    public let lines: [String]
+
+    public init(_ lines: [String]) {
+        self.lines = lines
+    }
+
+    public init(stringLiteral value: String) {
+        self.lines = [value]
+    }
+
+    public init(arrayLiteral elements: String...) {
+        self.lines = elements
+    }
+
+    /// The lines actually engraved: each with its internal whitespace collapsed
+    /// and its ends trimmed, and blank lines dropped.
+    ///
+    /// Empty when the title has nothing to draw, which is how a title that is
+    /// only whitespace comes to mean "no title page" rather than "a blank page".
+    public var pageLines: [String] {
+        lines
+            .map { $0.replacing(/[\s\p{Cc}]+/, with: " ").trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// True when this title would engrave nothing.
+    public var isEmpty: Bool { pageLines.isEmpty }
+
+    /// The title on one line, for logs and error messages.
+    public var display: String { pageLines.joined(separator: " / ") }
+
+    /// The title as one run of text, for a line that has no room to stack it —
+    /// a contents entry, or the heading over a table of contents (#47).
+    public var oneLine: String { pageLines.joined(separator: " ") }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let single = try? container.decode(String.self) {
+            lines = [single]
+        } else {
+            lines = try container.decode([String].self)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        if lines.count == 1 {
+            try container.encode(lines[0])
+        } else {
+            try container.encode(lines)
+        }
+    }
+}
+
+// MARK: - TableOfContentsSpec
+
+/// A declared table of contents: the pages listing what the binder holds and
+/// where each of them starts (#47).
+///
+/// Written as a flag where nothing more is wanted, or as a mapping that narrows
+/// what is listed:
+/// ```yaml
+/// - toc: true
+/// - toc:
+///     include: [tunes]
+/// ```
+/// A contents listing always covers the **whole** binder, wherever in it the
+/// contents pages sit — a binder may declare more than one, and each says the
+/// same thing.
+public struct TableOfContentsSpec: Codable, Sendable, Equatable {
+
+    /// A kind of thing a contents listing names.
+    public enum Listing: String, Codable, Sendable, CaseIterable {
+        /// The title page over a run of tunes, listed at the page it occupies.
+        case sections
+        /// Each tune, listed at the page it opens on.
+        case tunes
+    }
+
+    /// What this listing names, in the order the kinds nest. Both by default.
+    public let include: [Listing]
+
+    /// - Parameter include: The kinds to list. Order and repeats are ignored:
+    ///   the value is normalised to `Listing.allCases` order.
+    public init(include: [Listing] = Listing.allCases) {
+        self.include = Listing.allCases.filter(include.contains)
+    }
+
+    /// Whether section titles get a line of their own.
+    public var listsSections: Bool { include.contains(.sections) }
+
+    /// Whether each tune gets a line of its own.
+    public var listsTunes: Bool { include.contains(.tunes) }
+
+    /// True when the listing would name nothing at all, which is a contents
+    /// page carrying only its heading.
+    public var isEmpty: Bool { include.isEmpty }
+
+    enum CodingKeys: String, CodingKey {
+        case include
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(include: try container.decodeIfPresent([Listing].self, forKey: .include)
+            ?? Listing.allCases)
+    }
+
+    /// Encodes back to the shape it was written in: the bare `true` when it
+    /// lists everything, and the mapping only when it has been narrowed. A spec
+    /// stored or shared before narrowing existed is unchanged by a round trip.
+    public func encode(to encoder: any Encoder) throws {
+        guard include != Listing.allCases else {
+            var container = encoder.singleValueContainer()
+            try container.encode(true)
+            return
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(include, forKey: .include)
+    }
+
+    /// The contents declaration under `key`, or `nil` where there is none.
+    ///
+    /// `toc: true` and `toc: { include: … }` both declare one; `toc: false`,
+    /// `toc: null`, and an absent key all decline one, so a section can say
+    /// "not a table of contents" as plainly as it says the opposite.
+    static func decode<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key
+    ) throws -> TableOfContentsSpec? {
+        guard container.contains(key), try !container.decodeNil(forKey: key) else { return nil }
+        if let declared = try? container.decode(Bool.self, forKey: key) {
+            return declared ? TableOfContentsSpec() : nil
+        }
+        return try container.decode(TableOfContentsSpec.self, forKey: key)
     }
 }
 
 // MARK: - BinderSection
 
-/// A run of consecutive tunes in a binder, optionally introduced by a divider page.
+/// A run of consecutive tunes in a binder, optionally introduced by a title page.
+///
+/// Either half may be missing. A section with entries and no title is a run of
+/// tunes that simply follows the previous section's; a section with a title and
+/// no entries is a title page on its own, which is what makes binder front
+/// matter and consecutive title pages expressible (#46).
+///
+/// A section may instead declare itself the binder's table of contents (#47).
+/// That is a third kind of thing rather than a title page with a list under it:
+/// its `title`, if it has one, is the heading printed over the listing rather
+/// than a title page of its own, and it holds no tunes.
 public struct BinderSection: Codable, Content, Sendable {
 
-    /// The divider page title. `nil`, empty, or all-whitespace means the section
-    /// has no divider and its tunes simply follow the previous section's.
-    public let title: String?
+    /// The title page ahead of this section. `nil`, empty, or all-whitespace
+    /// means the section has no title page.
+    ///
+    /// On a contents section this is the heading over the listing instead, and
+    /// a section without one is headed ``TableOfContentsRenderer/defaultHeading``.
+    public let title: BinderTitle?
 
-    /// Ordered list of tune+part selections in this section.
+    /// Ordered list of tune+part selections in this section. Empty when the
+    /// section is a title page and nothing more.
     public let entries: [BinderEntry]
 
-    public init(title: String?, entries: [BinderEntry]) {
+    /// The table of contents this section is, or `nil` when it is not one (#47).
+    public let toc: TableOfContentsSpec?
+
+    public init(title: BinderTitle?, entries: [BinderEntry], toc: TableOfContentsSpec? = nil) {
         self.title = title
         self.entries = entries
+        self.toc = toc
     }
 
-    /// The title to print on the divider page, or `nil` when there is no divider.
-    public var dividerTitle: String? {
-        guard let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
-        return trimmed
+    /// The title page to engrave ahead of this section, or `nil` when there is
+    /// none — which a contents section never has, its title being a heading.
+    public var titlePage: BinderTitle? {
+        guard toc == nil, let title, !title.isEmpty else { return nil }
+        return BinderTitle(title.pageLines)
     }
+
+    /// The heading printed over this section's contents listing.
+    public var contentsHeading: String {
+        guard let title, !title.isEmpty else { return TableOfContentsRenderer.defaultHeading }
+        return title.oneLine
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case title, entries, toc
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decodeIfPresent(BinderTitle.self, forKey: .title)
+        entries = try container.decodeIfPresent([BinderEntry].self, forKey: .entries) ?? []
+        toc = try TableOfContentsSpec.decode(from: container, forKey: .toc)
+    }
+
+    /// Writes `toc` only when there is one, so every spec written before a
+    /// binder could carry a contents listing encodes byte-identically.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encode(entries, forKey: .entries)
+        try container.encodeIfPresent(toc, forKey: .toc)
+    }
+}
+
+// MARK: - BinderPageBreak
+
+/// A page break an entry asks for, over and above the ones the layout decides (#48).
+///
+/// Written as `break: before`, in the personal spec and in `binders.yaml` alike.
+/// There is one case because there is one thing to ask for: a tune that must open
+/// a page even in a binder that packs. "After" would say nothing a break before
+/// the next tune does not already say, and the last tune of a binder has no after.
+public enum BinderPageBreak: String, Codable, Sendable, Equatable {
+
+    /// This tune starts a page of its own, however well it would have fitted
+    /// under the tune ahead of it.
+    case before
 }
 
 // MARK: - BinderEntry
@@ -114,13 +362,25 @@ public struct BinderEntry: Codable, Content, Sendable {
     /// One or more part names to include, e.g. `["Melody", "Harmony 1"]`.
     public let parts: [String]
 
-    public init(tuneSlug: String, parts: [String]) {
+    /// A page break this entry asks for, or `nil` for none (#48). Meaningless in
+    /// a binder that does not pack, where every tune starts a page anyway.
+    public let pageBreak: BinderPageBreak?
+
+    public init(tuneSlug: String, parts: [String], pageBreak: BinderPageBreak? = nil) {
         self.tuneSlug = tuneSlug
         self.parts = parts
+        self.pageBreak = pageBreak
     }
 
+    /// Whether this tune has to open a page of its own.
+    public var breaksBefore: Bool { pageBreak == .before }
+
+    /// `break` is written as the key, because that is what it is called in the
+    /// file a pipe major edits; the synthesised coding leaves it out where there
+    /// is none, so an entry written before #48 round-trips unchanged.
     enum CodingKeys: String, CodingKey {
         case tuneSlug = "tune_slug"
         case parts
+        case pageBreak = "break"
     }
 }

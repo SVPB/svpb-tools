@@ -1,5 +1,5 @@
 {
-  "originHash" : "3656fc0649929707f05be8c4306f59868fd690690ed694c29ecab46e9f3c1d0c",
+  "originHash" : "46dbb615f4d7f353ea6d717c5778755d96e1f8afcb9704af60cae5d1e2581157",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sbeitzel/CeolKit.git",
       "state" : {
-        "revision" : "e5d9931da5c094caacb82c7a44b2e19edac56c8f",
-        "version" : "1.6.0"
+        "revision" : "c8e1a1b21e9e2fe0ed403c0e90b52c85e369c508",
+        "version" : "1.6.1"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sbeitzel/SVGPDFKit.git",
       "state" : {
-        "revision" : "bbcaa26858401fdb0b1a89941e7b3227c74d84d7",
-        "version" : "0.3.0"
+        "revision" : "19f1a22c673394485912aeda19218bcc4fbe61fd",
+        "version" : "0.4.0"
       }
     },
     {

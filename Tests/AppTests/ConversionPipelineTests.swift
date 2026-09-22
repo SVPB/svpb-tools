@@ -1,8 +1,10 @@
 import CeolKitParser
 import CeolKitSVGRenderer
 import Foundation
+import Logging
 import SVGPDFKit
 import XCTest
+@testable import App
 
 /// Covers the ABC → SVG → PDF pipeline that `BuildService` drives.
 ///
@@ -72,7 +74,8 @@ final class ConversionPipelineTests: XCTestCase {
         let pages = try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score)
 
         let sources = pages.map { SVGSource.data(Data($0.utf8)) }
-        let pdf = try SVGPDFConverter().convert(sources: sources)
+        let converter = SVGPDFConverter(options: .engravedPages(logger: Logger(label: "test")))
+        let pdf = try converter.makePDF(sources: sources).pdfData
 
         XCTAssertTrue(pdf.starts(with: Data("%PDF".utf8)), "Output is not a PDF")
         XCTAssertGreaterThan(pdf.count, 1_000, "PDF is implausibly small")
@@ -155,7 +158,8 @@ final class ConversionPipelineTests: XCTestCase {
         #else
         let parsed = CeolKitParser().parse(sampleABC, options: .default)
         let pages = try SVGRenderer(config: .init(pageSize: .letter)).render(parsed.score)
-        let pdf = try SVGPDFConverter().convert(sources: pages.map { SVGSource.data(Data($0.utf8)) })
+        let converter = SVGPDFConverter(options: .engravedPages(logger: Logger(label: "test")))
+        let pdf = try converter.makePDF(sources: pages.map { SVGSource.data(Data($0.utf8)) }).pdfData
 
         // Latin-1 maps every byte to exactly one scalar and never fails, so the ASCII
         // font dictionaries survive the binary content streams around them. librsvg's

@@ -3,8 +3,9 @@ import Vapor
 
 /// Handles `GET /health`.
 ///
-/// Returns a JSON summary of server status — branch list and most recent build —
-/// queried live from SQLite.  Suitable for an uptime monitor or a status widget.
+/// Returns a JSON summary of server status — the music repository it is wired to, its
+/// branch list and its most recent build — queried live from SQLite.  Suitable for an
+/// uptime monitor or a status widget.
 struct HealthController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         routes.get("health", use: health)
@@ -36,7 +37,8 @@ struct HealthController: RouteCollection {
         return HealthResponse(
             status: .ok,
             branches: branches,
-            lastBuild: lastBuild
+            lastBuild: lastBuild,
+            musicRepo: req.application.gitService.configuredRepoURL
         )
     }
 }

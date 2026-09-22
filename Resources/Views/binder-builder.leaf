@@ -90,9 +90,14 @@ TuneSelector.init({
         const saved = Array.isArray(spec.sections)
           ? spec.sections
           : [{ title: '', entries: spec.entries || [] }];
+        TuneSelector.setPacks(spec.pack);
+        // `title` is a string or, since #46, a list of lines; `load` takes either.
         await TuneSelector.load(saved.map(s => ({
           title: s.title || '',
-          entries: (s.entries || []).map(e => ({ tuneSlug: e.tune_slug, parts: e.parts })),
+          toc: !!s.toc,
+          entries: (s.entries || []).map(e => ({
+            tuneSlug: e.tune_slug, parts: e.parts, pageBreak: e.break === 'before',
+          })),
         })));
       }
     } catch (_) { /* ignore malformed spec */ }
@@ -169,14 +174,37 @@ function copyShareURL() {
 }
 
 function buildSpec(branch, name) {
-  return {
+  const spec = {
     name,
     branch,
-    sections: TuneSelector.sections().map(s => ({
-      title: s.title.trim() || null,
-      entries: s.entries.map(e => ({ tune_slug: e.tuneSlug, parts: e.parts })),
-    })),
+    // A section with neither a title nor any tunes prints nothing; one with a
+    // title and no tunes is a title page and goes in as it stands (#46), and a
+    // table of contents goes in with or without a heading (#47). One line is
+    // written as a string, as every spec before #46 was, so a binder shared
+    // today decodes the same way as one shared last week, and `toc` is written
+    // only where there is one.
+    sections: TuneSelector.sections()
+      .filter(s => s.entries.length > 0 || TuneSelector.titleLines(s).length > 0
+                || TuneSelector.isContents(s))
+      .map(s => {
+        const title = TuneSelector.titleLines(s);
+        const section = {
+          title: title.length > 1 ? title : (title[0] || null),
+          entries: s.entries.map(e => {
+            const entry = { tune_slug: e.tuneSlug, parts: e.parts };
+            // Only meaningful in a packed binder, so only written in one.
+            if (TuneSelector.packs() && e.pageBreak) entry.break = 'before';
+            return entry;
+          }),
+        };
+        if (TuneSelector.isContents(s)) section.toc = true;
+        return section;
+      }),
   };
+  // Written only where it is asked for, so a binder shared today decodes the same
+  // way as one shared before packing existed.
+  if (TuneSelector.packs()) spec.pack = true;
+  return spec;
 }
 
 // `btoa` accepts only Latin-1, and section titles are free text ("Sìne Bhàn"),
