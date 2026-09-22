@@ -81,6 +81,13 @@ RUN set -eu; \
       fi; \
     done
 
+# The commit this image was built from, passed in by CI (#65) and reported by
+# /health and the page footers. Declared in this stage, not the build stage, so
+# a new commit never invalidates the `swift build` layer; unset, the server
+# reports the bare release number.
+ARG GIT_COMMIT=
+ENV TNG_GIT_COMMIT=$GIT_COMMIT
+
 # The database and built PDFs live on the named volume, not in the image.
 RUN mkdir -p data
 

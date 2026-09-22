@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### The server says which commit it is running (#65)
+
+- The droplet runs the `develop` image, so between releases every build it pulled said `0.4.0`,
+  and "is the fix merged an hour ago live yet?" meant logging in and running `docker inspect`.
+  `/health`, the admin login page and the page footers now read `0.4.0+a3a6f58`, and `/health`
+  reports the full sha as `commit`.
+- CI passes `github.sha` into the image build, and the Dockerfile sets it as `TNG_GIT_COMMIT` in
+  the runtime stage only, so a new commit never invalidates the `swift build` layer. Tagged
+  releases carry the commit too.
+- Where the variable is unset — `swift run`, the tests, a local `docker-compose.build.yml`
+  build — the version is the bare release, as before, and `commit` is absent. The release
+  process now bumps `AppVersion.release`; `AppVersion.current` is derived from it.
+
 #### The binder constructor reads `binders.yaml` back in (#60)
 
 - The page was write-only: it generated YAML and could check pasted YAML, but threw the decoded
