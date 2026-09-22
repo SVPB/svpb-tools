@@ -188,6 +188,9 @@ actor BinderService {
         let level: Int
         /// The name printed on the line.
         let text: String
+        /// What tells this line apart from others of the same name, printed after
+        /// it where there is room (#68). Only tunes have one.
+        var subtitle: String? = nil
     }
 
     /// Resolves `spec` to the binder's pages, in order: each section's title page, then
@@ -317,7 +320,8 @@ actor BinderService {
         for slot in reserved {
             let entries = listing(plan, for: slot.toc).compactMap { listed in
                 starts[listed.item].map {
-                    TableOfContentsRenderer.Entry(text: listed.text, level: listed.level, page: $0)
+                    TableOfContentsRenderer.Entry(text: listed.text, subtitle: listed.subtitle,
+                                                  level: listed.level, page: $0)
                 }
             }
             let drawn: [TableOfContentsRenderer.Page]
@@ -363,7 +367,8 @@ actor BinderService {
                 return ListedItem(item: index, level: 0, text: title.oneLine)
             case .tune(let resolution):
                 guard toc.listsTunes else { return nil }
-                return ListedItem(item: index, level: tuneLevel, text: resolution.displayName)
+                return ListedItem(item: index, level: tuneLevel, text: resolution.displayName,
+                                  subtitle: resolution.subtitle)
             case .contents:
                 return nil
             }
@@ -476,6 +481,10 @@ actor BinderService {
         /// The tune's title, or its slug where the ABC gave none: what a table of
         /// contents names it as (#47).
         let displayName: String
+        /// The tune's further `T:` lines, as the catalogue joined them — what tells
+        /// a harmony apart from the melody it shares a title with (#68). `nil` where
+        /// the ABC carried only the one title.
+        let subtitle: String?
         let partName: String
         /// The tune's ABC source, when the catalogue has one to re-engrave.
         let abcURL: URL?
@@ -530,6 +539,7 @@ actor BinderService {
         // carry; the slug is the filename, which it always does.
         let titled = tune.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let displayName = titled.isEmpty ? entry.tuneSlug : titled
+        let subtitle = tune.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Named parts first, in the order the entry names them, so an entry that asks for
         // one particular part still gets that part's record. An entry that names none —
@@ -568,7 +578,9 @@ actor BinderService {
             }
             logger.debug("[BinderService] \(label): resolved \(paths.count) page(s) for '\(entry.tuneSlug)' / '\(part.name)'")
             return Resolution(slug: entry.tuneSlug, breaksBefore: entry.breaksBefore,
-                              displayName: displayName, partName: part.name,
+                              displayName: displayName,
+                              subtitle: subtitle?.isEmpty == false ? subtitle : nil,
+                              partName: part.name,
                               abcURL: abcURL, prebuiltPaths: paths)
         }
 

@@ -50,6 +50,12 @@ struct TableOfContentsRenderer: Sendable {
         /// The name printed flush left: a section's title, or a tune's.
         let text: String
 
+        /// What tells this line apart from others with the same ``text`` — a
+        /// tune's further `T:` lines, such as "Harmony 1" (#68). Printed after the
+        /// name as `Title / Subtitle` when the line has room for both, and left
+        /// off when it has not. Sections have none.
+        let subtitle: String?
+
         /// How far the line is indented, in steps of ``indent``. Sections sit at
         /// 0 and the tunes under them at 1 — or at 0 themselves, in a listing
         /// that names no sections for them to sit under.
@@ -58,10 +64,16 @@ struct TableOfContentsRenderer: Sendable {
         /// The binder page this thing starts on, printed flush right.
         let page: Int
 
-        init(text: String, level: Int, page: Int) {
+        init(text: String, subtitle: String? = nil, level: Int, page: Int) {
             self.text = text
+            self.subtitle = subtitle
             self.level = level
             self.page = page
+        }
+
+        /// The name as one string, the way the line prints it when it fits.
+        var name: String {
+            subtitle.map { "\(text) / \($0)" } ?? text
         }
     }
 
@@ -71,6 +83,10 @@ struct TableOfContentsRenderer: Sendable {
     /// page in a binder whose meaning is not readable from what it draws: every
     /// glyph on it is a `<path>`, so nothing downstream — a test, a log — can
     /// tell what it says from the SVG alone.
+    ///
+    /// So they are the entries *as printed*, not as asked for: a subtitle with no
+    /// room on its line comes back as `nil`, and a name that had to be cut comes
+    /// back cut (#68).
     struct Page: Sendable {
         let svg: String
         let entries: [Entry]
@@ -156,9 +172,7 @@ struct TableOfContentsRenderer: Sendable {
             let capacity = index == 0 ? linesOnFirstPage : linesOnLaterPages
             let onThisPage = Array(remaining.prefix(capacity))
             remaining = remaining.dropFirst(onThisPage.count)
-            pages.append(Page(
-                svg: try page(heading: index == 0 ? heading : nil, entries: onThisPage),
-                entries: onThisPage))
+            pages.append(try page(heading: index == 0 ? heading : nil, entries: onThisPage))
         }
         return pages
     }
@@ -173,8 +187,9 @@ struct TableOfContentsRenderer: Sendable {
     }
 
     /// One page: its heading, if it is the first, and its share of the entries.
-    private func page(heading: String?, entries: [Entry]) throws -> String {
+    private func page(heading: String?, entries: [Entry]) throws -> Page {
         var body: [String] = []
+        var printed: [Entry] = []
         var baseline: Double
 
         if let heading {
@@ -188,21 +203,23 @@ struct TableOfContentsRenderer: Sendable {
         }
 
         for entry in entries {
-            body.append(contentsOf: try line(entry, baseline: baseline))
+            let line = try line(entry, baseline: baseline)
+            body.append(contentsOf: line.drawn)
+            printed.append(line.printed)
             baseline += lineHeight
         }
-        return document(body: body)
+        return Page(svg: document(body: body), entries: printed)
     }
 
-    /// One entry's name, leader, and page number, all on `baseline`.
-    private func line(_ entry: Entry, baseline: Double) throws -> [String] {
+    /// One entry's name, leader, and page number, all on `baseline`, and the
+    /// entry as it was printed.
+    private func line(_ entry: Entry, baseline: Double) throws -> (drawn: [String], printed: Entry) {
         let number = try TextOutliner.outline(String(entry.page), face: face, fontSize: entryFontSize)
         let numberX = pageSize.width - margin - number.advanceWidth
         let nameX = margin + Double(max(0, entry.level)) * indent
+        let printed = try fitted(entry, toFit: numberX - minimumSeparation - nameX)
 
-        let name = try TextOutliner.outline(
-            try shortened(entry.text, toFit: numberX - minimumSeparation - nameX),
-            face: face, fontSize: entryFontSize)
+        let name = try TextOutliner.outline(printed.name, face: face, fontSize: entryFontSize)
 
         var drawn: [String] = []
         if !name.svg.isEmpty {
@@ -215,7 +232,27 @@ struct TableOfContentsRenderer: Sendable {
         if !number.svg.isEmpty {
             drawn.append(place(number.svg, x: numberX, y: baseline))
         }
-        return drawn
+        return (drawn, printed)
+    }
+
+    /// `entry` as its line has room to print it in `width`.
+    ///
+    /// The subtitle goes on only if title and subtitle fit whole. Otherwise it is
+    /// dropped and the title alone is shortened as any long name is: a subtitle
+    /// is what tells variants of one tune apart, but a line that cannot hold the
+    /// title has no room to tell anything apart with (#68). The alternative —
+    /// keeping the subtitle and cutting the title to make room for it — is left
+    /// until a real binder shows it is needed.
+    ///
+    /// Never wraps: the line height is what ``pageCount(forEntries:)`` counts
+    /// pages by, and it counted them before any name was measured.
+    private func fitted(_ entry: Entry, toFit width: Double) throws -> Entry {
+        if entry.subtitle != nil, width > 0,
+           try TextOutliner.width(of: entry.name, face: face, fontSize: entryFontSize) <= width {
+            return entry
+        }
+        return Entry(text: try shortened(entry.text, toFit: width), subtitle: nil,
+                     level: entry.level, page: entry.page)
     }
 
     /// The run of spaced periods filling `from`…`to`, right-aligned on `to` so

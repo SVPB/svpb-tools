@@ -419,6 +419,31 @@ final class BinderGenerationTests: XCTestCase {
         XCTAssertEqual(contents(pages).first?.map(\.text), ["Scotland the Brave", "untitled_tune"])
     }
 
+    /// Variants of one tune share a title, so each is listed with the further `T:`
+    /// line that names it; one whose subtitle is blank is listed by its title alone (#68).
+    func testVariantsOfATuneAreListedWithTheirSubtitles() async throws {
+        try await seedTune("parting_glass", branch: branch, title: "Parting Glass")
+        try await seedTune("parting_glass_h1", branch: branch, title: "Parting Glass", subtitle: "Harmony 1")
+        try await seedTune("parting_glass_h2", branch: branch, title: "Parting Glass", subtitle: " Harmony 2 ")
+        try await seedTune("parting_glass_blank", branch: branch, title: "Parting Glass", subtitle: "  ")
+
+        let spec = BinderSpec(name: "Variants", branch: "2026", sections: [
+            BinderSection(title: nil, entries: [], toc: TableOfContentsSpec()),
+            BinderSection(title: nil, entries: [entry("parting_glass"), entry("parting_glass_h1"),
+                                                entry("parting_glass_h2"), entry("parting_glass_blank")]),
+        ])
+
+        let pages = try await service.pages(for: spec, label: "test", db: app.db, logger: app.logger)
+        let listing = try XCTUnwrap(contents(pages).first)
+        XCTAssertEqual(listing.map(\.name), [
+            "Parting Glass",
+            "Parting Glass / Harmony 1",
+            "Parting Glass / Harmony 2",
+            "Parting Glass",
+        ])
+        XCTAssertEqual(listing.map(\.subtitle), [nil, "Harmony 1", "Harmony 2", nil])
+    }
+
     /// `include:` narrows what is listed. With no sections in the listing there
     /// is nothing for the tunes to sit under, so they are set flush left — which
     /// is also what a binder with no titled sections gets.
@@ -754,7 +779,7 @@ final class BinderGenerationTests: XCTestCase {
     /// Writes a tune's ABC where the build would, engraves it, and records both in the
     /// catalogue — the shape `BinderService` re-engraves from and falls back to.
     private func seedTune(_ slug: String, branch: Branch, pages: Int = 1,
-                          title: String? = nil, untitled: Bool = false,
+                          title: String? = nil, subtitle: String? = nil, untitled: Bool = false,
                           landscape: Bool = false, footer: String = "$P",
                           extraParts: [String] = []) async throws {
         let body = "ABcd efga | gfed cBAG | ABcd efga | g2 f2 e2 d2 |]"
@@ -788,6 +813,7 @@ final class BinderGenerationTests: XCTestCase {
         // file carried no title at all.
         let tune = try Tune(branch: branch, slug: slug,
                             title: untitled ? nil : (title ?? slug),
+                            subtitle: subtitle,
                             abcPath: abcURL.path)
         try await tune.save(on: app.db)
         // Every part points at the same pages, which is what the build produces today:
