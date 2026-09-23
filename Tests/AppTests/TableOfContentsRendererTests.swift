@@ -20,8 +20,9 @@ final class TableOfContentsRendererTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func entry(_ text: String, level: Int = 0, page: Int) -> TableOfContentsRenderer.Entry {
-        TableOfContentsRenderer.Entry(text: text, level: level, page: page)
+    private func entry(_ text: String, subtitle: String? = nil, level: Int = 0,
+                       page: Int) -> TableOfContentsRenderer.Entry {
+        TableOfContentsRenderer.Entry(text: text, subtitle: subtitle, level: level, page: page)
     }
 
     /// One positioned run of glyphs: where its pen origin sits, and how many
@@ -171,6 +172,54 @@ final class TableOfContentsRendererTests: XCTestCase {
         XCTAssertLessThanOrEqual(try width(shortened), available)
         XCTAssertEqual(drawn[0].glyphs, shortened.filter { !$0.isWhitespace }.count,
                        "The page drew something other than the shortened name")
+    }
+
+    // MARK: - Subtitles
+
+    /// Variants of one tune share a title, so the line names the variant after
+    /// it — which is the only thing on the page telling them apart (#68).
+    func testASubtitleThatFitsIsPrintedAfterTheTitle() throws {
+        let page = try render([
+            entry("Parting Glass", page: 12),
+            entry("Parting Glass", subtitle: "Harmony 1", page: 13),
+        ])[0]
+
+        XCTAssertEqual(page.entries.map(\.name), ["Parting Glass", "Parting Glass / Harmony 1"])
+        XCTAssertEqual(page.entries[1].subtitle, "Harmony 1", "The printed entry lost its subtitle")
+        XCTAssertEqual(line(page.svg, at: baseline(1))[0].glyphs,
+                       "PartingGlass/Harmony1".count,
+                       "The page drew something other than title and subtitle")
+    }
+
+    /// A subtitle with no room on its line is dropped rather than cut or
+    /// wrapped, and the title is shortened the way any long name is. The line
+    /// height does not change, so neither does the page count reserved for it.
+    func testASubtitleThatDoesNotFitIsDropped() throws {
+        let available = pageWidth - margin - (try width("7")) - 12 - margin
+        // A title that just leaves no room for the subtitle, built a word at a time
+        // so the test does not depend on the face's exact metrics.
+        var long = "Cabar"
+        let words = ["Feidh", "gu", "Brath", "Cabar"]
+        var next = 0
+        while try width("\(long) / Harmony 1") <= available {
+            long += " \(words[next % words.count])"
+            next += 1
+        }
+        XCTAssertLessThanOrEqual(try width(long), available, "The title alone should fit")
+        XCTAssertGreaterThan(try width("\(long) / Harmony 1"), available,
+                             "Title and subtitle together should not")
+
+        let page = try render([entry(long, subtitle: "Harmony 1", page: 7)])[0]
+        XCTAssertEqual(page.entries.map(\.name), [long])
+        XCTAssertNil(page.entries[0].subtitle)
+        XCTAssertEqual(line(page.svg, at: baseline(0))[0].glyphs,
+                       long.filter { !$0.isWhitespace }.count)
+
+        // Too long even alone: the title is cut as it would be with no subtitle.
+        let longer = String(repeating: "Cabar Feidh gu Brath ", count: 12)
+        let cut = try render([entry(longer, subtitle: "Harmony 1", page: 7)])[0].entries[0]
+        XCTAssertNil(cut.subtitle)
+        XCTAssertEqual(cut.text, try renderer.shortened(longer, toFit: available))
     }
 
     // MARK: - Pagination

@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### The table of contents tells variants of one tune apart (#68)
+
+- A contents line named a tune by its first `T:` line only, so a binder holding a melody and its
+  harmonies listed "Parting Glass" five times over. A line now carries the tune's further `T:`
+  lines too — the catalogue's `subtitle`, which is how the catalogue page already tells them
+  apart — as `Parting Glass / Harmony 1`.
+- Only when there is room. A subtitle that would not fit is dropped rather than wrapped, and
+  the title is shortened as it always was, so line heights and the pages reserved for the
+  contents do not change. Keeping the subtitle and cutting the title instead is left until a real
+  binder needs it.
+- `TableOfContentsRenderer.Page.entries` now records each line as printed — without a dropped
+  subtitle, and with a cut title cut — so tests and logs can see what the page says.
+
 #### Binder footers can print the section name (#67)
 
 - A binder page can now say which section it belongs to. Each tune is re-engraved with its
