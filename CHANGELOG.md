@@ -101,7 +101,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of being dropped or read as a chord (sbeitzel/CeolKit#176, #177).
 - CeolKit 1.9.1 joins stems to their noteheads, flags and beams at Bravura's SMuFL anchors, so
   the joins no longer show a step (sbeitzel/CeolKit#181).
-- `Package.swift` now requires CeolKit 1.9.1, and the commented-out `branch: "main"` line is gone.
 
 ## [0.4.0] - 2026-09-22
 
