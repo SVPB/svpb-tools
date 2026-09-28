@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
 ### Added
 
 #### The table of contents tells variants of one tune apart (#68)
@@ -85,6 +87,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lists sit level with the key above them; and a scalar is quoted only where a bare one would
   read back as something else, so a slug like `yes` or `1990` keeps its quotes and the rest
   lose them. A golden-file test pins that style.
+
+### Changed
+
+#### CeolKit 1.9.1: chord symbols, annotations and stems render properly
+
+- CeolKit 1.8.0 draws chord symbols (`"Am7"`) and annotations (`"^text"`, `"_text"`, …), which
+  it parsed but never drew; the first annotation in a variant ending sits inside the bracket,
+  as abcm2ps puts it (sbeitzel/CeolKit#171).
+- CeolKit 1.9.0 stops losing quoted text: text written before a grace group goes to the main
+  note, not the first grace note, and unprefixed text that does not spell a chord — the
+  `"repeat of part 2"` in svpb-music's `Bengullion.abc` — is printed on the chord line instead
+  of being dropped or read as a chord (sbeitzel/CeolKit#176, #177).
+- CeolKit 1.9.1 joins stems to their noteheads, flags and beams at Bravura's SMuFL anchors, so
+  the joins no longer show a step (sbeitzel/CeolKit#181).
 
 ## [0.4.0] - 2026-09-22
 
