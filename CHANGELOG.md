@@ -6,6 +6,102 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-28
+
+### Added
+
+#### The table of contents tells variants of one tune apart (#68)
+
+- A contents line named a tune by its first `T:` line only, so a binder holding a melody and its
+  harmonies listed "Parting Glass" five times over. A line now carries the tune's further `T:`
+  lines too — the catalogue's `subtitle`, which is how the catalogue page already tells them
+  apart — as `Parting Glass / Harmony 1`.
+- Only when there is room. A subtitle that would not fit is dropped rather than wrapped, and
+  the title is shortened as it always was, so line heights and the pages reserved for the
+  contents do not change. Keeping the subtitle and cutting the title instead is left until a real
+  binder needs it.
+- `TableOfContentsRenderer.Page.entries` now records each line as printed — without a dropped
+  subtitle, and with a cut title cut — so tests and logs can see what the page says.
+
+#### Binder footers can print the section name (#67)
+
+- A binder page can now say which section it belongs to. Each tune is re-engraved with its
+  section's title as `%%ceolkit:label`, which a `${label}` mark in the style sheet's `%%footer`
+  prints — `%%footer "$P\t${label}\t"`, say. Like the page number, it has to be supplied when the
+  page is engraved: the footer is outlines, and the runtime image has no fonts to draw it later.
+- Nothing prints until the svpb-music style sheets put `${label}` in their footers.
+- A tune in an untitled section is given no name, not the name of the section before it. A tune
+  whose own file sets `%%ceolkit:label` keeps its own.
+- In a packed binder the label goes in each tune's header, not the run's preamble, since a run
+  can cross from one section into the next. A page shared by two sections' tunes prints the
+  section of the tune whose music opens it. That only happens when the second section is
+  untitled, because a title page always starts a new page.
+- Pages reused from the build, where a tune could not be re-engraved, print no section name,
+  just as their page numbers start from 1. The fallback log messages now say so.
+- Requires CeolKit 1.7.0 (sbeitzel/CeolKit#168).
+
+#### The server says which commit it is running (#65)
+
+- The droplet runs the `develop` image, so between releases every build it pulled said `0.4.0`,
+  and "is the fix merged an hour ago live yet?" meant logging in and running `docker inspect`.
+  `/health`, the admin login page and the page footers now read `0.4.0+a3a6f58`, and `/health`
+  reports the full sha as `commit`.
+- CI passes `github.sha` into the image build, and the Dockerfile sets it as `TNG_GIT_COMMIT` in
+  the runtime stage only, so a new commit never invalidates the `swift build` layer. Tagged
+  releases carry the commit too.
+- Where the variable is unset — `swift run`, the tests, a local `docker-compose.build.yml`
+  build — the version is the bare release, as before, and `commit` is absent. The release
+  process now bumps `AppVersion.release`; `AppVersion.current` is derived from it.
+
+#### The binder constructor reads `binders.yaml` back in (#60)
+
+- The page was write-only: it generated YAML and could check pasted YAML, but threw the decoded
+  structure away. Editing last season's binder meant retyping it from the catalogue or
+  hand-editing the file — the thing the page exists to avoid. **Load** now takes a pasted
+  `binders.yaml` and gives it back as an editable selection.
+- The page holds the **whole file**, not one binder: `binders.yaml` declares every official
+  binder for the year, so there is a picker over them, controls to add and remove one, and
+  `name`, `output` and `pack` belong to the binder in the editor. Generate writes the complete
+  file, and the copy instruction changed accordingly — it **replaces** `binders.yaml` rather
+  than being appended to it. Appending it would declare every binder twice; that fails loudly,
+  on the duplicate `output`, but the page no longer invites it.
+- Three things a round trip must not quietly lose, and now does not:
+  - **A tune this year's catalogue does not have.** Kept as a marked row and written back out
+    unchanged, rather than dropped. The personal binder builder still drops it: a stale shared
+    URL should quietly lose a tune the year lacks, and the pipe major's source file must not.
+  - **The same tune in two sections.** `binders.yaml` may legitimately put Amazing Grace in
+    both "Massed Bands" and "Parade Tunes", and the constructor could not author that at all.
+    It can now: the catalogue row reads `Added ×2` and names the sections. The builder still
+    de-duplicates (#24).
+  - **`parts:` on an entry.** Inert until per-part rendering lands (#20), and carried through
+    the page untouched instead of being discarded.
+- **The file is written on the server.** `BinderDefinitionLoader.encode` is the inverse of the
+  decoder the build uses, so `decode(encode(decode(yaml)))` is something a Swift test can
+  assert; generation used to be string concatenation in the page, where nothing in the test
+  suite could reach it. `POST /binder-constructor/yaml` encodes a set of binders, then decodes
+  and checks its own output — the verdict is about the bytes handed over, not about what the
+  page believes it sent. `POST /binder-constructor/check` now returns the decoded file as well
+  as the verdict, so one call serves both Check and Load.
+- A generated file looks different from a hand-written one, and says the same thing. Comments
+  and spacing are not preserved, because the file is regenerated rather than edited; block
+  lists sit level with the key above them; and a scalar is quoted only where a bare one would
+  read back as something else, so a slug like `yes` or `1990` keeps its quotes and the rest
+  lose them. A golden-file test pins that style.
+
+### Changed
+
+#### CeolKit 1.9.1: chord symbols, annotations and stems render properly
+
+- CeolKit 1.8.0 draws chord symbols (`"Am7"`) and annotations (`"^text"`, `"_text"`, …), which
+  it parsed but never drew; the first annotation in a variant ending sits inside the bracket,
+  as abcm2ps puts it (sbeitzel/CeolKit#171).
+- CeolKit 1.9.0 stops losing quoted text: text written before a grace group goes to the main
+  note, not the first grace note, and unprefixed text that does not spell a chord — the
+  `"repeat of part 2"` in svpb-music's `Bengullion.abc` — is printed on the chord line instead
+  of being dropped or read as a chord (sbeitzel/CeolKit#176, #177).
+- CeolKit 1.9.1 joins stems to their noteheads, flags and beams at Bravura's SMuFL anchors, so
+  the joins no longer show a step (sbeitzel/CeolKit#181).
+
 ## [0.4.0] - 2026-09-22
 
 ### Added

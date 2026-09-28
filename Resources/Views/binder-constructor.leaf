@@ -13,21 +13,37 @@
   #status-msg { font-size: 0.85rem; color: #666; margin-top: 0.5rem; min-height: 1.2em; white-space: pre-line; }
   #status-msg.error { color: #c00; }
   #status-msg.info  { color: #166534; }
+  /* The file holds every binder for the year; this card is which of them is
+     being edited. Its own, not the shared catalogue partial's. */
+  #binder-picker { margin-bottom: 0.5rem; }
+  .binder-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+  .binder-controls .btn { padding: 0.35rem 0.8rem; font-size: 0.82rem; }
 </style>
 #endexport
 
 #export("content"):
 <main>
 
-  <!-- Left column: tune catalogue -->
+  <!-- Left column: which binder, then the tune catalogue -->
   <div>
+    <div class="card" style="margin-bottom:1rem;">
+      <h2>Binders in this File</h2>
+      <label for="binder-picker">Editing</label>
+      <select id="binder-picker"></select>
+      <div class="binder-controls">
+        <button type="button" class="btn btn-add-section" id="add-binder" style="margin-top:0;">+ Add binder</button>
+        <button type="button" class="btn btn-danger" id="remove-binder">Remove this binder</button>
+      </div>
+      <p class="hint" style="margin:0;"><code>binders.yaml</code> declares <em>every</em> official binder for the year, so this page holds them all: load the file, pick one, edit it, and generate the whole file again. The year below is the file's, not one binder's — changing it starts a new file.</p>
+    </div>
+
     #extend("partials/tune-catalogue"):
       #export("binder-name-label"):Binder name#endexport
       #export("binder-name-placeholder"):e.g. 2026 Band Binder#endexport
     #endextend
   </div>
 
-  <!-- Right column: selected entries -->
+  <!-- Right column: selected entries, then the file -->
   <div>
     <div class="card">
       #extend("partials/binder-entries"):
@@ -36,18 +52,19 @@
     </div>
 
     <div class="card" style="margin-top:1rem;">
-      <h2>Generated YAML</h2>
+      <h2>binders.yaml</h2>
       <label for="binder-output">Output filename</label>
       <input type="text" id="binder-output" placeholder="e.g. 2026_binder.pdf" value="">
       <p class="hint">The PDF the build writes and uploads to Box. A plain filename ending in <code>.pdf</code>, different from every other binder in the file.</p>
 
-      <textarea id="yaml-output" spellcheck="false" placeholder="Click &quot;Generate YAML&quot; to see the binder definition, or paste a binders.yaml here and click &quot;Check&quot;."></textarea>
-      <p class="hint" style="margin-top:0.25rem;">This is a complete <code>binders.yaml</code> declaring one binder. To add it to an existing file, paste everything after the first line (<code>binders:</code>) at the end of that file.</p>
+      <textarea id="yaml-output" spellcheck="false" placeholder="Paste an existing binders.yaml here and click &quot;Load&quot; to edit it, or build a binder on the left and click &quot;Generate YAML&quot;."></textarea>
+      <p class="hint" style="margin-top:0.25rem;">This is the <strong>whole</strong> file. Copy it over <code>binders.yaml</code> at the root of the year's branch — do not append it to what is there, or every binder would be declared twice. Comments in the original file are not kept.</p>
       <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="generateYAML()">Generate YAML</button>
+        <button class="btn" onclick="loadYAML()" title="Read the file above back into the editor">Load</button>
         <button class="btn" onclick="checkYAML()">Check</button>
         <button class="btn" onclick="copyYAML()">Copy</button>
-        <button class="btn" onclick="TuneSelector.clear()">Clear</button>
+        <button class="btn" onclick="clearAll()">Clear</button>
       </div>
       <div id="status-msg"></div>
     </div>
@@ -64,24 +81,123 @@
 // Official binders are whole tunes in titled sections: per-part rendering is
 // deferred (#20), and binders.yaml gives every section a title page — except a
 // table of contents, whose title is a heading and may be left blank (#47).
+//
+// Two rules differ from the personal binder builder, because this page edits a
+// file rather than composing one binder (#60). A tune may be named twice — a
+// binders.yaml may legitimately put Amazing Grace in both "Massed Bands" and
+// "Parade Tunes", and until now the page could not author that at all. And an
+// entry the year's catalogue cannot resolve is kept and marked rather than
+// dropped: on the pipe major's own file, that is a typo to fix or a tune not
+// pushed yet, and losing it silently is the one thing a round trip must not do.
 TuneSelector.init({
   sections: true,
   untitledSections: false,
+  repeatableTunes: true,
+  keepUnknownTunes: true,
   setStatus,
   onClear: () => { document.getElementById('yaml-output').value = ''; },
 });
 
+// ── The file ───────────────────────────────────────────────────────────────
+// The page holds every binder the file declares. Exactly one of them is in the
+// editor at a time: its sections are TuneSelector's live selection, and its
+// name, output and packing are the three inputs. The others sit here with
+// their sections as plain arrays until they are switched back to.
+const nameInput   = document.getElementById('binder-name');
+const outputInput = document.getElementById('binder-output');
+const picker      = document.getElementById('binder-picker');
+
+const newBinder = () => ({ name: '', output: '', pack: false, sections: [], outputEdited: false });
+
+let binders = [newBinder()];
+let current = 0;
+
+/** Writes the editor's state back onto the binder it belongs to. */
+function captureCurrent() {
+  const b = binders[current];
+  b.name = nameInput.value;
+  b.output = outputInput.value.trim();
+  b.pack = TuneSelector.packs();
+  // A snapshot of the array, not of the sections: the section objects stay the
+  // same ones, so folding and every reference to them survives a switch.
+  b.sections = [...TuneSelector.sections()];
+}
+
+/** Puts binder `i` in the editor. */
+function showBinder(i) {
+  current = i;
+  const b = binders[i];
+  nameInput.value = b.name;
+  outputInput.value = b.output;
+  outputInput.classList.toggle('invalid', b.output !== '' && outputProblem(b.output) !== null);
+  TuneSelector.setPacks(b.pack);
+  TuneSelector.setSections(b.sections);
+  renderPicker();
+}
+
+function binderLabel(b, i) {
+  return b.name.trim() || b.output.trim() || `Binder ${i + 1}`;
+}
+
+function renderPicker() {
+  picker.innerHTML = '';
+  binders.forEach((b, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = binderLabel(b, i);
+    opt.selected = i === current;
+    picker.appendChild(opt);
+  });
+  document.getElementById('remove-binder').disabled = binders.length < 2;
+}
+
+picker.addEventListener('change', () => {
+  const next = Number(picker.value);
+  if (next === current) return;
+  captureCurrent();
+  showBinder(next);
+});
+
+document.getElementById('add-binder').addEventListener('click', () => {
+  captureCurrent();
+  binders.push(newBinder());
+  showBinder(binders.length - 1);
+  nameInput.focus();
+  setStatus('Added a binder to the file. Name it, then add its tunes.', 'info');
+});
+
+document.getElementById('remove-binder').addEventListener('click', () => {
+  if (binders.length < 2) return;
+  const gone = binderLabel(binders[current], current);
+  binders.splice(current, 1);
+  showBinder(Math.min(current, binders.length - 1));
+  setStatus(`Removed "${gone}" from the file. Generate again to write the file without it.`, 'info');
+});
+
+// The catalogue's year picker belongs to the file, not to one binder: a
+// different year is a different catalogue, and every section list the page
+// holds was resolved against the old one. TuneSelector has already reset its
+// own selection by the time this runs; this keeps the rest of the file in step
+// rather than leaving stale binders pointing at tunes that are no longer there.
+document.getElementById('sel-branch').addEventListener('change', () => {
+  const had = binders.length;
+  binders = [newBinder()];
+  showBinder(0);
+  captureCurrent();
+  if (had > 1) setStatus('Changing the year starts a new file — the binders you had were for the other year.', 'error');
+});
+
 // ── Output filename ────────────────────────────────────────────────────────
 // Follows the binder name until the pipe major types a filename of their own.
-const outputInput = document.getElementById('binder-output');
-let outputEdited = false;
-
 outputInput.addEventListener('input', () => {
-  outputEdited = outputInput.value.trim() !== '';
-  outputInput.classList.toggle('invalid', outputEdited && outputProblem(outputInput.value.trim()) !== null);
+  binders[current].outputEdited = outputInput.value.trim() !== '';
+  outputInput.classList.toggle('invalid',
+    binders[current].outputEdited && outputProblem(outputInput.value.trim()) !== null);
 });
-document.getElementById('binder-name').addEventListener('input', e => {
-  if (!outputEdited) outputInput.value = suggestedOutput(e.target.value);
+nameInput.addEventListener('input', e => {
+  if (!binders[current].outputEdited) outputInput.value = suggestedOutput(e.target.value);
+  binders[current].name = e.target.value;
+  renderPicker();
 });
 
 function suggestedOutput(name) {
@@ -99,117 +215,207 @@ function outputProblem(output) {
   return null;
 }
 
-// ── Output ─────────────────────────────────────────────────────────────────
-// Every scalar is written double-quoted. A JSON string is a valid YAML
-// double-quoted scalar, and quoting keeps a slug like `yes` or `1990` a string.
-const q = JSON.stringify;
+// ── Generating ─────────────────────────────────────────────────────────────
+/**
+ * The file as the server wants it: `binders.yaml`'s own shape, in JSON.
+ *
+ * The only mapping is at the edge — `tuneSlug` becomes `tune` — as the personal
+ * binder builder already does for its spec. Everything the page cannot edit is
+ * carried across untouched: a `parts:` list the file declared (inert until #20),
+ * and a `toc:` narrowed with `include:`.
+ */
+function fileBinders() {
+  return binders.map(b => ({
+    name: b.name.trim(),
+    output: b.output.trim(),
+    pack: b.pack,
+    // A section with neither a title nor any tunes would print nothing, so it is
+    // left out. A section with a title and no tunes is a title page, and stays (#46);
+    // so does a table of contents, which needs neither (#47).
+    sections: b.sections
+      .filter(s => s.entries.length > 0 || TuneSelector.titleLines(s).length > 0
+                || TuneSelector.isContents(s))
+      .map(s => {
+        const title = TuneSelector.titleLines(s);
+        const section = {};
+        // One line stays a bare string, the shape every binders.yaml so far is
+        // written in; several become the list that engraves as a stacked block.
+        if (title.length) section.title = title.length > 1 ? title : title[0];
+        if (TuneSelector.isContents(s)) section.toc = s.toc;
+        section.entries = s.entries.map(e => {
+          const entry = { tune: e.tuneSlug };
+          if (e.declaredParts) entry.parts = e.declaredParts;
+          // Written wherever the entry carries one. The control that sets it
+          // only appears in a packed binder — with a tune to a page there is
+          // nothing to opt out of — but a file that declared one keeps it.
+          if (e.pageBreak) entry.break = 'before';
+          return entry;
+        });
+        return section;
+      }),
+  }));
+}
 
-async function generateYAML() {
-  const branch = TuneSelector.branch();
-  const name = TuneSelector.binderName('');
-  const output = outputInput.value.trim();
-  if (!branch) { setStatus('Please select a year first.', 'error'); return; }
-  if (!name) { setStatus('Please give the binder a name.', 'error'); return; }
-  const problem = outputProblem(output);
-  if (problem) { setStatus(problem, 'error'); outputInput.classList.add('invalid'); return; }
-
-  // A section with neither a title nor any tunes would print nothing, so it is
-  // left out. A section with a title and no tunes is a title page, and stays (#46);
-  // so does a table of contents, which needs neither (#47).
-  const sections = TuneSelector.sections()
-    .filter(s => s.entries.length > 0 || TuneSelector.titleLines(s).length > 0
-              || TuneSelector.isContents(s));
-  if (sections.every(s => s.entries.length === 0)) {
-    setStatus('No tunes selected — a binder of title pages alone cannot be built.', 'error');
-    return;
+/** What the page can say better than the server, which knows binders by index. */
+function fileProblem() {
+  for (let i = 0; i < binders.length; i++) {
+    const at = `"${binderLabel(binders[i], i)}"`;
+    if (!binders[i].name.trim()) return `Binder ${i + 1} has no name.`;
+    const output = outputProblem(binders[i].output.trim());
+    if (output) return `${at}: ${output}`;
+    const sections = binders[i].sections;
+    if (sections.every(s => s.entries.length === 0)) {
+      return `${at} has no tunes — a binder of title pages alone cannot be built.`;
+    }
+    // A contents section's title is a heading, and it may go without one.
+    const untitled = sections.findIndex(s => !TuneSelector.isContents(s)
+                                          && s.entries.length > 0
+                                          && TuneSelector.titleLines(s).length === 0);
+    if (untitled >= 0) {
+      return `${at}: every section needs a title in binders.yaml — section ${untitled + 1} with tunes has none.`;
+    }
   }
-  // A contents section's title is a heading, and it may go without one.
-  const untitled = sections.findIndex(s => !TuneSelector.isContents(s)
-                                        && TuneSelector.titleLines(s).length === 0);
-  if (untitled >= 0) {
-    setStatus(`Every section needs a title in binders.yaml — section ${untitled + 1} with tunes has none.`, 'error');
-    return;
-  }
-
-  // No parts key: an official binder takes each tune whole (#20).
-  const lines = [
-    'binders:',
-    `  - name: ${q(name)}`,
-    `    output: ${q(output)}`,
-  ];
-  // `pack:` is written only where it is asked for, so a file generated for a
-  // binder that does not pack reads exactly as one generated before #48 did.
-  if (TuneSelector.packs()) lines.push('    pack: true');
-  lines.push('    sections:');
-  sections.forEach(section => {
-    // One line stays a bare string, the shape every binders.yaml so far is
-    // written in; several become the list that engraves as a stacked block.
-    const title = TuneSelector.titleLines(section);
-    const contents = TuneSelector.isContents(section);
-    // A table of contents headed "Contents" says nothing more than `toc: true`;
-    // one headed anything else carries its heading as the section's title.
-    if (contents && title.length === 0) {
-      lines.push('      - toc: true');
-      return;
-    }
-    lines.push(`      - title: ${title.length > 1 ? `[${title.map(q).join(', ')}]` : q(title[0])}`);
-    if (contents) {
-      lines.push('        toc: true');
-      return;
-    }
-    // A title page has no entries, and an empty `entries:` key would be a null.
-    if (section.entries.length > 0) {
-      lines.push('        entries:');
-      section.entries.forEach(entry => {
-        lines.push(`          - tune: ${q(entry.tuneSlug)}`);
-        // Only meaningful in a packed binder, so only written in one.
-        if (TuneSelector.packs() && entry.pageBreak) lines.push('            break: before');
-      });
-    }
-  });
-
-  document.getElementById('yaml-output').value = lines.join('\n') + '\n';
-  await checkYAML('YAML generated.');
+  return null;
 }
 
 /**
- * Runs the textarea through the server's binders.yaml decoder, so the page can
- * say whether the build will accept it.
+ * Writes the file on the server, which encodes it with the inverse of the
+ * decoder the build uses and then checks its own output (#60). Generation used
+ * to be string concatenation here, where no test could reach it.
  */
-async function checkYAML(prefix) {
-  const lead = typeof prefix === 'string' ? prefix + ' ' : '';
+async function generateYAML() {
+  const branch = TuneSelector.branch();
+  if (!branch) { setStatus('Please select a year first.', 'error'); return; }
+  captureCurrent();
+  const problem = fileProblem();
+  if (problem) { setStatus(problem, 'error'); return; }
+
+  try {
+    const result = await post('/binder-constructor/yaml', { branch, binders: fileBinders() });
+    // Shown even where the verdict is bad, so the pipe major can see what it is
+    // the build would reject.
+    if (result.yaml) document.getElementById('yaml-output').value = result.yaml;
+    report(result, branch, 'YAML generated.');
+  } catch (e) {
+    setStatus(`Could not generate it: ${e.message}`, 'error');
+  }
+}
+
+// ── Loading ────────────────────────────────────────────────────────────────
+/**
+ * Reads the textarea back into the editor: the server decodes it with the
+ * build's own decoder and hands back the structure, and each binder's sections
+ * are resolved against the year's catalogue in turn.
+ */
+async function loadYAML() {
+  const yaml = document.getElementById('yaml-output').value;
+  const branch = TuneSelector.branch();
+  if (!yaml.trim()) { setStatus('Paste a binders.yaml above first.', 'error'); return; }
+  if (!branch) { setStatus('Please select the year this file is for.', 'error'); return; }
+
+  let result;
+  try {
+    result = await post('/binder-constructor/check', { branch, yaml });
+  } catch (e) {
+    setStatus(`Could not read it: ${e.message}`, 'error');
+    return;
+  }
+  if (!result || !result.valid) {
+    setStatus(`This is not a file the build would accept, so it cannot be loaded: ${result && result.problem}`, 'error');
+    return;
+  }
+
+  setStatus('Loading…');
+  const loaded = [];
+  for (const b of result.binders) {
+    // `load` resolves each entry against the catalogue and fills in the titles;
+    // the sections it leaves behind are this binder's, so they are taken before
+    // the next one overwrites them.
+    await TuneSelector.load((b.sections || []).map(s => ({
+      title: s.title || '',
+      toc: s.toc,
+      entries: (s.entries || []).map(e => ({
+        tuneSlug: e.tune, parts: e.parts, pageBreak: e.break === 'before',
+      })),
+    })));
+    loaded.push({
+      name: b.name, output: b.output, pack: !!b.pack,
+      sections: [...TuneSelector.sections()],
+      outputEdited: true,
+    });
+  }
+  binders = loaded.length ? loaded : [newBinder()];
+  showBinder(0);
+
+  const missing = result.unresolved.length;
+  const count = `${binders.length} ${binders.length === 1 ? 'binder' : 'binders'}`;
+  setStatus(missing === 0
+    ? `Loaded ${count}. Edit, then Generate to write the file back out.`
+    : `Loaded ${count}. ${missing} ${missing === 1 ? 'entry names a tune' : 'entries name tunes'} `
+      + `the ${branch} catalogue does not have; they are marked in the list and kept as they are.`,
+    missing === 0 ? 'info' : 'error');
+}
+
+// ── Checking ───────────────────────────────────────────────────────────────
+/**
+ * Runs the textarea through the server's binders.yaml decoder, so the page can
+ * say whether the build will accept it without touching the editor.
+ */
+async function checkYAML() {
   const yaml = document.getElementById('yaml-output').value;
   const branch = TuneSelector.branch();
   if (!yaml.trim()) { setStatus('Nothing to check yet.', 'error'); return; }
   if (!branch) { setStatus('Please select a year to check the tunes against.', 'error'); return; }
 
   try {
-    const res = await fetch('/binder-constructor/check', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branch, yaml }),
-    });
-    if (!res.ok) { setStatus(`${lead}Could not check it: ${await res.text()}`, 'error'); return; }
-    const result = await res.json();
-    if (!result.valid) {
-      setStatus(`${lead}The build would reject this file: ${result.problem}`, 'error');
-    } else if (result.unresolved.length > 0) {
-      const missing = result.unresolved.map(u => `  "${u.binder}" › "${u.section}": ${u.tune}`);
-      setStatus(`${lead}This parses, but these tunes are not in the ${branch} catalogue:\n${missing.join('\n')}`, 'error');
-    } else {
-      setStatus(`${lead}✓ This parses as binders.yaml. Copy it into binders.yaml at the root of the ${branch} branch of the music repository and commit it.`, 'info');
-    }
+    report(await post('/binder-constructor/check', { branch, yaml }), branch, '');
   } catch (e) {
-    setStatus(`${lead}Could not check it: ${e.message}`, 'error');
+    setStatus(`Could not check it: ${e.message}`, 'error');
   }
 }
 
+/** The verdict both endpoints return, said the same way either way. */
+function report(result, branch, prefix) {
+  const lead = prefix ? prefix + ' ' : '';
+  if (!result.valid) {
+    setStatus(`${lead}The build would reject this file: ${result.problem}`, 'error');
+  } else if (result.unresolved.length > 0) {
+    const missing = result.unresolved.map(u => `  "${u.binder}" › "${u.section}": ${u.tune}`);
+    setStatus(`${lead}This parses, but these tunes are not in the ${branch} catalogue:\n${missing.join('\n')}`, 'error');
+  } else {
+    setStatus(`${lead}✓ This parses as binders.yaml. Copy it over binders.yaml at the root of the ${branch} branch of the music repository and commit it.`, 'info');
+  }
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── The rest ───────────────────────────────────────────────────────────────
 function copyYAML() {
   const text = document.getElementById('yaml-output').value;
   if (!text) { setStatus('Nothing to copy yet.', 'error'); return; }
   navigator.clipboard.writeText(text).then(
-    () => setStatus('YAML copied.', 'info'),
+    () => setStatus('YAML copied. It is the whole file — replace binders.yaml with it.', 'info'),
     () => setStatus('Could not copy — select the text and copy it by hand.', 'error'));
+}
+
+/** Empties the file: one unnamed binder, no tunes, no YAML. */
+function clearAll() {
+  TuneSelector.clear();
+  binders = [newBinder()];
+  current = 0;
+  nameInput.value = '';
+  outputInput.value = '';
+  outputInput.classList.remove('invalid');
+  captureCurrent();
+  renderPicker();
 }
 
 function setStatus(msg, cls) {
@@ -217,6 +423,9 @@ function setStatus(msg, cls) {
   el.textContent = msg;
   el.className = cls ? cls : '';
 }
+
+captureCurrent();
+renderPicker();
 </script>
 #endexport
 

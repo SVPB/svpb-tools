@@ -10,6 +10,7 @@ struct BinderController: RouteCollection {
         // HTML pages (no auth required)
         routes.get("binder-constructor", use: binderConstructorPage)
         routes.post("binder-constructor", "check", use: checkBindersYAML)
+        routes.post("binder-constructor", "yaml", use: writeBindersYAML)
         routes.get("binder-builder", use: binderBuilderPage)
 
         // REST API
@@ -83,12 +84,40 @@ struct BinderController: RouteCollection {
         let problem: String?
         /// Entries naming tunes the branch's catalogue does not contain.
         let unresolved: [UnresolvedTune]
+        /// The file as decoded, or `nil` where it was rejected.
+        ///
+        /// The decoder's own result, handed to the browser so the constructor
+        /// can load a pasted file back into the editor rather than only judging
+        /// it (#60). `OfficialBinder` encodes to exactly the JSON the page
+        /// wants — one-line titles as bare strings, `toc: true` as a bare flag,
+        /// nothing written that the file did not say — so there is no DTO here
+        /// and no second description of the format to keep in step.
+        let binders: [OfficialBinder]?
 
         struct UnresolvedTune: Content {
             let binder: String
             let section: String
             let tune: String
         }
+    }
+
+    /// The body of `POST /binder-constructor/yaml`.
+    struct BindersYAMLWriteRequest: Content {
+        /// The branch whose catalogue the entries are checked against.
+        let branch: String
+        /// The binders to write, in file order.
+        let binders: [OfficialBinder]
+    }
+
+    /// The outcome of `POST /binder-constructor/yaml`: the file, and the same
+    /// verdict `check` would give on it.
+    struct BindersYAMLWriteResult: Content {
+        /// The text of `binders.yaml`, or `nil` where the binders could not be
+        /// written at all.
+        let yaml: String?
+        let valid: Bool
+        let problem: String?
+        let unresolved: [BindersYAMLCheckResult.UnresolvedTune]
     }
 
     /// `POST /binder-constructor/check` — runs YAML through the same decoder and
@@ -105,17 +134,60 @@ struct BinderController: RouteCollection {
         do {
             file = try BinderDefinitionLoader.decode(body.yaml)
         } catch {
-            return BindersYAMLCheckResult(valid: false, problem: "\(error)", unresolved: [])
+            return BindersYAMLCheckResult(valid: false, problem: "\(error)", unresolved: [], binders: nil)
         }
 
+        return BindersYAMLCheckResult(valid: true, problem: nil,
+                                      unresolved: try await unresolved(in: file, branch: body.branch, on: req),
+                                      binders: file.binders)
+    }
+
+    /// `POST /binder-constructor/yaml` — writes a set of binders out as the text
+    /// of a `binders.yaml`, and checks its own output (#60).
+    ///
+    /// Generation used to be string concatenation in the page, where nothing in
+    /// the test suite could reach it; here it is `BinderDefinitionLoader.encode`,
+    /// the inverse of the decoder the build uses, so a round trip is a thing a
+    /// Swift test can assert.
+    ///
+    /// The check is not a courtesy: the page used to call `check` straight after
+    /// generating, and doing it here saves the round trip and makes the verdict
+    /// one about the bytes actually handed over, not about what the page
+    /// believes it sent.
+    @Sendable
+    func writeBindersYAML(req: Request) async throws -> BindersYAMLWriteResult {
+        let body = try req.content.decode(BindersYAMLWriteRequest.self)
+
+        let yaml: String
+        do {
+            yaml = try BinderDefinitionLoader.encode(BindersFile(binders: body.binders))
+        } catch {
+            return BindersYAMLWriteResult(yaml: nil, valid: false, problem: "\(error)", unresolved: [])
+        }
+
+        // Decoding what we just wrote is what makes this a check rather than a
+        // claim: everything `problems(in:)` rejects is found here, on the file
+        // the pipe major is about to commit.
+        let file: BindersFile
+        do {
+            file = try BinderDefinitionLoader.decode(yaml)
+        } catch {
+            return BindersYAMLWriteResult(yaml: yaml, valid: false, problem: "\(error)", unresolved: [])
+        }
+        return BindersYAMLWriteResult(yaml: yaml, valid: true, problem: nil,
+                                      unresolved: try await unresolved(in: file, branch: body.branch, on: req))
+    }
+
+    /// Entries of `file` naming tunes `branch` does not have, as the wire says them.
+    private func unresolved(in file: BindersFile, branch: String,
+                            on req: Request) async throws -> [BindersYAMLCheckResult.UnresolvedTune] {
         let slugs = try await Tune.query(on: req.db)
-            .filter(\.$branch.$id == body.branch)
+            .filter(\.$branch.$id == branch)
             .all()
             .map(\.slug)
-        let unresolved = BinderDefinitionLoader
+        return BinderDefinitionLoader
             .unresolvedEntries(in: file, catalogueSlugs: Set(slugs))
             .map { BindersYAMLCheckResult.UnresolvedTune(binder: $0.binder, section: $0.section, tune: $0.tune) }
-        return BindersYAMLCheckResult(valid: true, problem: nil, unresolved: unresolved)
     }
 
     // MARK: - REST API

@@ -52,6 +52,10 @@
   .pack-option input { margin: 0; }
   .break-btn { background: none!important; border: 1px solid transparent!important; color: #aaa!important; cursor: pointer; font-size: 0.9rem!important; line-height: 1; padding: 1px 5px!important; }
   .break-btn[aria-pressed="true"] { color: #3730a3!important; border-color: #a5b4fc!important; background: #eef2ff!important; }
+  /* An entry naming a tune the year's catalogue does not have. Kept and written
+     back out unchanged, so the marker has to read as a warning, not an error. */
+  .binder-entries li.missing { background: #fff7ed; }
+  .missing-flag { display: inline-block; margin-top: 2px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em; color: #9a3412; background: #ffedd5; border: 1px solid #fdba74; border-radius: 3px; padding: 0 4px; cursor: help; }
   .add-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .btn-add-section { margin-top: 0.5rem; background: #fff; color: #3730a3; border: 1px dashed #a5b4fc; font-size: 0.85rem; }
   .btn-add-section:hover { background: #eef2ff; }

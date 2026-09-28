@@ -44,6 +44,13 @@
  * navigable. Folding is display only: it never touches the selection, the
  * ordering, or anything a page generates from them.
  *
+ * Two rules differ between the two pages, because the personal binder and the
+ * band's `binders.yaml` are different documents: whether one tune may be added
+ * twice (`repeatableTunes`), and whether an entry the catalogue cannot resolve
+ * is kept or dropped (`keepUnknownTunes`). Both default to the builder's
+ * answer, which is the behaviour everything had before the constructor learned
+ * to read a file back in (#60).
+ *
  * Things the component cannot decide for itself are supplied as hooks to
  * `init`: how the page reports status, what else the page has to reset when the
  * selection is cleared, and how a page restores a saved selection.
@@ -56,6 +63,8 @@ const TuneSelector = (() => {
   let active = 0;          // index of the section the catalogue adds tunes to
   let sectionsEnabled = false;
   let untitledSections = true;   // a blank section title is allowed, and means no title page
+  let repeatableTunes = false;   // the same tune may appear in more than one section
+  let keepUnknownTunes = false;  // an entry the catalogue cannot resolve is kept, marked
   let allTunes = [];       // [{id, slug, title, subtitle, abcPath}]
   let tuneDetails = {};    // slug → {id, slug, title, subtitle, parts: [{id, name}]}
   // Folded sections, held by identity rather than by index so the fold follows
@@ -84,10 +93,24 @@ const TuneSelector = (() => {
     || (isContents(sections[idx])
       ? 'Table of contents'
       : `Section ${idx + 1} (${untitledSections ? 'no title page' : 'untitled'})`);
-  /** A fresh, empty section. Everything that adds one goes through this. */
+  /**
+   * A fresh, empty section. Everything that adds one goes through this.
+   *
+   * `toc` is kept as it is handed over rather than coerced to a flag: a page
+   * restoring a declaration it must write back unchanged — `toc: {include: […]}`
+   * narrows what the contents page lists — passes the whole thing through here,
+   * and everything that asks *whether* a section is one goes through
+   * `isContents`, which only ever looks at truthiness.
+   */
   const newSection = (toc = false) => ({ title: '', entries: [], toc });
   /** A section that is the binder's table of contents (#47). */
   const isContents = section => sectionsEnabled && !!section.toc;
+  /** How many of the selected entries name `slug`, across every section. */
+  const timesAdded = slug => allEntries().filter(e => e.tuneSlug === slug).length;
+  /** The sections `slug` appears in, by their labels, for the catalogue's tooltip. */
+  const sectionsHolding = slug => sections
+    .map((s, i) => (s.entries.some(e => e.tuneSlug === slug) ? sectionLabel(i) : null))
+    .filter(label => label !== null);
   /** Whether the binder asks for consecutive short tunes to share pages (#48). */
   const packs = () => el('binder-pack').checked;
   /**
@@ -155,19 +178,28 @@ const TuneSelector = (() => {
       list.innerHTML = '<li style="color:#888;">No tunes found.</li>';
       return;
     }
-    const selected = allEntries();
     const visible = filter
       ? allTunes.filter(t => `${tuneLabel(t)} ${tuneFile(t)}`.toLowerCase().includes(filter))
       : allTunes;
     list.innerHTML = '';
     visible.forEach(tune => {
-      const added = selected.some(e => e.tuneSlug === tune.slug);
+      // How many times, not whether: a binders.yaml may put one tune in two
+      // sections, and the row has to say which and how often (#60). Where
+      // repeats are not allowed the count is only ever 0 or 1, and the row
+      // reads exactly as it did before.
+      const times = timesAdded(tune.slug);
       const li = document.createElement('li');
-      if (added) li.className = 'added';
+      if (times) li.className = 'added';
       const label = tuneNameBlock(tuneLabel(tune), tuneFile(tune));
       const btn = document.createElement('button');
-      btn.textContent = added ? 'Added ✓' : '+ Add';
-      btn.disabled = added;
+      btn.textContent = times === 0 ? '+ Add' : (times === 1 ? 'Added ✓' : `Added ×${times}`);
+      btn.disabled = times > 0 && !repeatableTunes;
+      if (times > 0) {
+        const where = sectionsHolding(tune.slug);
+        btn.title = repeatableTunes
+          ? `In ${where.join(', ')} — click to add it again`
+          : `In ${where.join(', ')}`;
+      }
       btn.addEventListener('click', () => addTune(tune.slug, tuneLabel(tune)));
       li.appendChild(label);
       li.appendChild(btn);
@@ -292,7 +324,20 @@ const TuneSelector = (() => {
     info.style.flex = '1';
     info.style.marginLeft = '4px';
     const tune = allTunes.find(t => t.slug === entry.tuneSlug);
-    info.appendChild(tuneNameBlock(entry.title, tune && tuneFile(tune)));
+    info.appendChild(tuneNameBlock(entry.title, tune ? tuneFile(tune) : `${entry.tuneSlug}.abc`));
+    // An entry the catalogue cannot resolve is kept and marked rather than
+    // dropped (#60): on a file the pipe major is editing, a slug this year's
+    // branch does not have is a typo to fix or a tune still to be pushed, and
+    // either way it has to stay visible and be written back out.
+    if (entry.missing) {
+      li.classList.add('missing');
+      const flag = document.createElement('span');
+      flag.className = 'missing-flag';
+      flag.textContent = 'not in catalogue';
+      flag.title = `No tune "${entry.tuneSlug}" in the ${el('sel-branch').value} catalogue.`
+        + ' It stays in the file as it is.';
+      info.appendChild(flag);
+    }
     li.appendChild(info);
 
     // Jump straight to another section, for moves the arrows would take a while over.
@@ -397,7 +442,7 @@ const TuneSelector = (() => {
 
   // ── Actions ──────────────────────────────────────────────────────────────
   async function addTune(slug, title) {
-    if (allEntries().some(e => e.tuneSlug === slug)) return;
+    if (!repeatableTunes && allEntries().some(e => e.tuneSlug === slug)) return;
     try {
       // The whole tune goes in, so the entry names every part the catalogue knows.
       const detail = await getTuneDetail(slug);
@@ -409,6 +454,8 @@ const TuneSelector = (() => {
       }
       sections[active].entries.push({
         tuneSlug: slug, title, parts: detail.parts.map(p => p.name), pageBreak: false,
+        // Nothing the page has to hand back unchanged: see `declaredParts` in `load`.
+        declaredParts: null,
       });
       // Show the section the tune just went into, rather than swallowing it.
       setFolded(sections[active], false);
@@ -534,32 +581,48 @@ const TuneSelector = (() => {
   /**
    * Replaces the selection with `saved`, a list of
    * `{title, toc?, entries: [{tuneSlug, parts?, pageBreak?}]}` in binder order, where
-   * `title` is a string or a list of lines. Tunes missing from the current branch's catalogue
-   * are dropped, but a section that keeps none of them is kept when it has a
-   * title: it is a title page, not an empty section (#46). The branch must
-   * already be selected and its tunes loaded.
+   * `title` is a string or a list of lines. A section that keeps no tunes is
+   * kept when it has a title: it is a title page, not an empty section (#46).
+   * The branch must already be selected and its tunes loaded.
    *
-   * A saved `parts` list is read and discarded: URLs shared while the tags were
-   * still clickable may name one voice of a tune, and restoring that selection
-   * would be restoring a choice that never worked (#24). The tune comes back
-   * whole, as it would have been rendered anyway.
+   * What happens to a tune the branch's catalogue does not have depends on what
+   * the page is restoring. A shared builder URL should quietly lose a tune this
+   * year lacks, so by default the entry is dropped; a `binders.yaml` being
+   * edited must not, so `keepUnknownTunes` keeps it, marked, with its slug for
+   * a title and **no call to `getTuneDetail`** — that route 404s on a slug the
+   * branch does not have, and one unresolved entry would otherwise throw out of
+   * here and abandon the whole load.
+   *
+   * The same split governs repeats: the builder de-duplicates (#24), while a
+   * `binders.yaml` may legitimately put one tune in two sections, so a page
+   * that says `repeatableTunes` gets every entry the file names.
+   *
+   * A saved `parts` list is read and discarded *as a selection*: URLs shared
+   * while the tags were still clickable may name one voice of a tune, and
+   * restoring that selection would be restoring a choice that never worked
+   * (#24). It is kept verbatim as `declaredParts`, which nothing here reads —
+   * it is there so a page writing the file back out can hand `parts:` on
+   * unchanged, inert though it is until #20.
    */
   async function load(saved) {
     sections.length = 0;
     for (const s of saved) {
       const title = Array.isArray(s.title) ? s.title.join('\n') : (s.title || '');
-      const section = newSection(sectionsEnabled && !!s.toc);
+      const section = newSection(sectionsEnabled && s.toc ? s.toc : false);
       section.title = sectionsEnabled ? title : '';
       for (const e of (s.entries || [])) {
         const tune = allTunes.find(t => t.slug === e.tuneSlug);
         const seen = x => x.tuneSlug === e.tuneSlug;
-        if (!tune || allEntries().some(seen) || section.entries.some(seen)) continue;
-        const detail = await getTuneDetail(e.tuneSlug);
+        if (!repeatableTunes && (allEntries().some(seen) || section.entries.some(seen))) continue;
+        if (!tune && !keepUnknownTunes) continue;
+        const parts = tune ? (await getTuneDetail(e.tuneSlug)).parts.map(p => p.name) : [];
         section.entries.push({
           tuneSlug: e.tuneSlug,
-          title: tuneLabel(tune),
-          parts: detail.parts.map(p => p.name),
+          title: tune ? tuneLabel(tune) : e.tuneSlug,
+          parts,
           pageBreak: !!e.pageBreak,
+          declaredParts: e.parts || null,
+          missing: !tune,
         });
       }
       if (sectionsEnabled || sections.length === 0) sections.push(section);
@@ -567,6 +630,22 @@ const TuneSelector = (() => {
     }
     if (sections.length === 0) resetSections();
     active = sections.length - 1;
+    renderBinder();
+  }
+
+  /**
+   * Installs `list` as the selection, as it stands.
+   *
+   * For a page holding more than one binder in memory and switching between
+   * them (#60). `load` is the wrong tool for that: it re-resolves every entry
+   * against the catalogue, which is work already done and, for an unresolved
+   * entry, a request that 404s. The sections array is mutated rather than
+   * replaced, because callers hold the array `sections()` handed them.
+   */
+  function setSections(list) {
+    sections.length = 0;
+    sections.push(...(list.length ? list : [newSection()]));
+    active = 0;
     renderBinder();
   }
 
@@ -592,6 +671,15 @@ const TuneSelector = (() => {
    *        that need every section titled turn this off, and the controls
    *        stop suggesting that a blank title is an option; enforcing it is
    *        still the page's job.
+   * @param {boolean} [hooks.repeatableTunes=false]
+   *        Whether one tune may be added to more than one section. Off is the
+   *        builder's rule (#24): a personal binder gains nothing from the same
+   *        pages twice. On is `binders.yaml`'s: a tune may sit in both "Massed
+   *        Bands" and "Parade Tunes", and a page that edits the file has to be
+   *        able to author that.
+   * @param {boolean} [hooks.keepUnknownTunes=false]
+   *        Whether an entry naming a tune the branch's catalogue does not have
+   *        is kept, marked, rather than dropped. See `load`.
    * @param {(msg: string, severity?: string) => void} [hooks.setStatus]
    *        Reports progress and errors. Pages that do not distinguish
    *        severities simply ignore the second argument.
@@ -607,6 +695,8 @@ const TuneSelector = (() => {
     hooks = hooks || {};
     sectionsEnabled = !!hooks.sections;
     untitledSections = hooks.untitledSections !== false;
+    repeatableTunes = !!hooks.repeatableTunes;
+    keepUnknownTunes = !!hooks.keepUnknownTunes;
     if (hooks.setStatus) setStatus = hooks.setStatus;
     if (hooks.onClear) onClear = hooks.onClear;
     if (hooks.restore) restore = hooks.restore;
@@ -669,6 +759,8 @@ const TuneSelector = (() => {
     render: renderBinder,
     /** The live sections array — mutate it, never replace it. */
     sections: () => sections,
+    /** Installs a section list held elsewhere, unresolved entries and all. */
+    setSections,
     /** A section's title as the lines it is engraved as: tidied, blanks dropped. */
     titleLines,
     /** Whether a section is the binder's table of contents rather than tunes (#47). */

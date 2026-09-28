@@ -55,6 +55,12 @@ struct OfficialBinder: Codable, Sendable {
     /// anyway says so with `break: before`.
     let pack: Bool
 
+    // Spelled out because both halves of Codable are written by hand below, so
+    // nothing is synthesized to derive these from.
+    enum CodingKeys: String, CodingKey {
+        case name, output, pack, sections
+    }
+
     init(name: String, output: String, sections: [OfficialBinderSection], pack: Bool = false) {
         self.name = name
         self.output = output
@@ -68,6 +74,19 @@ struct OfficialBinder: Codable, Sendable {
         output = try container.decode(String.self, forKey: .output)
         sections = try container.decode([OfficialBinderSection].self, forKey: .sections)
         pack = try container.decodeIfPresent(Bool.self, forKey: .pack) ?? false
+    }
+
+    /// Writes the keys in the order `binders.yaml` is read in — name, output,
+    /// pack, sections — rather than the order they are declared in, and omits
+    /// `pack:` where it is off, so a regenerated file reads as the hand-written
+    /// ones do. The synthesized encoding would put `pack: false` after the
+    /// sections, which is both noisier and further from the shape of the file.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(output, forKey: .output)
+        if pack { try container.encode(true, forKey: .pack) }
+        try container.encode(sections, forKey: .sections)
     }
 }
 
@@ -102,6 +121,12 @@ struct OfficialBinderSection: Codable, Sendable {
     /// ```
     let toc: TableOfContentsSpec?
 
+    // Spelled out for the same reason as `OfficialBinder.CodingKeys`, and in the
+    // order `encode(to:)` writes them.
+    enum CodingKeys: String, CodingKey {
+        case title, toc, entries
+    }
+
     init(title: BinderTitle = BinderTitle([]), entries: [OfficialBinderEntry] = [],
          toc: TableOfContentsSpec? = nil) {
         self.title = title
@@ -114,6 +139,21 @@ struct OfficialBinderSection: Codable, Sendable {
         title = try container.decodeIfPresent(BinderTitle.self, forKey: .title) ?? BinderTitle([])
         entries = try container.decodeIfPresent([OfficialBinderEntry].self, forKey: .entries) ?? []
         toc = try TableOfContentsSpec.decode(from: container, forKey: .toc)
+    }
+
+    /// Writes **title, toc, entries**, omitting each where it says nothing, so a
+    /// section comes back out in the shape it went in as.
+    ///
+    /// A contents page with the default heading stays the `- toc: true`
+    /// shorthand rather than growing a blank title, and a title page writes no
+    /// `entries:` key rather than an empty list — which is what the decoder
+    /// above reads as "a title page and nothing else" (#46). The synthesized
+    /// encoding would give title, entries, toc and none of that.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if !title.lines.isEmpty { try container.encode(title, forKey: .title) }
+        try container.encodeIfPresent(toc, forKey: .toc)
+        if !entries.isEmpty { try container.encode(entries, forKey: .entries) }
     }
 }
 
