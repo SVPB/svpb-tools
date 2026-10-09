@@ -19,7 +19,8 @@ enum ConnectionsReport {
         async let github = githubStatus(app)
         async let box = boxStatus(app)
         async let slack = slackStatus(app)
-        return await [github, box, slack]
+        async let backup = backupStatus(app)
+        return await [github, box, slack, backup]
     }
 
     // MARK: - GitHub
@@ -156,6 +157,56 @@ enum ConnectionsReport {
 
     private static let slackPurpose =
         "Login links for the dashboard, and the build notification the band reads."
+
+    // MARK: - Backups
+
+    /// Not probed: a probe could only say the bucket is reachable now, and what matters is
+    /// whether last night's copy landed — which the backup job records as it runs.
+    private static func backupStatus(_ app: Application) async -> ConnectionStatus {
+        let status = await DatabaseBackup.status(on: app.db)
+        let remedy = """
+            Set BACKUP_ENDPOINT, BACKUP_BUCKET, BACKUP_ACCESS_KEY and BACKUP_SECRET_KEY in \
+            .env (README § Backups) and restart. Give TNG a key limited to that one bucket.
+            """
+        let credential = status.lastSuccess.map { last in
+            "Last backup taken \(Self.relative(last))" + (status.lastObject.map { ": \($0)" } ?? "")
+        } ?? "No backup has been stored yet"
+
+        switch status.loaded {
+        case .unconfigured:
+            return ConnectionStatus(
+                id: "backup", name: "Backups", purpose: backupPurpose,
+                state: .unconfigured, detail: nil, credential: credential,
+                error: "Backups are not configured: the database exists only on this server",
+                authorizePath: nil, remedy: remedy)
+        case .incomplete(let missing):
+            return ConnectionStatus(
+                id: "backup", name: "Backups", purpose: backupPurpose,
+                state: .failing, detail: nil, credential: credential,
+                error: "Missing \(missing.joined(separator: ", "))",
+                authorizePath: nil, remedy: remedy)
+        case .ready(let configuration):
+            let interval = BoxTokenKeepAlive.describe(
+                DatabaseBackup.interval(from: Environment.get("BACKUP_INTERVAL_HOURS")))
+            let destination = "\(configuration.bucket)/\(configuration.prefix) at "
+                + (configuration.endpoint.host ?? "") + ", every \(interval)"
+            // Before the first run there is nothing to judge by, and a deployment that has
+            // never stored a backup is not yet one that is backed up.
+            let error: String? = switch status.healthy {
+            case true?: nil
+            case false?: "The last backup failed; the reason is in Slack and the server log"
+            case nil: "No backup has run yet; the first runs a minute after the server starts"
+            }
+            return ConnectionStatus(
+                id: "backup", name: "Backups", purpose: backupPurpose,
+                state: status.healthy == true ? .working : .failing,
+                detail: destination, credential: credential, error: error,
+                authorizePath: nil, remedy: remedy)
+        }
+    }
+
+    private static let backupPurpose =
+        "A nightly copy of the database, kept off this server."
 
     // MARK: - Helpers
 

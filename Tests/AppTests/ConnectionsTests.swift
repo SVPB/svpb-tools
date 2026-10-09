@@ -30,8 +30,8 @@ final class ConnectionsTests: XCTestCase {
     func testEveryServiceReportsItselfWithoutCredentials() async throws {
         let connections = await ConnectionsReport.gather(on: app)
 
-        XCTAssertEqual(connections.map(\.id), ["github", "box", "slack"],
-                       "In the order they matter to a build")
+        XCTAssertEqual(connections.map(\.id), ["github", "box", "slack", "backup"],
+                       "In the order they matter to a build, and then the backup")
         for connection in connections {
             XCTAssertNotEqual(connection.state, .working,
                               "\(connection.name) cannot be working with no credentials")
