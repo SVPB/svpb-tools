@@ -98,11 +98,43 @@ load_store() {
     fi
 }
 
-# curl, signed for the store. Arguments after the path go to curl.
+# curl, signed for the store, writing the response body to stdout. Arguments after the
+# path go to curl. A refusal stops the script with the store's own reason: an S3 error
+# body names its cause (AccessDenied, SignatureDoesNotMatch, …), and `curl -f` would
+# throw exactly that away.
 store() {
     local path=$1; shift
-    curl -fsS --aws-sigv4 "aws:amz:$REGION:s3" --user "$ACCESS_KEY:$SECRET_KEY" \
-        "$@" "$ENDPOINT/$BUCKET$path"
+    local body code
+    body=$(mktemp)
+    code=$(curl -sS -o "$body" -w '%{http_code}' \
+        --aws-sigv4 "aws:amz:$REGION:s3" --user "$ACCESS_KEY:$SECRET_KEY" \
+        "$@" "$ENDPOINT/$BUCKET$path") || { rm -f "$body"; fail "could not reach $ENDPOINT"; }
+    if [[ "$code" == 2?? ]]; then
+        cat "$body"; rm -f "$body"
+        return
+    fi
+
+    local reason message
+    reason=$(sed -n 's/.*<Code>\([^<]*\)<\/Code>.*/\1/p' "$body" | head -n1)
+    message=$(sed -n 's/.*<Message>\([^<]*\)<\/Message>.*/\1/p' "$body" | head -n1)
+    rm -f "$body"
+    printf '\033[31merror:\033[0m %s/%s%s refused with HTTP %s: %s%s\n' \
+        "$ENDPOINT" "$BUCKET" "$path" "$code" "${reason:-no reason given}" \
+        "${message:+ ($message)}" >&2
+    case "$reason" in
+        AccessDenied)
+            echo "The key was accepted but is not allowed to do this. A key limited to one bucket" >&2
+            echo "may not change bucket settings; for \`expire\`, use a full-access key (README § Backups)." >&2 ;;
+        SignatureDoesNotMatch)
+            echo "BACKUP_SECRET_KEY does not match BACKUP_ACCESS_KEY. The secret is shown only once," >&2
+            echo "when the key is created; if it was not saved, create a new key." >&2 ;;
+        InvalidAccessKeyId)
+            echo "BACKUP_ACCESS_KEY is not a key the store knows. It is the Access Key ID (DO00…)," >&2
+            echo "not the key's name." >&2 ;;
+        NoSuchBucket)
+            echo "No bucket '$BUCKET' at $ENDPOINT — check BACKUP_ENDPOINT." >&2 ;;
+    esac
+    exit 1
 }
 
 # Every backup key under the prefix, oldest first. Keys carry a UTC timestamp, so text
@@ -141,7 +173,7 @@ cmd_check() {
     trap 'docker rm -f "$CHECK_CONTAINER" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
     log "Downloading $key"
-    store "/$key" -o "$WORK/tng.sqlite"
+    store "/$key" >"$WORK/tng.sqlite"
     printf '    %s bytes\n' "$(wc -c <"$WORK/tng.sqlite" | tr -d ' ')"
 
     log "Checking integrity and counting rows"
