@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Nightly off-site backup of the database (#4)
+
+- TNG copies its SQLite database to an S3-compatible bucket — a DigitalOcean Space — every night,
+  as one timestamped object per night. The copy is taken with `VACUUM INTO`, which is consistent
+  while the server is running where copying the file is not. Nothing happens until the `BACKUP_*`
+  variables are set; see README § Backups. `BACKUP_ENDPOINT` takes the bucket's Origin Endpoint as
+  DigitalOcean shows it, and reads the bucket and region out of it.
+- It runs inside the server, like the Box token renewal, so a rebuilt droplet cannot lose it. A
+  failing backup is announced in the build channel when it starts failing and when it recovers,
+  and the Connections page has a **Backups** row showing when the last one was taken.
+- The server never lists or deletes backups; the bucket expires them. `Scripts/backups.sh expire
+  30` sets that rule.
+- `Scripts/backups.sh check` proves a backup restores without touching the live server: an
+  integrity check, a row count for each table, and the server image started against a scratch
+  copy with no network. `Scripts/backups.sh restore` swaps one in, keeping the database it
+  replaces.
+- Uploads are signed with AWS Signature Version 4, implemented in `S3Signer` against swift-crypto
+  rather than with an AWS SDK, and tested against AWS's published examples.
+
 ### Changed
 
 #### CeolKit 1.9.1 -> 2.1.0
