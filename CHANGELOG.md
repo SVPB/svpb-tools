@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-08
+
+### Added
+
+#### Nightly off-site backup of the database (#4)
+
+- TNG copies its SQLite database to an S3-compatible bucket — a DigitalOcean Space — every night,
+  as one timestamped object per night. The copy is taken with `VACUUM INTO`, which is consistent
+  while the server is running where copying the file is not. Nothing happens until the `BACKUP_*`
+  variables are set; see README § Backups. `BACKUP_ENDPOINT` takes the bucket's Origin Endpoint as
+  DigitalOcean shows it, and reads the bucket and region out of it.
+- It runs inside the server, like the Box token renewal, so a rebuilt droplet cannot lose it. A
+  failing backup is announced in the build channel when it starts failing and when it recovers,
+  and the Connections page has a **Backups** row showing when the last one was taken.
+- The server never lists or deletes backups; the bucket expires them. `Scripts/backups.sh expire
+  30` sets that rule.
+- `Scripts/backups.sh check` proves a backup restores without touching the live server: an
+  integrity check, a row count for each table, and the server image started against a scratch
+  copy with no network. `Scripts/backups.sh restore` swaps one in, keeping the database it
+  replaces.
+- When the bucket refuses a `Scripts/backups.sh` request, the script prints the store's reason
+  (`AccessDenied`, `SignatureDoesNotMatch`, …) and what to do about it, rather than a bare 403.
+- Uploads are signed with AWS Signature Version 4, implemented in `S3Signer` against swift-crypto
+  rather than with an AWS SDK, and tested against AWS's published examples.
+
+### Changed
+
+#### CeolKit 1.9.1 -> 2.1.0
+
+- A major release, and every page engraves differently: with no `%%scale` in force CeolKit now
+  uses abcm2ps's default of 0.75, so music and tune text come out smaller than before and a
+  packed binder fits more on a page. The page, its margins and the footer are not scaled.
+- `%%ceolkit:scale F` still works, as `%%pagescale F`, but is deprecated and reported as a
+  diagnostic; 20 files in `svpb-music` (`2026` and `2027`) use it. `%%ceolkit:justifylast`, set
+  in `ckstyle.abh`, is likewise deprecated in favour of `%%stretchlast`. Moving off both is a
+  music-repo change.
+- `TuneMetadata.rhythm` now holds every `R:` field, not just one.
+
+### Fixed
+
+#### Packed binder pages no longer print music over the footer (#71)
+
+- Page 42 of the 2026 full binder printed the third system of "Wearing of the Green" through its
+  footer. CeolKit tested whether a system fit against the bare bottom margin, then stamped the
+  footer into the ~14pt just above it. Packing made it likely, since a run fills each page as
+  far as the music will go, but a long enough tune on a page of its own could hit it too.
+- Fixed upstream in CeolKit 2.0 (sbeitzel/CeolKit#192): a page that carries a footer keeps the
+  footer band clear. That covers tune-scoped footers, which is all a packed run has, because
+  `TuneRunRenderer` hoists each file's `%%footer` into its own tunes' headers.
+- New tests read each system's position back out of the engraved SVG with `CeolKitSVGGeometry`
+  and check that none reaches the band. That needs no rasteriser and no `qpdf`, so they run the
+  same on macOS and on Linux. They cover the real pair (`Tests/Fixtures/FooterBand`), a packed
+  run where the second tune has to open its own page, and a single long tune. Each synthetic case
+  also renders without a footer, to check that it still lands a system in the band when nothing is
+  reserved.
+
 ## [0.5.0] - 2026-09-28
 
 ### Added

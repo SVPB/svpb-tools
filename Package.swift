@@ -11,7 +11,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.6.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.21.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "5.0.0"),
-        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "1.9.1"),
+        .package(url: "https://github.com/sbeitzel/CeolKit.git", from: "2.1.0"),
         .package(url: "https://github.com/sbeitzel/SVGPDFKit.git", from: "0.4.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
     ],
@@ -54,6 +54,9 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "CeolKitParser", package: "CeolKit"),
                 .product(name: "CeolKitSVGRenderer", package: "CeolKit"),
+                // Reads system positions back out of engraved SVG, to check them against
+                // the footer band (#71). The app itself has no use for it.
+                .product(name: "CeolKitSVGGeometry", package: "CeolKit"),
                 .product(name: "SVGPDFKit", package: "SVGPDFKit"),
             ],
             path: "Tests/AppTests",

@@ -178,6 +178,12 @@ each value before starting the stack.
 | `SLACK_SIGNING_SECRET` | Signing secret for verifying inbound Events API payloads |
 | `SLACK_WEBHOOK_URL` | Incoming Webhook URL for posting build notifications |
 | `INITIAL_ADMIN_SLACK_USER_ID` | Slack user ID granted admin access on first startup |
+| `BACKUP_ENDPOINT` | Optional. Where nightly database backups go: the bucket's *Origin Endpoint*, e.g. `https://tng-backups.sfo3.digitaloceanspaces.com` — see [Backups](#backups). Unset, there are no backups |
+| `BACKUP_BUCKET` | Optional. The bucket, when `BACKUP_ENDPOINT` does not name one — a regional Spaces endpoint, or another S3-compatible store |
+| `BACKUP_ACCESS_KEY` / `BACKUP_SECRET_KEY` | A key for that bucket |
+| `BACKUP_PREFIX` | Optional. Prepended to each backup's name; defaults to `tng/` |
+| `BACKUP_REGION` | Optional. The signing region; read from a DigitalOcean endpoint, `us-east-1` otherwise |
+| `BACKUP_INTERVAL_HOURS` | Optional. Hours between backups; defaults to 24 |
 
 ---
 
@@ -241,7 +247,7 @@ Box, Slack, and GitHub — so it belongs on the same durable storage, symlinked 
 checkout where `docker compose` expects to find it.
 
 This protects against losing the machine. It does **not** protect against database corruption, a
-bad migration, or `docker compose down -v`; backups are a separate concern.
+bad migration, or `docker compose down -v`; for those, see [Backups](#backups).
 
 ### Digital Ocean Droplet
 
@@ -395,6 +401,86 @@ you are satisfied, reclaim the boot-disk copies:
 ```sh
 docker volume rm svpb-tools_tng-data svpb-tools_caddy-data svpb-tools_caddy-config
 ```
+
+### Backups
+
+The SQLite database is the one thing TNG cannot regenerate — users, the tune catalogue, build
+history, binder requests — so TNG copies it to object storage off the droplet every night. It takes
+the copy itself, with SQLite's `VACUUM INTO`, which is consistent while the server is running where
+copying the file is not. Each night's copy is a separate object named by its UTC time,
+`tng/tng-20261008T031500Z.sqlite`, and TNG never deletes one: the bucket expires them.
+
+A failed backup is posted to the Slack build channel — once, when it starts failing, and again when
+it recovers — and the admin dashboard's **Connections** page shows when the last one was taken.
+
+**1. Create a Space.** In the Digital Ocean control panel, create a Spaces bucket, private, with no
+CDN. The same region as the droplet is fine: it still covers losing the droplet, the volume, or the
+data on it. Only a bucket in another region covers losing the whole region, and a bucket's region
+cannot be changed once it is made.
+
+**2. Create a key for it.** Under *Spaces Object Storage → Access Keys*, create a key with
+*Limited access* to that one bucket, *Read/Write/Delete*. TNG only ever writes, but Spaces has no
+write-only permission.
+
+**3. Configure TNG.** Add to `.env` (on the volume, `/mnt/tng_state/.env`) and restart with
+`docker compose up -d`:
+
+```sh
+BACKUP_ENDPOINT=https://tng-backups.sfo3.digitaloceanspaces.com   # the bucket's Origin Endpoint
+BACKUP_ACCESS_KEY=DO00…
+BACKUP_SECRET_KEY=…
+```
+
+The Origin Endpoint, on the bucket's settings page, names both the bucket and its region, so nothing
+else is needed. (`BACKUP_BUCKET` is for a store whose URL does not name the bucket; if both are set
+they must agree.)
+
+The server logs `[Backup] Backing up to … every 24 hour(s)` at boot and takes the first backup a
+minute later.
+
+**4. Expire old backups.** Once, from the checkout on the server:
+
+```sh
+Scripts/backups.sh expire 30
+```
+
+This sets a lifecycle rule on the bucket that deletes backups after 30 days. The control panel does
+not set lifecycle rules, which is why the script does, through the same API the command-line tools
+use. A bucket-limited key may not be allowed to change bucket settings; if it is refused, run it once
+with a full-access key that never goes into `.env`:
+`BACKUP_ACCESS_KEY=… BACKUP_SECRET_KEY=… Scripts/backups.sh expire 30`.
+
+**5. Prove a restore.** An untested backup is not a backup:
+
+```sh
+Scripts/backups.sh list            # every backup in the bucket, oldest first
+Scripts/backups.sh check           # the newest; or name one from the list
+```
+
+`check` downloads the backup, runs SQLite's integrity check on it, prints the number of rows in each
+table, and then starts the server's own image against a scratch copy and prints its `/health`. The
+live server is not touched. The scratch server runs with no network and dummy credentials, because
+the database holds the live Box token and a second server renewing it would break the first. Do this
+once after setting backups up, and again after any release that adds a migration.
+
+#### Restoring
+
+```sh
+Scripts/backups.sh restore         # the newest; or name one from `list`
+```
+
+`restore` runs `check` first, asks for confirmation, stops `tng`, moves the current database into
+`$TNG_STATE_DIR/data/pre-restore-<time>/`, puts the backup in its place, and starts `tng` again,
+without pulling a new image. It waits for the healthcheck and exits non-zero if the server does not
+come back, in which case the previous database is still in that directory.
+
+Afterwards, open **Connections** on the admin dashboard. Box replaces its refresh token on every
+renewal and retires the old one, so a backup may hold a token Box no longer accepts. If Box shows as
+failing, re-authorise it there. Builds started after the backup was taken are gone with the rest of
+that day's changes; push to the music repository, or redeliver the webhook, to rebuild.
+
+Digital Ocean's droplet **Backups** add-on (weekly or daily images of the whole machine, for about
+20–30% of the droplet's price) does not back up attached volumes, so it is no substitute for this.
 
 ---
 

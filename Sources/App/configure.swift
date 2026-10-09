@@ -184,6 +184,9 @@ private func initServices(_ app: Application) {
     // that would otherwise use it. Renew it on a timer so a quiet season cannot kill it.
     app.lifecycle.use(BoxTokenKeepAlive())
 
+    // The database is the one thing TNG cannot regenerate; copy it off the server nightly.
+    app.lifecycle.use(DatabaseBackup())
+
     app.buildService = BuildService(
         gitService:         gitService,
         boxService:         boxService,

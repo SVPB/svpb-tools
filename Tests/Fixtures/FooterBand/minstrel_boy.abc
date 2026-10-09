@@ -1,0 +1,13 @@
+%abc-2.2
+I:abc-include ckstyle.abh
+%%landscape 1
+
+X:2
+T:The Minstrel Boy
+C:Trad., Arr. EUSPBA
+M:4/4
+L:1/8
+K:D
+[|: e | {gAGAG}A3 B {Gdc}dc {g}B{G}A | {gcd}c2 e2 {ag}a2 ga | {fg}f2 e2 {g}c2 {GdG}ec | {gBd}B4 [1 {G}A3 [2 {G}A2 :|]
+[| {gcd}ce | {ag}a2 {f}g2 {a}f2 {gf}ga | {f}g2 f2 {gef}e3 {A}e | {g}f3 c {GdG}c3 e | {g}f2/>e {g}fg a2 {g}a2 |
+{AGAG}A3 B {Gdc}dc {g}B{G}A | {gcd}c2 e2 {ag}a2 ga | {fg}f2 e2 {g}c2 {GdG}ec | {gBd}B4 {G}A2 |]

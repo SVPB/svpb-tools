@@ -1,0 +1,9 @@
+%%writefields TRCQ true
+%%footer "Page ${pagenumber}	${label}	Generated: $D"
+%%straightflags false
+%%flatbeams true
+%%graceslurs false
+%%dateformat "%e %B %Y %H:%M"
+%%ceolkit:pipeformat true
+%%ceolkit:justifylast true
+%%ceolkit:gracenotespacing 1.5
