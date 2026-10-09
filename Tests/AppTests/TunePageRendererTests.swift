@@ -129,6 +129,45 @@ final class TunePageRendererTests: XCTestCase {
         return try TunePageRenderer().render(abcAt: url, firstPageNumber: firstPageNumber)
     }
 
+    // MARK: - Keeping clear of the footer (#71)
+
+    /// A tune long enough to reach the foot of its page carries its last system over to the
+    /// next one rather than printing it through the footer. Packing makes this likelier, but
+    /// an unpacked page can hit it too.
+    ///
+    /// As in `TuneRunRendererTests`, the same tune without a footer is rendered first, to
+    /// prove the length and scale still land a system in the band when nothing is reserved.
+    /// If that check fails after a CeolKit bump, retune them until both hold again.
+    func testALongTunePrintsClearOfTheFooter() throws {
+        func render(footer: String) throws -> TunePageRenderer.Rendering {
+            let abc = """
+            %abc-2.2
+            %%footer "\(footer)"
+            %%pagescale 1.1
+            X:1
+            T:Long
+            M:4/4
+            L:1/8
+            K:D
+            \(TuneRunRendererTests.lines(16))
+            """
+            let url = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("long-\(UUID().uuidString).abc")
+            try abc.write(to: url, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: url) }
+            return try TunePageRenderer().render(abcAt: url, firstPageNumber: 1)
+        }
+
+        let unreserved = try render(footer: "")
+        XCTAssertFalse(try FooterBand.intrusions(in: unreserved.pages).isEmpty,
+                       "the fixture no longer reaches the footer band; it tests nothing")
+
+        let footed = try render(footer: "$P")
+        try assertClearOfFooter(footed.pages)
+        XCTAssertEqual(footed.pages.count, unreserved.pages.count + 1,
+                       "the system that would have printed over the footer should have moved on")
+    }
+
     /// The end of the contract: CeolKit prints the number the directive asked for.
     func testCeolKitEngravesTheRequestedPageNumber() throws {
         let abc = """

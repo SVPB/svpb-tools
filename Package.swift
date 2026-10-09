@@ -54,6 +54,9 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "CeolKitParser", package: "CeolKit"),
                 .product(name: "CeolKitSVGRenderer", package: "CeolKit"),
+                // Reads system positions back out of engraved SVG, to check them against
+                // the footer band (#71). The app itself has no use for it.
+                .product(name: "CeolKitSVGGeometry", package: "CeolKit"),
                 .product(name: "SVGPDFKit", package: "SVGPDFKit"),
             ],
             path: "Tests/AppTests",
