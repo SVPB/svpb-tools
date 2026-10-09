@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-08
+
 ### Added
 
 #### Nightly off-site backup of the database (#4)
@@ -24,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   integrity check, a row count for each table, and the server image started against a scratch
   copy with no network. `Scripts/backups.sh restore` swaps one in, keeping the database it
   replaces.
+- When the bucket refuses a `Scripts/backups.sh` request, the script prints the store's reason
+  (`AccessDenied`, `SignatureDoesNotMatch`, …) and what to do about it, rather than a bare 403.
 - Uploads are signed with AWS Signature Version 4, implemented in `S3Signer` against swift-crypto
   rather than with an AWS SDK, and tested against AWS's published examples.
 
