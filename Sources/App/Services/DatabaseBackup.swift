@@ -64,14 +64,15 @@ struct DatabaseBackup: LifecycleHandler {
         case .unconfigured:
             app.logger.warning("[Backup] No BACKUP_* settings: the database is not being backed up")
             return
-        case .incomplete(let missing):
+        case .invalid(let problems):
             // Announced rather than only logged: someone tried to turn backups on and
             // would otherwise believe they had.
-            app.logger.error("[Backup] Not backing up — missing \(missing.joined(separator: ", "))")
+            let reason = "BACKUP_* settings: \(problems.joined(separator: "; "))"
+            app.logger.error("[Backup] Not backing up — \(reason)")
             app.storage[TaskKey.self] = Task {
                 try? await Task.sleep(for: Self.initialDelay)
                 guard !Task.isCancelled else { return }
-                await Self.record(app: app, failure: "missing \(missing.joined(separator: ", "))")
+                await Self.record(app: app, failure: reason)
             }
             return
         case .ready(let ready):
@@ -258,12 +259,15 @@ extension DatabaseBackup {
         enum Loaded: Equatable {
             /// Nothing set: backups are off, which is a choice.
             case unconfigured
-            /// Some set and some not: backups are off, which is a mistake.
-            case incomplete(missing: [String])
+            /// Something set but not enough, or contradictory: backups are off, which is a
+            /// mistake. Each problem names the variable it is about.
+            case invalid(problems: [String])
             case ready(Configuration)
         }
 
-        static let required = ["BACKUP_ENDPOINT", "BACKUP_BUCKET",
+        /// The variables that switch backups on. Setting none of them is a choice; setting
+        /// some of them is an attempt, and gets told what else it needs.
+        static let switches = ["BACKUP_ENDPOINT", "BACKUP_BUCKET",
                                "BACKUP_ACCESS_KEY", "BACKUP_SECRET_KEY"]
 
         static func load(from environment: (String) -> String?) -> Loaded {
@@ -271,15 +275,35 @@ extension DatabaseBackup {
                 environment(name)?.trimmingCharacters(in: .whitespaces).nilIfEmpty
             }
 
-            let missing = required.filter { value($0) == nil }
-            if missing.count == required.count { return .unconfigured }
+            if switches.allSatisfy({ value($0) == nil }) { return .unconfigured }
 
-            var endpoint = value("BACKUP_ENDPOINT").flatMap(URL.init(string:))
-            if endpoint?.scheme == nil || endpoint?.host == nil { endpoint = nil }
-            let invalid = value("BACKUP_ENDPOINT") != nil && endpoint == nil
-                ? ["BACKUP_ENDPOINT (not a URL)"] : []
-            guard missing.isEmpty, invalid.isEmpty, let endpoint else {
-                return .incomplete(missing: missing + invalid)
+            var problems = [String]()
+            let parsed = value("BACKUP_ENDPOINT").flatMap(parseEndpoint)
+            switch (value("BACKUP_ENDPOINT"), parsed) {
+            case (nil, _):
+                problems.append("BACKUP_ENDPOINT is not set")
+            case (let raw?, nil):
+                problems.append("BACKUP_ENDPOINT \"\(raw)\" is not a store's URL; use the bucket's Origin Endpoint")
+            default:
+                break
+            }
+
+            // The bucket can come from either place. When it comes from both, they have to
+            // agree: picking one would back up somewhere the operator did not mean.
+            let bucket = value("BACKUP_BUCKET") ?? parsed?.bucket
+            if let named = value("BACKUP_BUCKET"), let fromEndpoint = parsed?.bucket,
+               named != fromEndpoint {
+                problems.append("BACKUP_BUCKET \"\(named)\" disagrees with BACKUP_ENDPOINT, which names \"\(fromEndpoint)\"")
+            } else if bucket == nil, parsed != nil {
+                problems.append("BACKUP_BUCKET is not set, and BACKUP_ENDPOINT does not name a bucket")
+            }
+
+            for name in ["BACKUP_ACCESS_KEY", "BACKUP_SECRET_KEY"] where value(name) == nil {
+                problems.append("\(name) is not set")
+            }
+
+            guard problems.isEmpty, let parsed, let bucket else {
+                return .invalid(problems: problems)
             }
 
             var prefix = value("BACKUP_PREFIX") ?? "tng/"
@@ -287,12 +311,55 @@ extension DatabaseBackup {
             if prefix.hasPrefix("/") { prefix.removeFirst() }
 
             return .ready(Configuration(
-                endpoint: endpoint,
-                bucket: value("BACKUP_BUCKET")!,
-                region: value("BACKUP_REGION") ?? defaultRegion(for: endpoint),
+                endpoint: parsed.endpoint,
+                bucket: bucket,
+                region: value("BACKUP_REGION") ?? defaultRegion(for: parsed.endpoint),
                 prefix: prefix,
                 accessKey: value("BACKUP_ACCESS_KEY")!,
                 secretKey: value("BACKUP_SECRET_KEY")!))
+        }
+
+        /// The store's endpoint, reduced to scheme, host and port, and the bucket when
+        /// the URL names one.
+        ///
+        /// DigitalOcean shows a bucket's address as its *Origin Endpoint*,
+        /// `https://tng-backups.sfo3.digitaloceanspaces.com` — the bucket, then the region.
+        /// That is the URL an operator will copy, so it is taken apart here: the bucket is
+        /// the first label (Spaces bucket names cannot contain dots) and the rest is the
+        /// regional endpoint the requests go to. The regional endpoint on its own,
+        /// `https://sfo3.digitaloceanspaces.com`, names no bucket.
+        ///
+        /// Only DigitalOcean's hosts are taken apart. AWS puts its bucket somewhere else in
+        /// the name, and a local store is just a host and port, so any other URL is used
+        /// as it stands, with the bucket from `BACKUP_BUCKET`. The CDN endpoint
+        /// (`….cdn.digitaloceanspaces.com`) is refused: it serves reads, not uploads.
+        static func parseEndpoint(_ raw: String) -> (endpoint: URL, bucket: String?)? {
+            guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http",
+                  let host = url.host?.lowercased(), !host.isEmpty else {
+                return nil
+            }
+
+            var origin = URLComponents()
+            origin.scheme = scheme
+            origin.port = url.port
+
+            let spaces = ".digitaloceanspaces.com"
+            guard host.hasSuffix(spaces) else {
+                origin.host = host
+                return origin.url.map { ($0, nil) }
+            }
+            let labels = host.dropLast(spaces.count).split(separator: ".", omittingEmptySubsequences: false)
+            switch labels.count {
+            case 1:  // sfo3.digitaloceanspaces.com
+                origin.host = host
+                return origin.url.map { ($0, nil) }
+            case 2:  // tng-backups.sfo3.digitaloceanspaces.com
+                origin.host = "\(labels[1])\(spaces)"
+                return origin.url.map { ($0, String(labels[0])) }
+            default:
+                return nil
+            }
         }
 
         /// A DigitalOcean endpoint names its region as its first label —

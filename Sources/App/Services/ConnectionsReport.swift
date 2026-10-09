@@ -165,8 +165,9 @@ enum ConnectionsReport {
     private static func backupStatus(_ app: Application) async -> ConnectionStatus {
         let status = await DatabaseBackup.status(on: app.db)
         let remedy = """
-            Set BACKUP_ENDPOINT, BACKUP_BUCKET, BACKUP_ACCESS_KEY and BACKUP_SECRET_KEY in \
-            .env (README § Backups) and restart. Give TNG a key limited to that one bucket.
+            Set BACKUP_ENDPOINT to the bucket's Origin Endpoint, and BACKUP_ACCESS_KEY and \
+            BACKUP_SECRET_KEY to a key limited to that bucket, in .env (README § Backups), \
+            and restart.
             """
         let credential = status.lastSuccess.map { last in
             "Last backup taken \(Self.relative(last))" + (status.lastObject.map { ": \($0)" } ?? "")
@@ -179,11 +180,11 @@ enum ConnectionsReport {
                 state: .unconfigured, detail: nil, credential: credential,
                 error: "Backups are not configured: the database exists only on this server",
                 authorizePath: nil, remedy: remedy)
-        case .incomplete(let missing):
+        case .invalid(let problems):
             return ConnectionStatus(
                 id: "backup", name: "Backups", purpose: backupPurpose,
                 state: .failing, detail: nil, credential: credential,
-                error: "Missing \(missing.joined(separator: ", "))",
+                error: "Not backing up: \(problems.joined(separator: "; "))",
                 authorizePath: nil, remedy: remedy)
         case .ready(let configuration):
             let interval = BoxTokenKeepAlive.describe(

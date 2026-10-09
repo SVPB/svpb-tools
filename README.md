@@ -178,8 +178,8 @@ each value before starting the stack.
 | `SLACK_SIGNING_SECRET` | Signing secret for verifying inbound Events API payloads |
 | `SLACK_WEBHOOK_URL` | Incoming Webhook URL for posting build notifications |
 | `INITIAL_ADMIN_SLACK_USER_ID` | Slack user ID granted admin access on first startup |
-| `BACKUP_ENDPOINT` | Optional. The object store nightly database backups go to, e.g. `https://sfo3.digitaloceanspaces.com` — see [Backups](#backups). Unset, there are no backups |
-| `BACKUP_BUCKET` | The bucket (Space) to put them in |
+| `BACKUP_ENDPOINT` | Optional. Where nightly database backups go: the bucket's *Origin Endpoint*, e.g. `https://tng-backups.sfo3.digitaloceanspaces.com` — see [Backups](#backups). Unset, there are no backups |
+| `BACKUP_BUCKET` | Optional. The bucket, when `BACKUP_ENDPOINT` does not name one — a regional Spaces endpoint, or another S3-compatible store |
 | `BACKUP_ACCESS_KEY` / `BACKUP_SECRET_KEY` | A key for that bucket |
 | `BACKUP_PREFIX` | Optional. Prepended to each backup's name; defaults to `tng/` |
 | `BACKUP_REGION` | Optional. The signing region; read from a DigitalOcean endpoint, `us-east-1` otherwise |
@@ -413,8 +413,10 @@ copying the file is not. Each night's copy is a separate object named by its UTC
 A failed backup is posted to the Slack build channel — once, when it starts failing, and again when
 it recovers — and the admin dashboard's **Connections** page shows when the last one was taken.
 
-**1. Create a Space.** In the Digital Ocean control panel, create a Spaces bucket. A different region
-from the droplet's protects against losing a region too; the CDN is not needed. Leave it private.
+**1. Create a Space.** In the Digital Ocean control panel, create a Spaces bucket, private, with no
+CDN. The same region as the droplet is fine: it still covers losing the droplet, the volume, or the
+data on it. Only a bucket in another region covers losing the whole region, and a bucket's region
+cannot be changed once it is made.
 
 **2. Create a key for it.** Under *Spaces Object Storage → Access Keys*, create a key with
 *Limited access* to that one bucket, *Read/Write/Delete*. TNG only ever writes, but Spaces has no
@@ -424,11 +426,14 @@ write-only permission.
 `docker compose up -d`:
 
 ```sh
-BACKUP_ENDPOINT=https://sfo3.digitaloceanspaces.com    # the Space's region, not its own URL
-BACKUP_BUCKET=svpb-tng-backups
+BACKUP_ENDPOINT=https://tng-backups.sfo3.digitaloceanspaces.com   # the bucket's Origin Endpoint
 BACKUP_ACCESS_KEY=DO00…
 BACKUP_SECRET_KEY=…
 ```
+
+The Origin Endpoint, on the bucket's settings page, names both the bucket and its region, so nothing
+else is needed. (`BACKUP_BUCKET` is for a store whose URL does not name the bucket; if both are set
+they must agree.)
 
 The server logs `[Backup] Backing up to … every 24 hour(s)` at boot and takes the first backup a
 minute later.
@@ -439,9 +444,10 @@ minute later.
 Scripts/backups.sh expire 30
 ```
 
-This sets a lifecycle rule on the bucket that deletes backups after 30 days. A bucket-limited key may
-not be allowed to change bucket settings; if it is refused, run it once with a full-access key that
-never goes into `.env`:
+This sets a lifecycle rule on the bucket that deletes backups after 30 days. The control panel does
+not set lifecycle rules, which is why the script does, through the same API the command-line tools
+use. A bucket-limited key may not be allowed to change bucket settings; if it is refused, run it once
+with a full-access key that never goes into `.env`:
 `BACKUP_ACCESS_KEY=… BACKUP_SECRET_KEY=… Scripts/backups.sh expire 30`.
 
 **5. Prove a restore.** An untested backup is not a backup:

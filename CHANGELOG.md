@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - TNG copies its SQLite database to an S3-compatible bucket — a DigitalOcean Space — every night,
   as one timestamped object per night. The copy is taken with `VACUUM INTO`, which is consistent
   while the server is running where copying the file is not. Nothing happens until the `BACKUP_*`
-  variables are set; see README § Backups.
+  variables are set; see README § Backups. `BACKUP_ENDPOINT` takes the bucket's Origin Endpoint as
+  DigitalOcean shows it, and reads the bucket and region out of it.
 - It runs inside the server, like the Box token renewal, so a rebuilt droplet cannot lose it. A
   failing backup is announced in the build channel when it starts failing and when it recovers,
   and the Connections page has a **Backups** row showing when the last one was taken.

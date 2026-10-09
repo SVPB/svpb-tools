@@ -102,12 +102,96 @@ final class DatabaseBackupTests: XCTestCase {
     func testPartialConfigurationNamesWhatIsMissing() {
         var values = Self.complete
         values["BACKUP_SECRET_KEY"] = nil
-        XCTAssertEqual(load(values), .incomplete(missing: ["BACKUP_SECRET_KEY"]))
+        XCTAssertEqual(load(values), .invalid(problems: ["BACKUP_SECRET_KEY is not set"]))
 
         values = Self.complete
         values["BACKUP_ENDPOINT"] = "sfo3.digitaloceanspaces.com"
-        XCTAssertEqual(load(values), .incomplete(missing: ["BACKUP_ENDPOINT (not a URL)"]),
-                       "An endpoint without a scheme cannot be requested")
+        guard case .invalid(let problems) = load(values) else {
+            return XCTFail("An endpoint without a scheme cannot be requested")
+        }
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertTrue(problems[0].hasPrefix("BACKUP_ENDPOINT"), problems[0])
+    }
+
+    // MARK: - The Origin Endpoint
+
+    /// The URL DigitalOcean shows on the bucket's page is the one an operator will paste,
+    /// and it is enough on its own: the bucket and the region are both in it.
+    func testOriginEndpointNamesTheBucketAndRegion() throws {
+        let loaded = load([
+            "BACKUP_ENDPOINT": "https://tng-backups.sfo3.digitaloceanspaces.com",
+            "BACKUP_ACCESS_KEY": "DO00EXAMPLE",
+            "BACKUP_SECRET_KEY": "secret",
+        ])
+        guard case .ready(let configuration) = loaded else {
+            return XCTFail("expected a usable configuration, got \(loaded)")
+        }
+        XCTAssertEqual(configuration.bucket, "tng-backups")
+        XCTAssertEqual(configuration.region, "sfo3")
+        XCTAssertEqual(configuration.endpoint.absoluteString, "https://sfo3.digitaloceanspaces.com",
+                       "Requests go to the regional endpoint, with the bucket in the path")
+        XCTAssertEqual(configuration.hostHeader, "sfo3.digitaloceanspaces.com")
+    }
+
+    /// A trailing slash, or upper case, is still the same URL.
+    func testOriginEndpointToleratesWhatAPasteBringsWithIt() throws {
+        let parsed = try XCTUnwrap(DatabaseBackup.Configuration.parseEndpoint(
+            "https://TNG-Backups.SFO3.digitaloceanspaces.com/"))
+        XCTAssertEqual(parsed.bucket, "tng-backups")
+        XCTAssertEqual(parsed.endpoint.absoluteString, "https://sfo3.digitaloceanspaces.com")
+    }
+
+    /// Naming the bucket twice is fine when both say the same thing.
+    func testABucketNamedTwiceTheSameWayIsAccepted() {
+        var values = Self.complete
+        values["BACKUP_ENDPOINT"] = "https://svpb-backups.sfo3.digitaloceanspaces.com"
+        guard case .ready(let configuration) = load(values) else {
+            return XCTFail("expected a usable configuration")
+        }
+        XCTAssertEqual(configuration.bucket, "svpb-backups")
+    }
+
+    /// …and refused when they do not, rather than backing up to whichever one won.
+    func testABucketNamedTwoWaysIsRefused() {
+        var values = Self.complete
+        values["BACKUP_ENDPOINT"] = "https://tng-backups.sfo3.digitaloceanspaces.com"
+        guard case .invalid(let problems) = load(values) else {
+            return XCTFail("two different buckets must not resolve to one")
+        }
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertTrue(problems[0].contains("svpb-backups") && problems[0].contains("tng-backups"),
+                      "Both names, so the operator can see which to fix: \(problems[0])")
+    }
+
+    /// The regional endpoint names no bucket, so one still has to be given.
+    func testARegionalEndpointStillNeedsABucket() {
+        var values = Self.complete
+        values["BACKUP_BUCKET"] = nil
+        guard case .invalid(let problems) = load(values) else {
+            return XCTFail("expected the missing bucket to be reported")
+        }
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertTrue(problems[0].hasPrefix("BACKUP_BUCKET"), problems[0])
+    }
+
+    /// Only DigitalOcean's hosts are taken apart. An AWS virtual-hosted URL puts the
+    /// bucket first too, but in a different shape, and a local store has no bucket in its
+    /// name at all; both are used as they stand.
+    func testOtherStoresAreNotTakenApart() throws {
+        let local = try XCTUnwrap(DatabaseBackup.Configuration.parseEndpoint("http://127.0.0.1:9000"))
+        XCTAssertNil(local.bucket)
+        XCTAssertEqual(local.endpoint.absoluteString, "http://127.0.0.1:9000")
+
+        let aws = try XCTUnwrap(DatabaseBackup.Configuration.parseEndpoint(
+            "https://s3.us-west-2.amazonaws.com"))
+        XCTAssertNil(aws.bucket)
+    }
+
+    /// The CDN endpoint serves reads; an upload sent there would not land in the bucket.
+    func testTheCDNEndpointIsRefused() {
+        XCTAssertNil(DatabaseBackup.Configuration.parseEndpoint(
+            "https://tng-backups.sfo3.cdn.digitaloceanspaces.com"))
+        XCTAssertNil(DatabaseBackup.Configuration.parseEndpoint("ftp://sfo3.digitaloceanspaces.com"))
     }
 
     func testCompleteConfigurationDerivesTheSpacesRegion() throws {
@@ -298,7 +382,7 @@ final class DatabaseBackupTests: XCTestCase {
         let failing = DatabaseBackup.announcement(previous: true, failure: "HTTP 403")
         XCTAssertTrue(failing?.contains("backup is failing") ?? false, failing ?? "nil")
         XCTAssertTrue(failing?.contains("HTTP 403") ?? false, "The error travels with the alarm")
-        XCTAssertNotNil(DatabaseBackup.announcement(previous: nil, failure: "missing BACKUP_BUCKET"),
+        XCTAssertNotNil(DatabaseBackup.announcement(previous: nil, failure: "BACKUP_BUCKET is not set"),
                         "A first run that fails is news")
         XCTAssertEqual(DatabaseBackup.announcement(previous: false, failure: nil),
                        "✅ *The nightly database backup is working again.*")

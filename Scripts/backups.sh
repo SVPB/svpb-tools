@@ -62,15 +62,39 @@ load_store() {
     SECRET_KEY=$(setting BACKUP_SECRET_KEY)
     PREFIX=$(setting BACKUP_PREFIX); PREFIX=${PREFIX:-tng/}
     PREFIX=${PREFIX#/}; [[ "$PREFIX" == */ ]] || PREFIX="$PREFIX/"
-    for name in ENDPOINT BUCKET ACCESS_KEY SECRET_KEY; do
+    [[ -n "$ENDPOINT" ]] || fail "BACKUP_ENDPOINT is not set in .env or the environment"
+
+    # The same rule as DatabaseBackup.Configuration.parseEndpoint: a DigitalOcean Origin
+    # Endpoint, https://<bucket>.<region>.digitaloceanspaces.com, names the bucket, and
+    # requests go to the regional endpoint with the bucket in the path. Any other URL is
+    # used as it stands.
+    local scheme=${ENDPOINT%%://*} host=${ENDPOINT#*://}
+    host=${host%%/*}; host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+    [[ "$scheme" == http || "$scheme" == https ]] && [[ -n "$host" ]] \
+        || fail "BACKUP_ENDPOINT '$ENDPOINT' is not a store's URL; use the bucket's Origin Endpoint"
+    if [[ "$host" == *.digitaloceanspaces.com ]]; then
+        local labels=${host%.digitaloceanspaces.com}
+        case "$labels" in
+            *.*.*) fail "BACKUP_ENDPOINT '$ENDPOINT' is not a store's URL; use the bucket's Origin Endpoint" ;;
+            *.*)   local named=${labels%%.*}
+                   [[ -z "$BUCKET" || "$BUCKET" == "$named" ]] \
+                       || fail "BACKUP_BUCKET '$BUCKET' disagrees with BACKUP_ENDPOINT, which names '$named'"
+                   BUCKET=$named
+                   host=${labels#*.}.digitaloceanspaces.com ;;
+        esac
+    fi
+    ENDPOINT="$scheme://$host"
+
+    [[ -n "$BUCKET" ]] || fail "BACKUP_BUCKET is not set, and BACKUP_ENDPOINT does not name a bucket"
+    for name in ACCESS_KEY SECRET_KEY; do
         [[ -n "${!name}" ]] || fail "BACKUP_$name is not set in .env or the environment"
     done
 
     # The same rule as DatabaseBackup.Configuration.defaultRegion.
     REGION=$(setting BACKUP_REGION)
     if [[ -z "$REGION" ]]; then
-        local host=${ENDPOINT#*://}; host=${host%%[:/]*}
-        if [[ "$host" == *.digitaloceanspaces.com ]]; then REGION=${host%%.*}; else REGION=us-east-1; fi
+        local bare=${host%%:*}
+        if [[ "$bare" == *.digitaloceanspaces.com ]]; then REGION=${bare%%.*}; else REGION=us-east-1; fi
     fi
 }
 
