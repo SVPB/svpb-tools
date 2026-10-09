@@ -221,6 +221,6 @@ final class ConversionPipelineTests: XCTestCase {
                 || $0.code == .includeNoBaseDirectory },
             "Include did not resolve against the base directory"
         )
-        XCTAssertEqual(parsed.score.tunes.first?.metadata.rhythm?.value, "March")
+        XCTAssertEqual(parsed.score.tunes.first?.metadata.rhythm.first?.value, "March")
     }
 }

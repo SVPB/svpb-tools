@@ -1,0 +1,14 @@
+%abc-2.2
+I:abc-include ckstyle.abh
+%%landscape 1
+
+X:3
+T:Wearing of the Green
+C:Traditional
+M:4/4
+R:March
+L:1/8
+K:D
+[|: {g}A>B | {GdG}c2 {gcd}c{e}B {g}ce {A}ec | {gcd}cB {G}B>c {gBd}B2 {g}ce | {g}fd {ag}a>g {a}fe {gcd}cA | {gBd}BA {g}A>B {G}A2 :|]
+{ag}a>g | {a}fe {gef}ec {g}e>c {g}A>B | {gcd}c{e}B {g}c>d {gef}e2 {ag}a>g | {a}fe {gef}ec {g}e>c {g}A>B | {gcd}cB {G}B>c {gBd}B2 {g}A>B |
+{GdG}c2 {gcd}c{e}B {g}ce {A}ec | {gcd}cB {G}B>c {gBd}B2 {g}ce | {g}fd {ag}a>g {a}fe {gcd}cA | {gBd}BA {g}A>B {G}A2 |]
