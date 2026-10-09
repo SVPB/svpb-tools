@@ -292,6 +292,63 @@ final class TuneRunRendererTests: XCTestCase {
         XCTAssertNil(parsed.score.footer, "nothing should be left governing the whole run")
     }
 
+    // MARK: - Keeping clear of the footer (#71)
+
+    /// The pair that printed through the footer on page 42 of the 2026 full binder, with the
+    /// style sheet they include, as they stood in `svpb-music` `2026` (bfb1114). They share a
+    /// page, and every footer in the run is tune-scoped — the case a fix reserving space only
+    /// for `score.footer` would have missed.
+    ///
+    /// Since CeolKit 2.0 engraves at abcm2ps's default `%%scale 0.75`, this pair ends well
+    /// above the band whether or not anything is reserved, so it is the synthetic case below
+    /// that actually holds the fix in place. This one stays as the reproduction that was filed.
+    func testTheRealPairPrintsClearOfTheFooter() throws {
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/FooterBand")
+        let rendering = try TuneRunRenderer().render(
+            ["minstrel_boy", "wearing_of_green"].map {
+                TuneRunRenderer.Source(slug: $0, url: fixtures.appendingPathComponent("\($0).abc"),
+                                       label: "Parade Tunes")
+            },
+            firstPageNumber: 42)
+
+        XCTAssertEqual(rendering.starts, [0, 0], "the pair no longer shares a page")
+        try assertClearOfFooter(rendering.pages)
+    }
+
+    /// A tune whose first system fits above the bottom margin but not above the footer opens
+    /// a page of its own, and nothing is left in the band on the page before.
+    ///
+    /// The tall tune's length and scale are chosen so that its last system leaves less than a
+    /// footer band free, which is a narrow target. The same run without a footer is rendered
+    /// first to prove it is still being hit: there, nothing is reserved, so the second tune
+    /// squeezes in under the first and prints where the footer would go. If CeolKit's spacing
+    /// moves and that check fails, retune `lines` and `scale` until both hold again.
+    func testATuneThatWouldReachTheFooterOpensItsOwnPage() throws {
+        func run(footer: String) throws -> TuneRunRenderer.Rendering {
+            try TuneRunRenderer().render(
+                [try source("tall", music: Self.lines(14), footer: footer, scale: 1.05),
+                 try source("short", music: "ABcd efga | gfed cBAG |]", footer: footer)],
+                firstPageNumber: 1)
+        }
+
+        let unreserved = try run(footer: "")
+        XCTAssertEqual(unreserved.starts, [0, 0], "the fixture no longer packs the tunes together")
+        XCTAssertFalse(try FooterBand.intrusions(in: unreserved.pages).isEmpty,
+                       "the fixture no longer reaches the footer band; it tests nothing")
+
+        let footed = try run(footer: "$P")
+        XCTAssertEqual(footed.starts, [0, 1], "the short tune should have opened a page of its own")
+        try assertClearOfFooter(footed.pages)
+    }
+
+    // MARK: - Helpers
+
+    /// `count` lines of two bars each, closed with a final barline.
+    static func lines(_ count: Int) -> String {
+        Array(repeating: "ABcd efga | gfed cBAG |", count: count).joined(separator: "\n") + "]"
+    }
+
     /// A run reports whether *every* tune in it asks for a page number, because the drawn
     /// number is outlines and a footer that prints none looks exactly like one that does.
     func testAFooterWithNoPageNumberTokenIsReported() throws {
@@ -344,16 +401,15 @@ final class TuneRunRendererTests: XCTestCase {
             [TuneRunRenderer.Source(slug: "empty", url: url)], firstPageNumber: 1))
     }
 
-    // MARK: - Helpers
-
     /// Writes one tune's ABC into the run's directory and names it as a source.
-    private func source(_ slug: String, music: String, footer: String = "$P") throws
-        -> TuneRunRenderer.Source {
+    private func source(_ slug: String, music: String, footer: String = "$P",
+                        scale: Double? = nil) throws -> TuneRunRenderer.Source {
         let url = directory.appendingPathComponent("\(slug).abc")
+        let scaling = scale.map { "%%pagescale \($0)\n" } ?? ""
         try """
         %abc-2.2
         %%footer "\(footer)"
-        X:1
+        \(scaling)X:1
         T:\(slug)
         M:4/4
         L:1/8
