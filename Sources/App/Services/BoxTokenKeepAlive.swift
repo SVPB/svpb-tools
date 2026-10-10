@@ -93,7 +93,32 @@ struct BoxTokenKeepAlive: LifecycleHandler {
             failure = "\(error)"
             app.logger.error("[Box] Scheduled token renewal failed: \(error)")
         }
+        await record(failure: failure, reason: .scheduledRenewal, app: app)
+    }
 
+    // MARK: - Recording an outcome
+
+    /// What produced an outcome, which is what the recovery message has to name.
+    enum Reason: Sendable {
+        /// The timer's own renewal.
+        case scheduledRenewal
+        /// An operator re-authorised Box from the Connections page.
+        case reauthorised
+    }
+
+    /// Announces `failure` (or its absence) if it differs from the last recorded outcome,
+    /// then records it.
+    ///
+    /// The one place that reads or writes ``healthKey``. The scheduled renewal calls it
+    /// with whatever happened; the authorisation callback calls it only on success, so a
+    /// re-authorisation that fixes Box says so straight away instead of leaving the
+    /// channel's last word on Box an alarm until the next renewal, up to a day later. A
+    /// failed authorisation is not recorded: an abandoned Box window is not news, and the
+    /// person who pressed the button already sees the error.
+    ///
+    /// - Returns: The message announced, if any — whether or not Slack accepted it.
+    @discardableResult
+    static func record(failure: String?, reason: Reason, app: Application) async -> String? {
         let previous: Bool?
         do {
             previous = try await Setting.value(for: healthKey, on: app.db).map { $0 == "true" }
@@ -102,7 +127,8 @@ struct BoxTokenKeepAlive: LifecycleHandler {
             previous = nil
         }
 
-        if let message = announcement(previous: previous, failure: failure) {
+        let message = announcement(previous: previous, failure: failure, reason: reason)
+        if let message {
             do {
                 try await app.slackService.postPlainMessage(message)
             } catch {
@@ -115,11 +141,12 @@ struct BoxTokenKeepAlive: LifecycleHandler {
         } catch {
             app.logger.warning("[Box] Could not record the renewal outcome: \(error)")
         }
+        return message
     }
 
     // MARK: - What to say, and when
 
-    /// The Slack message for this renewal, or `nil` when there is nothing new to say.
+    /// The Slack message for this outcome, or `nil` when there is nothing new to say.
     ///
     /// Only a *change* is announced. A daily job that reported every success would be
     /// noise nobody reads, and one that reported every failure would turn a fortnight's
@@ -128,7 +155,12 @@ struct BoxTokenKeepAlive: LifecycleHandler {
     ///
     /// A first run that succeeds says nothing: there is no news in a thing that works. A
     /// first run that fails does, because there is.
-    static func announcement(previous: Bool?, failure: String?) -> String? {
+    ///
+    /// `reason` changes only what a recovery says. A failure is only ever recorded by the
+    /// scheduled renewal, so the failure text speaks for that alone.
+    static func announcement(
+        previous: Bool?, failure: String?, reason: Reason = .scheduledRenewal
+    ) -> String? {
         switch (previous, failure) {
         case (_, .some(let error)) where previous != false:
             return """
@@ -141,7 +173,12 @@ struct BoxTokenKeepAlive: LifecycleHandler {
                 Check the Connections page on the admin dashboard.
                 """
         case (.some(false), .none):
-            return "✅ *Box authorisation is working again.* The scheduled token renewal succeeded."
+            switch reason {
+            case .scheduledRenewal:
+                return "✅ *Box authorisation is working again.* The scheduled token renewal succeeded."
+            case .reauthorised:
+                return "✅ *Box authorisation is working again* — re-authorised from the Connections page."
+            }
         default:
             // Unchanged: a success after a success, or another day of the same failure.
             return nil

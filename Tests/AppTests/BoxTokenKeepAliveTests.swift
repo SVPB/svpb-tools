@@ -81,6 +81,56 @@ final class BoxTokenKeepAliveTests: XCTestCase {
                        "✅ *Box authorisation is working again.* The scheduled token renewal succeeded.")
     }
 
+    /// A recovery made by re-authorising must not claim the scheduled renewal did it (#75).
+    func testRecoveryByReauthorisationSaysSo() {
+        let message = BoxTokenKeepAlive.announcement(previous: false, failure: nil, reason: .reauthorised)
+
+        XCTAssertEqual(message,
+                       "✅ *Box authorisation is working again* — re-authorised from the Connections page.")
+    }
+
+    /// A first authorisation, or one that replaces a token that was still working, is not
+    /// news — the same rule as a renewal.
+    func testReauthorisingSomethingThatWorkedSaysNothing() {
+        XCTAssertNil(BoxTokenKeepAlive.announcement(previous: nil, failure: nil, reason: .reauthorised))
+        XCTAssertNil(BoxTokenKeepAlive.announcement(previous: true, failure: nil, reason: .reauthorised))
+    }
+
+    // MARK: - Recording a re-authorisation
+
+    /// After the channel has been told Box is failing, a re-authorisation clears the flag
+    /// and announces the recovery at once rather than at the next renewal — and only once.
+    func testReauthorisingAfterAFailureAnnouncesRecoveryOnce() async throws {
+        let app = try await Application.make(.testing)
+        try await configure(app)
+        try await Setting.set(BoxTokenKeepAlive.healthKey, to: "false", on: app.db)
+
+        let first = await BoxTokenKeepAlive.record(failure: nil, reason: .reauthorised, app: app)
+        XCTAssertEqual(first,
+                       "✅ *Box authorisation is working again* — re-authorised from the Connections page.")
+        let health = try await Setting.value(for: BoxTokenKeepAlive.healthKey, on: app.db)
+        XCTAssertEqual(health, "true")
+
+        let second = await BoxTokenKeepAlive.record(failure: nil, reason: .reauthorised, app: app)
+        XCTAssertNil(second, "Re-authorising again is not a second recovery")
+
+        try await app.asyncShutdown()
+    }
+
+    /// With no failure on record there is nothing to recover from, so nothing is said —
+    /// but the success is still recorded, so a later failure is announced as a change.
+    func testReauthorisingWithNoFailureOnRecordSaysNothing() async throws {
+        let app = try await Application.make(.testing)
+        try await configure(app)
+
+        let message = await BoxTokenKeepAlive.record(failure: nil, reason: .reauthorised, app: app)
+        XCTAssertNil(message)
+        let health = try await Setting.value(for: BoxTokenKeepAlive.healthKey, on: app.db)
+        XCTAssertEqual(health, "true")
+
+        try await app.asyncShutdown()
+    }
+
     // MARK: - A pass with nothing configured
 
     /// The renewal runs unattended, so a server with no Box credentials must record the
