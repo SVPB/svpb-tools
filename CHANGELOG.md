@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+#### The deployment docs describe a production server on `main` (#77)
+
+- `.env.example` and README § Updating no longer present `develop` as the image a server runs.
+  A production server leaves `TNG_IMAGE_TAG` unset and runs `latest`, pinning a release only to
+  roll back; the `develop` image is for testing on a developer's own machine.
+
 ### Fixed
 
 #### Re-authorising Box announces the recovery straight away (#75)

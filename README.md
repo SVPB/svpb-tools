@@ -623,7 +623,7 @@ builder, and personalised binders are downloaded straight from TNG.
 
 ## Updating
 
-Pushing to `develop` or `main` publishes a new image automatically. To move the server onto it,
+Pushing to `main` publishes a new `latest` image automatically. To move the server onto it,
 run from the checkout on the server:
 
 ```sh
@@ -631,9 +631,12 @@ Scripts/deploy.sh
 ```
 
 It waits for the publish workflow for the tag's commit to succeed — pulling a mutable tag like
-`develop` before then silently fetches the previous build — then pulls, recreates the containers,
+`latest` before then silently fetches the previous build — then pulls, recreates the containers,
 waits for the healthcheck, prints the commit now running, and prunes the superseded image. It exits
 non-zero if any of that fails. `Scripts/deploy.sh --no-wait` skips the build gate.
+
+Pushes to `develop` publish a `develop` image too. It is for trying out unreleased work on a
+developer's own machine; the production server runs only what has been released to `main`.
 
 To see what is running at any other time, look at the page footer or ask the server: images
 built by CI report their commit in `GET /health`, both as `commit` and appended to `version`
