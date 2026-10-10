@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### Re-authorising Box announces the recovery straight away (#75)
+
+- After the build channel has been told *Box authorisation is failing*, pressing **Re-authorise
+  Box** on the Connections page now posts *Box authorisation is working again* as soon as the
+  authorisation succeeds. Before, the channel kept saying Box was broken until the next scheduled
+  renewal, up to a day later. A failed or abandoned authorisation still says nothing to the
+  channel, and re-authorising a Box that was already working is not announced.
+
 ## [0.6.0] - 2026-10-08
 
 ### Added
