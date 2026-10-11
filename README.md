@@ -152,7 +152,8 @@ binders:
   or Docker with roughly 4 GB of RAM available. Neither is needed for the normal deployment path.
 - A domain name pointed at the server's public IP address (required for automatic TLS).
 - A GitHub webhook secret (any strong random string).
-- Box OAuth2 credentials (reuse the existing Gen.1 credentials — no new Box admin setup needed).
+- A Box app with OAuth2 credentials, created from a Box **developer account** (see
+  [Box OAuth2](#box-oauth2)).
 - Your own Slack user ID (to seed the initial admin account on first startup).
 - A Slack app with bot and Events API capabilities (see [Slack setup](#slack-setup) below).
 
@@ -550,13 +551,39 @@ identity. All three are configured in the same app.
 ### Box OAuth2
 
 TNG uploads PDFs to Box using OAuth2, the same authentication method used by the Gen.1 toolchain.
-If you are migrating from Gen.1, the same Box app credentials can be reused — skip to step 5 to
-obtain a fresh refresh token using the existing Client ID and Client Secret.
 
-**Creating a Box app (fresh setup only):**
+**Before you start: use a Box developer account.**
 
-1. Go to the [Box Developer Console](https://app.box.com/developers/console) and click
-   **Create New App**.
+Two different Box logins take part, and they do different jobs:
+
+- **The developer account owns and configures the app.** Create one at
+  <https://account.box.com/signup/developer>, with an email address of its own that is not tied to
+  any existing Box account. Use it for everything in the
+  [Box Developer Console](https://app.box.com/developers/console). An ordinary box.com account
+  (free or paid) also reaches the Developer Console, and its console looks complete, but much of it
+  is disabled: **configuration changes do not save.** If you edit an app's redirect URIs or scopes
+  and the edits do not stick, you are logged in to the wrong kind of account. This applies just as
+  much to changing an existing app as to creating a new one. (Source: a
+  [Box community thread](https://community.box.com/sdks-and-tools-7/box-developers-page-can-t-save-any-configuration-35195),
+  which may need a community-forum login, a third kind of Box account.)
+- **The folder owner's account grants access.** On Box's **Grant Access** screen, log in as the
+  ordinary box.com user with admin access to `pipe_music`, not as the developer account. The token
+  TNG receives acts as that user, so the Connections check succeeds only if that user can see
+  `BOX_FOLDER_ID`. It does not need to be a developer account, and no enterprise admin has to
+  approve an app owned by another account.
+
+Which login owns the production app is recorded privately, not in this repository.
+
+The Gen.1 app is no longer used: production moved to a new app in October 2026 (#74). It was most
+likely owned by a developer account nobody can log in to any more, so it can be neither changed
+nor deleted. Do not try to reuse its credentials. If you ever lose access to the account that owns
+the current app, the way out is the same: create a new app and follow
+**Moving to a different Box app**, below.
+
+**Creating a Box app:**
+
+1. Logged in as the **developer account**, go to the
+   [Box Developer Console](https://app.box.com/developers/console) and click **Create New App**.
 2. Choose **Custom App**, then **User Authentication (OAuth 2.0)**.
 3. Give the app a name (e.g. "SVPB Music Server") and click **Create App**.
 4. In the app's **Configuration** tab:
@@ -566,8 +593,9 @@ obtain a fresh refresh token using the existing Client ID and Client Secret.
      value is shown on TNG's own **Connections** page (`/admin/connections`), ready to copy.
      Add `http://localhost:8080/box-callback` as well if you use the `box-auth` fallback
      below for local development.
-   - Under **Application Scopes**, ensure **Read and write all files and folders** is checked.
-   - Click **Save Changes**.
+   - Under **Application Scopes**, tick **Read and write all files and folders**. Without the
+     write scope, builds cannot upload.
+   - Click **Save Changes**, then reload the page and check that the changes are still there.
 
 **Authorizing TNG (once, from the browser):**
 
@@ -576,8 +604,9 @@ Box OAuth2 requires completing an authorization flow once. Sign in to the dashbo
 
 1. Check the **Box redirect URI** shown at the bottom of the page against the one registered in
    the Box Developer Console. They must match exactly, or Box refuses the redirect.
-2. Press **Authorise Box**. A window opens at Box — log in as the Box user who owns the music
-   folder and click **Grant Access**.
+2. Press **Authorise Box**. A window opens at Box — log in as the **folder owner's account** (the
+   Box user with admin access to `pipe_music`, not the developer account) and click
+   **Grant Access**.
 3. The window closes itself and the page reloads. Box should now read **working**, naming the
    folder it is uploading into.
 
@@ -596,6 +625,33 @@ its database, and the server starts without one precisely so that it can be auth
 > Connections page shows the error. If the token does lapse, press **Re-authorise Box** and
 > repeat the three steps above.
 
+**Moving to a different Box app:**
+
+Use this to replace the app TNG uploads through, for instance when nobody can log in to the
+account that owns the current one any more.
+
+1. Create the new app as above, from a developer account, with the server's redirect URI and the
+   write scope.
+2. Save what you are replacing, so you can roll back within the old token's 60-day life: the
+   current `BOX_CLIENT_ID` and `BOX_CLIENT_SECRET` from `.env`, and the stored refresh token:
+
+   ```sh
+   sqlite3 -readonly "$TNG_STATE_DIR/data/tng.sqlite" \
+     "SELECT value FROM settings WHERE key = 'box.refresh_token'"
+   ```
+
+3. In `.env`, set `BOX_CLIENT_ID` and `BOX_CLIENT_SECRET` to the new app's values and clear
+   `BOX_REFRESH_TOKEN`, then run `docker compose up -d tng`. `docker compose restart` is not
+   enough: it reuses the existing container's environment.
+4. Open **Connections**. Box shows an error, because the stored refresh token belongs to the old
+   app. Press **Re-authorise Box** and grant access as the folder owner's account. The new token
+   overwrites the old one, so the database needs no editing.
+5. Box should read **working**. The next build's upload confirms that the write scope is set.
+
+To roll back, put the old client ID and secret back in `.env`, stop `tng`, write the saved token
+back with `sqlite3 "$TNG_STATE_DIR/data/tng.sqlite" "UPDATE settings SET value = '<saved token>'
+WHERE key = 'box.refresh_token'"`, and run `docker compose up -d tng`.
+
 **Fallback: the `box-auth` command.**
 
 `docker compose run --rm tng box-auth` runs the same flow from a terminal, printing a refresh
@@ -603,6 +659,11 @@ token to paste into `BOX_REFRESH_TOKEN`. It needs a publicly reachable HTTPS red
 own — Box rejects a plain-`http` one that is not localhost — so on a deployed server it needs a
 tunnel (see the local development notes), and the Connections page is the easier path. Keep it
 for bootstrapping a server that is not yet reachable over HTTPS.
+
+If you find yourself tunnelling just to reach a redirect URI that is already registered, because
+the server's own `https://<domain>/box-callback` will not save in the console, you are almost
+certainly using the console from an ordinary account rather than a developer account. Log in as
+the developer account, add the server's redirect URI, and use the Connections page instead.
 
 **Finding the Box folder ID:**
 
