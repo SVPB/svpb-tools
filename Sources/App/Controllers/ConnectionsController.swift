@@ -111,6 +111,9 @@ struct ConnectionsController: RouteCollection {
             req.logger.error("[Box] Authorisation failed: \(error)")
             return try await render("\(error)")
         }
+        // The channel may have been told Box is failing; this is the fix, so say so now
+        // rather than at the next scheduled renewal.
+        await BoxTokenKeepAlive.record(failure: nil, reason: .reauthorised, app: req.application)
         return try await render(nil)
     }
 
