@@ -14,6 +14,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A production server leaves `TNG_IMAGE_TAG` unset and runs `latest`, pinning a release only to
   roll back; the `develop` image is for testing on a developer's own machine.
 
+#### The Box setup docs say the app needs a Box developer account (#74)
+
+- README § Box OAuth2 opens with which Box login does what: a **developer account** owns and
+  configures the app, because from an ordinary box.com account the Developer Console's changes do
+  not save; the ordinary account that owns `pipe_music` grants access and needs nothing special.
+  The symptom is described so a reader who arrives with it recognises it.
+- A new **Moving to a different Box app** procedure covers switching the server to another app,
+  including what to save first so it can be rolled back. It is also the way out when nobody can
+  log in to the account that owns the current app.
+- The docs no longer suggest reusing the Gen.1 app's credentials: production has moved to a new
+  app, and the Gen.1 one can no longer be changed.
+- The `box-auth` fallback notes that tunnelling to an already-registered redirect URI usually means
+  the console is being used from the wrong kind of account, and `.env.example`'s Box comment
+  points at the new note.
+
 ### Fixed
 
 #### Re-authorising Box announces the recovery straight away (#75)
