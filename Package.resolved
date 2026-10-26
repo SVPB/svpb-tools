@@ -1,5 +1,5 @@
 {
-  "originHash" : "308cf31051520a2cd0bb699772b22f8e68740a508376e0159bc651377482db32",
+  "originHash" : "d906bb102b4ae74d3e43e7d59e3ed6c24918da0bc0ed4c23d2d89407643671ab",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sbeitzel/CeolKit.git",
       "state" : {
-        "revision" : "a9bae9675bff5475669de349ec64ed594e54a033",
-        "version" : "2.1.0"
+        "revision" : "53de092d1b1873f622eb20847606dc7790407ef3",
+        "version" : "2.2.0"
       }
     },
     {
