@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-25
+
+### Changed
+
+#### CeolKit 2.1.0 -> 2.2.0
+
+- Tuplets are drawn (sbeitzel/CeolKit#231, #232), so a triplet engraves with its bracket and
+  number.
+- The beat note in a `Q:` tempo is drawn in Bravura (sbeitzel/CeolKit#230), and a tempo change
+  stands above the music without pushing the staff down (sbeitzel/CeolKit#234).
+- CeolKit builds again under Swift 6.3, the toolchain CI uses.
+- No code here changes; nothing uses CeolKit's new syntax-highlighting API (sbeitzel/CeolKit#229).
+
 ## [0.6.1] - 2026-10-11
 
 ### Changed
