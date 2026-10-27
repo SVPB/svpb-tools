@@ -47,6 +47,7 @@
       <span class="branch-item">
         <span class="badge">#(branch)</span>
         <button class="sync-btn" onclick="syncBranch('#(branch)', this)" title="Sync catalogue for #(branch)">↻ Sync</button>
+        <button class="sync-btn" onclick="rebuildBranch('#(branch)', this)" title="Full build of #(branch): binders to Box, notice to Slack">⟳ Rebuild</button>
         <button class="sync-btn delete-btn" onclick="deleteBranch('#(branch)', this)" title="Remove #(branch) from the server">✕ Remove</button>
       </span>
     #endfor
@@ -106,7 +107,7 @@ async function syncBranch(branch, btn) {
     });
     if (res.ok) {
       status.textContent = 'Build started for "' + branch + '". Waiting for completion…';
-      pollBuildStatus(branch, btn);
+      pollBuildStatus(branch, btn, 'Sync', '↻ Sync');
     } else {
       const text = await res.text();
       status.textContent = 'Error: ' + text;
@@ -118,15 +119,45 @@ async function syncBranch(branch, btn) {
   }
 }
 
-function pollBuildStatus(branch, btn) {
+async function rebuildBranch(branch, btn) {
+  const question = 'Rebuild branch "' + branch + '"?\n\n'
+    + 'This is a full build, the same as a push: its binders are uploaded to Box '
+    + 'and the band is notified in Slack.';
+  if (!confirm(question)) return;
+
+  const status = document.getElementById('sync-status');
+  btn.disabled = true;
+  btn.textContent = '⟳ Rebuilding…';
+  status.textContent = 'Rebuilding branch "' + branch + '"…';
+
+  try {
+    const res = await fetch('/admin/branches/' + encodeURIComponent(branch) + '/rebuild', { method: 'POST' });
+    if (res.ok) {
+      status.textContent = 'Rebuild started for "' + branch + '". Waiting for completion…';
+      pollBuildStatus(branch, btn, 'Rebuild', '⟳ Rebuild');
+    } else {
+      let reason = await res.text();
+      try { reason = JSON.parse(reason).reason || reason; } catch (_) {}
+      status.textContent = 'Could not rebuild "' + branch + '": ' + reason;
+      btn.disabled = false;
+      btn.textContent = '⟳ Rebuild';
+    }
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = '⟳ Rebuild';
+  }
+}
+
+function pollBuildStatus(branch, btn, what, idleLabel) {
   const status = document.getElementById('sync-status');
   let attempts = 0;
   const maxAttempts = 120; // 10 minutes at 5s intervals
   const timer = setInterval(async () => {
     if (++attempts > maxAttempts) {
       clearInterval(timer);
-      status.textContent = 'Sync is taking longer than expected. Reload to check.';
-      if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+      status.textContent = what + ' is taking longer than expected. Reload to check.';
+      if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
       return;
     }
     try {
@@ -134,17 +165,17 @@ function pollBuildStatus(branch, btn) {
       const dto = await res.json();
       if (dto.status === 'success') {
         clearInterval(timer);
-        status.textContent = 'Sync complete for "' + branch + '"! Reloading…';
+        status.textContent = what + ' complete for "' + branch + '"! Reloading…';
         setTimeout(() => location.reload(), 800);
       } else if (dto.status === 'partial') {
         clearInterval(timer);
-        status.textContent = 'Sync finished for "' + branch + '", but some steps failed. See the build log for details.';
-        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+        status.textContent = what + ' finished for "' + branch + '", but some steps failed. See the build log for details.';
+        if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
         setTimeout(() => location.reload(), 800);
       } else if (dto.status === 'failure') {
         clearInterval(timer);
-        status.textContent = 'Sync failed for "' + branch + '". See the build log for details.';
-        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync'; }
+        status.textContent = what + ' failed for "' + branch + '". See the build log for details.';
+        if (btn) { btn.disabled = false; btn.textContent = idleLabel; }
         setTimeout(() => location.reload(), 800);
       }
     } catch (_) { /* keep polling */ }
