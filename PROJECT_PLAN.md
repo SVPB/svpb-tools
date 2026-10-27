@@ -366,7 +366,7 @@ untitled section.
 | `GET`  | `/auth/token/{token}` | Redeem a login token; sets session cookie |
 | `GET`  | `/admin` | Admin dashboard (session auth, admin role required) |
 | `GET`  | `/admin/builds` | Build history (session auth, admin role required) |
-| `POST` | `/admin/builds/trigger` | Manually trigger a rebuild (session auth, admin role required) |
+| `POST` | `/admin/branches/{branch}/rebuild` | Manually trigger a full rebuild of a branch, Box upload and Slack notification included (session auth, admin role required) (#11) |
 | `GET`    | `/admin/users` | List users and roles (session auth, admin role required) |
 | `POST`   | `/admin/users` | Create a new user by Slack user ID with a specified role (session auth, admin role required) |
 | `PATCH`  | `/admin/users/{id}` | Update a user's role (session auth, admin role required) |
