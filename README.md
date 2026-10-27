@@ -252,111 +252,114 @@ bad migration, or `docker compose down -v`; for those, see [Backups](#backups).
 
 ### Digital Ocean Droplet
 
-**1. Create the droplet.** Ubuntu 24.04 LTS, Basic / Regular SSD, 2 GB RAM / 1 vCPU. Authenticate
-with an SSH key rather than a password. Give it a hostname you will recognise later.
+The droplet is disposable. Everything that cannot be regenerated is on a Block Storage volume, and
+everything else is in git: [`provision.sh`](provision.sh), at the root of the repository, turns a
+fresh Ubuntu droplet into a running server on its first boot. Losing the droplet means creating
+another from the same script — see [Replacing the droplet](#replacing-the-droplet).
 
-**2. Point DNS at it.** Create an `A` record for your hostname pointing at the droplet's public IP
-address. Do this *before* starting the stack — Caddy requests a certificate on first launch and
-that request fails if the name does not yet resolve. Verify with `dig +short <your-domain>`.
+Steps 1–4 are done once, by hand, because they are decisions about names and addresses rather than
+commands to run on a machine. The commands below use [`doctl`](https://docs.digitalocean.com/reference/doctl/),
+Digital Ocean's command-line tool; each has a control-panel equivalent.
 
-**3. Open the firewall.** Create a Digital Ocean cloud firewall allowing inbound TCP on 22, 80,
-and 443, and attach it to the droplet.
-
-**4. Install Docker.**
+**1. Create the volume.** In the region the droplet will run in. 1 GiB is the minimum and is ample.
 
 ```sh
-ssh root@<droplet-ip>
-apt-get update && apt-get install -y ca-certificates curl git
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
-  > /etc/apt/sources.list.d/docker.list
-apt-get update
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+doctl compute volume create tng-state --region <region> --size 1GiB --fs-type ext4
 ```
 
-**5. Attach a block storage volume.** In the Digital Ocean control panel, create a Volume in the
-droplet's region — 1 GiB is the minimum and is ample — name it `tng-state`, and attach it to the
-droplet.
+`--fs-type` formats it, so it arrives with a filesystem. `provision.sh` never formats a volume
+itself: on a rebuild the volume holds the database, and formatting it would erase it. The script
+mounts it at `/mnt/tng_state` — Digital Ocean's own convention, `/mnt/<name>` with hyphens as
+underscores. Volumes cost $0.10/GiB/month, can be resized up (never down), survive the droplet's
+destruction, and can be snapshotted independently of it.
 
-Digital Ocean formats and mounts the volume for you at attach time. It mounts it at
-`/mnt/<volume-name>` with hyphens replaced by underscores, so a volume named `tng-state` arrives at
-**`/mnt/tng_state`**. What it does *not* do is add an `/etc/fstab` entry, so that mount is
-live-only and disappears on the next reboot. Check what you actually have before changing anything:
+**2. Reserve an IP.** Under *Networking → Reserved IPs*, in the same region. DNS points at this
+address rather than at a droplet, so a replacement droplet takes over the name by being assigned it,
+with no DNS change to wait out.
+
+**3. Point DNS at it.** Create an `A` record for your hostname pointing at the reserved IP. Do this
+*before* starting the stack — Caddy requests a certificate on first launch and that request fails
+if the name does not yet resolve. Verify with `dig +short <your-domain>`.
+
+**4. Create the firewall.** Under *Networking → Firewalls*, allow inbound TCP on 22, 80, and 443,
+and UDP on 443 (HTTP/3). Apply it to the **tag** `tng` rather than to a droplet, so that any droplet
+created with that tag is covered from its first boot.
+
+**5. Create the droplet.** Ubuntu 24.04 LTS, Basic / Regular SSD, 2 GB RAM / 1 vCPU, in the
+volume's region, authenticated with an SSH key, with the volume attached, the `tng` tag, and
+`provision.sh` as its user data. From the checkout:
 
 ```sh
-lsblk -f                      # is there already an ext4 filesystem, and where is it mounted?
-cat /etc/fstab                # is there an entry for it?
-ls -l /dev/disk/by-id/ | grep -i volume
+doctl compute droplet create tng \
+  --region <region> --image ubuntu-24-04-x64 --size s-1vcpu-2gb \
+  --ssh-keys <key-fingerprint> --tag-names tng \
+  --volumes "$(doctl compute volume list --format ID,Name --no-header | awk '$2 == "tng-state" { print $1 }')" \
+  --user-data-file provision.sh --wait
+doctl compute reserved-ip-action assign <reserved-ip> <droplet-id>
 ```
 
-If `lsblk -f` shows **no** filesystem on the volume, format it — and only then, because this
-erases whatever is there:
+In the control panel, the script is pasted into *Advanced Options → Add Initialization scripts*.
+
+cloud-init runs it as root on first boot. It installs Docker from Docker's apt repository, adds a
+2 GB swapfile (rendering a full year of music in one sync can spike past 2 GB of RAM), clones this
+repository into `/root/svpb-tools`, mounts the volume through `/etc/fstab` by its stable `by-id`
+path, links the volume's `.env` into the checkout, and starts the stack. It takes a few minutes;
+follow it with:
 
 ```sh
-mkfs.ext4 -F /dev/disk/by-id/scsi-0DO_Volume_tng-state
+ssh root@<reserved-ip> tail -f /var/log/cloud-init-output.log
 ```
 
-Then persist the mount. Use the `by-id` path, never a bare `/dev/sda`: device letters are not
-stable across reboots, and a volume that comes back as `sdb` would leave the mountpoint an empty
-directory on the boot disk while the stack writes to it happily.
+The script holds no secrets, and must not. User data stays readable from the droplet's metadata
+service, at `169.254.169.254`, for as long as the droplet exists — to anything running on it,
+including a compromised container. That is why the credentials live in a `.env` on the volume,
+which the script finds there rather than writes.
+
+**6. Configure it, the first time.** With no `.env` on the volume yet, the script stops once the
+volume is mounted, and says so in that log. Create it on the volume, where it survives the droplet:
 
 ```sh
-mkdir -p /mnt/tng_state
-echo '/dev/disk/by-id/scsi-0DO_Volume_tng-state /mnt/tng_state ext4 defaults,nofail,discard 0 2' \
-  >> /etc/fstab
-umount /mnt/tng_state 2>/dev/null    # drop Digital Ocean's ad-hoc mount, if it made one
-mount -a
-findmnt /mnt/tng_state
-mkdir -p /mnt/tng_state/data /mnt/tng_state/caddy/data /mnt/tng_state/caddy/config
-```
-
-The `umount` / `mount -a` round trip is the point of that sequence: it proves the fstab entry
-mounts the volume, rather than leaving you trusting that it will at boot. `findmnt` must print a
-row showing the device and `ext4`. If it prints nothing, the entry is wrong and `nofail` swallowed
-the error — fix it before going any further, because every later step would write to the boot disk.
-
-Volumes cost $0.10/GiB/month, can be resized up (never down), survive the droplet's destruction,
-and can be snapshotted independently of it.
-
-**6. Add swap.** 2 GB of RAM is comfortable for normal operation, but rendering a full year of
-music in one sync can spike. Swap costs nothing and prevents an OOM kill.
-
-```sh
-fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
-```
-
-**7. Deploy.**
-
-The `.env` lives on the volume and is symlinked into the checkout, so that destroying and
-recreating the droplet loses nothing but the checkout itself.
-
-```sh
-git clone https://github.com/SVPB/svpb-tools.git
-cd svpb-tools
-cp .env.example /mnt/tng_state/.env
+cp /root/svpb-tools/.env.example /mnt/tng_state/.env
 chmod 600 /mnt/tng_state/.env
 # edit /mnt/tng_state/.env — every value in the Configuration table above,
 # and uncomment TNG_STATE_DIR=/mnt/tng_state
-ln -s /mnt/tng_state/.env .env
-docker compose up -d
+/root/svpb-tools/provision.sh
 ```
 
-**8. Verify.** `docker compose ps` should show both containers healthy, and
-`curl https://<your-domain>/health` should return JSON. If Caddy cannot get a certificate,
-`docker compose logs caddy` says why — almost always DNS not yet propagated or port 80 blocked.
+Every step checks before it acts, so the re-run passes over what is done and carries on: it checks
+that Compose's state binds resolve onto the volume — refusing to start otherwise, since starting
+would create an empty database on the boot disk — starts the stack, and waits for the healthcheck.
+
+**7. Verify.** `curl https://<your-domain>/health` should return JSON. If Caddy cannot get a
+certificate, `docker compose logs caddy` says why — almost always DNS not yet propagated, port 80
+blocked, or the reserved IP not yet assigned.
 
 Estimated cost: **$12/month** for the droplet plus **$0.10/month** for a 1 GiB volume. The cloud
-firewall is free.
+firewall is free, and so is the reserved IP while it is assigned to a droplet.
+
+#### Replacing the droplet
+
+```sh
+doctl compute droplet delete tng      # detaches the volume; the volume itself is untouched
+```
+
+then step 5 again, reserved IP included. This time `.env` is already on the volume, so the new
+droplet comes up on its first boot with nothing typed into it, and Caddy loads its certificate from
+the volume rather than requesting another. It runs whatever image `.env` names — `latest` unless
+`TNG_IMAGE_TAG` pins a release. SSH will refuse the reserved IP at first, because the host key
+changed with the machine; `ssh-keygen -R <reserved-ip>` clears the old one.
+
+GitHub does not retry failed webhook deliveries, so a push to the music repository while the server
+was down is redelivered by hand, from the webhook's *Recent Deliveries* tab.
 
 #### Migrating an existing droplet onto a block volume
 
 If the stack is already running with its state in Docker `local` named volumes — that is, on the
-droplet's boot disk — move it onto the volume without losing the database. Do step 5 above first to
-mount the volume durably, then, from the checkout:
+droplet's boot disk — move it onto the volume without losing the database. Mount the volume
+durably first. `provision.sh` does that: `git pull` to fetch it, then run it from the checkout as
+`TNG_CHECKOUT="$PWD" ./provision.sh`. It finds Docker and swap already there, mounts the volume, and
+stops, because the checkout's `.env` is still a file and not a link to the volume. Then, from the
+checkout:
 
 ```sh
 docker compose down                        # NOT -v: that would delete the volumes you are copying

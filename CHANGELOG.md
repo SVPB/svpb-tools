@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+#### A droplet provisions itself (#5)
+
+- `provision.sh`, at the root of the repository, replaces the manual droplet setup. Passed as user
+  data when the droplet is created, cloud-init runs it on first boot: it installs Docker from
+  Docker's apt repository, adds a 2 GB swapfile, clones the repository, mounts the Block Storage
+  volume through `/etc/fstab` by its `by-id` path and proves the entry by mounting through it,
+  links the volume's `.env` into the checkout, and starts the stack and waits for the healthcheck.
+- It is safe to re-run by hand. Every step checks before it acts; packages already installed are
+  not reinstalled, since that would upgrade Docker and restart the stack; and it never formats the
+  volume or pulls an existing checkout.
+- It holds no secrets, because user data stays readable from the droplet's metadata service for as
+  long as the droplet exists. With no `.env` on the volume it stops after mounting it and says how
+  to create one, and it refuses to start the stack unless `TNG_STATE_DIR` puts the state binds on
+  the volume.
+- README § Digital Ocean Droplet is rewritten around it. What stays manual is what needs a person:
+  creating the volume, reserving an IP and pointing DNS at it, a firewall applied by tag, and
+  filling in `.env` the first time. A new § Replacing the droplet covers rebuilding from nothing.
+
 #### A rebuild button on the admin dashboard (#11)
 
 - Each known branch has a **⟳ Rebuild** button beside **↻ Sync**. It runs the same full build a
