@@ -16,6 +16,10 @@ final class Setting: Model, @unchecked Sendable {
     /// The key of the Box refresh token, rotated on every token refresh.
     static let boxRefreshToken = "box.refresh_token"
 
+    /// The key of the binder retention period in days, when an admin has set one (#83).
+    /// Overrides `BINDER_RETENTION_DAYS`.
+    static let binderRetentionDays = "binders.retention_days"
+
     // MARK: - Fields
 
     /// Dotted key, e.g. `box.refresh_token`. Acts as the primary key.

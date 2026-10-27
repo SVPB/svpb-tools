@@ -240,7 +240,7 @@ struct BinderController: RouteCollection {
 
         let pdfURL = URL(fileURLWithPath: pdfPath)
         guard FileManager.default.fileExists(atPath: pdfURL.path) else {
-            throw Abort(.notFound, reason: "Binder PDF file not found on disk")
+            throw Abort(.notFound, reason: Self.expiredReason)
         }
 
         let pdfData = try Data(contentsOf: pdfURL)
@@ -261,9 +261,14 @@ struct BinderController: RouteCollection {
             throw Abort(.badRequest)
         }
         guard let binderRequest = try await BinderRequest.find(id, on: req.db) else {
-            throw Abort(.notFound)
+            throw Abort(.notFound, reason: Self.expiredReason)
         }
         return binderRequest
     }
+
+    /// What a link to a binder that is not there says. An expired binder and one that
+    /// never existed look the same once its row is gone (#83), and the likelier of the two
+    /// is a link kept past its expiry.
+    static let expiredReason = "This binder is no longer on the server. Binders are kept for a limited time after they are built; build it again from the binder builder."
 
 }

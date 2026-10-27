@@ -1,0 +1,126 @@
+#extend("layouts/public"):
+
+#export("title"):Binder cache — SVPB TNG#endexport
+
+#export("styles"):
+<style>
+  main  { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  .lede { color: #555; font-size: 0.92rem; margin-bottom: 1.5rem; max-width: 62ch; }
+  .card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 1rem; }
+  .card h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+  .figures { display: flex; gap: 2.5rem; flex-wrap: wrap; }
+  .figure .value { font-size: 1.6rem; font-weight: 600; color: #1a1a2e; }
+  .figure .label { font-size: 0.83rem; color: #555; }
+  .source { font-size: 0.85rem; color: #555; margin: 0.5rem 0 0; max-width: 62ch; }
+  .directory { font-size: 0.83rem; color: #555; margin: 0.9rem 0 0; }
+  .directory code { background: #f3f4f6; padding: 2px 6px; border-radius: 3px; font-size: 0.82rem; word-break: break-all; }
+  .retention-form { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.9rem; flex-wrap: wrap; }
+  .retention-form input { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; width: 6rem; }
+  .btn { padding: 6px 16px; border-radius: 4px; border: 1px solid #1a1a2e; background: #1a1a2e; color: #fff; cursor: pointer; font-size: 0.85rem; }
+  .btn:hover { background: #2a2a4e; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  #retention-status { font-size: 0.85rem; color: #555; margin-top: 0.5rem; min-height: 1.2em; }
+  #retention-status.error { color: #991b1b; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+  <h1>Binder cache</h1>
+  <p class="lede">
+    Personal binders stay on the server for a fixed number of days after they are built, and
+    are then deleted. Whoever builds one is told when its link expires; a binder needed after
+    that is simply built again.
+  </p>
+
+  <div class="card">
+    <h2>Retention period</h2>
+    <div class="figures">
+      <div class="figure">
+        <div class="value" id="retention-days">#(retentionDays)</div>
+        <div class="label">day(s) after a binder is built</div>
+      </div>
+    </div>
+    <p class="source">
+      #if(retentionSource == "admin"):
+        Set on this page. It overrides <code>BINDER_RETENTION_DAYS</code> in <code>.env</code>.
+      #elseif(retentionSource == "environment"):
+        From <code>BINDER_RETENTION_DAYS</code> in <code>.env</code>. Saving a value here overrides it.
+      #else:
+        The built-in default. Set <code>BINDER_RETENTION_DAYS</code> in <code>.env</code>, or save a value here, to change it.
+      #endif
+      A change applies to binders built from then on; binders already built keep the expiry
+      they were given.
+    </p>
+    <div class="retention-form">
+      <label for="retention-input">Keep binders for</label>
+      <input type="number" id="retention-input" min="1" step="1" value="#(retentionDays)">
+      <span>day(s)</span>
+      <button class="btn" id="retention-save" onclick="saveRetention()">Save</button>
+    </div>
+    <div id="retention-status"></div>
+  </div>
+
+  <div class="card">
+    <h2>On disk now</h2>
+    <div class="figures">
+      <div class="figure">
+        <div class="value">#(binderCount)</div>
+        <div class="label">binder PDF(s)</div>
+      </div>
+      <div class="figure">
+        <div class="value">#(binderSize)</div>
+        <div class="label">space used</div>
+      </div>
+    </div>
+    <p class="directory">In <code>#(directory)</code>. Expired binders are swept hourly.</p>
+  </div>
+</main>
+#endexport
+
+#export("scripts"):
+<script>
+'use strict';
+
+async function saveRetention() {
+  const input = document.getElementById('retention-input');
+  const button = document.getElementById('retention-save');
+  const status = document.getElementById('retention-status');
+  const days = Number(input.value);
+  status.classList.remove('error');
+
+  if (!Number.isInteger(days) || days < 1) {
+    status.textContent = 'Enter a whole number of days, at least 1.';
+    status.classList.add('error');
+    return;
+  }
+
+  button.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    const res = await fetch('/admin/binders/retention', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: days }),
+    });
+    if (res.ok) {
+      status.textContent = 'Saved. Binders built from now on are kept for ' + days
+        + (days === 1 ? ' day.' : ' days.') + ' Reloading…';
+      setTimeout(() => location.reload(), 1200);
+    } else {
+      let reason = await res.text();
+      try { reason = JSON.parse(reason).reason || reason; } catch (_) {}
+      status.textContent = 'Could not save: ' + reason;
+      status.classList.add('error');
+      button.disabled = false;
+    }
+  } catch (e) {
+    status.textContent = 'Request failed: ' + e.message;
+    status.classList.add('error');
+    button.disabled = false;
+  }
+}
+</script>
+#endexport
+
+#endextend

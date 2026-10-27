@@ -43,9 +43,15 @@ import Vapor
 /// Personalised binder PDFs are written to `<musicWorkspace>/binders/<id>.pdf` and the
 /// path is persisted in the `BinderRequest` record so the download endpoint can serve the
 /// file. Official binders are written where the build asks (`assemble(_:branch:in:db:logger:)`).
+/// A personalised binder is kept for the retention period in force when it is written, and
+/// `BinderCache` deletes it afterwards (#83).
 actor BinderService {
 
     private let musicWorkspaceURL: URL
+
+    /// Where personalised binder PDFs are written, and where `BinderCache` sweeps.
+    nonisolated let personalBindersDirectory: URL
+
     private let titleRenderer = TitlePageRenderer()
     private let tocRenderer = TableOfContentsRenderer()
     private let tuneRenderer = TunePageRenderer()
@@ -53,6 +59,8 @@ actor BinderService {
 
     init(musicWorkspacePath: String) {
         self.musicWorkspaceURL = URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
+        self.personalBindersDirectory = musicWorkspaceURL
+            .appendingPathComponent("binders", isDirectory: true)
     }
 
     // MARK: - Public API
@@ -96,8 +104,7 @@ actor BinderService {
         let pdfData = try Self.convert(svgSources, logger: logger)
         logger.info("[BinderService] \(requestID): PDF conversion complete (\(pdfData.count) bytes)")
 
-        let bindersDir = musicWorkspaceURL
-            .appendingPathComponent("binders", isDirectory: true)
+        let bindersDir = personalBindersDirectory
         logger.debug("[BinderService] \(requestID): creating binders directory at \(bindersDir.path)")
         try FileManager.default.createDirectory(at: bindersDir, withIntermediateDirectories: true)
 
@@ -105,9 +112,11 @@ actor BinderService {
         logger.info("[BinderService] \(requestID): writing PDF to \(pdfURL.path)")
         try pdfData.write(to: pdfURL, options: .atomic)
 
+        let retention = try await BinderCache.retention(on: db)
         request.pdfPath = pdfURL.path
+        request.expiresAt = retention.expiry(after: Date())
         try await request.save(on: db)
-        logger.info("[BinderService] \(requestID): ready ✓")
+        logger.info("[BinderService] \(requestID): ready ✓ — kept for \(retention.days) day(s)")
     }
 
     /// One page of an assembled binder, in the order it will appear.

@@ -138,6 +138,7 @@ private func addMigrations(_ app: Application) {
     // Phase 1 (C5): runtime state that outlives the process.
     app.migrations.add(CreateSetting())
     app.migrations.add(CreateBoxUpload())
+    app.migrations.add(AddExpiresAtToBinderRequest())
 }
 
 // MARK: - Service initialisation
@@ -186,6 +187,9 @@ private func initServices(_ app: Application) {
 
     // The database is the one thing TNG cannot regenerate; copy it off the server nightly.
     app.lifecycle.use(DatabaseBackup())
+
+    // Personal binders are kept for a fixed number of days, then deleted (#83).
+    app.lifecycle.use(BinderCache())
 
     app.buildService = BuildService(
         gitService:         gitService,
