@@ -195,6 +195,10 @@ final class BinderGenerationTests: XCTestCase {
         let reloaded = try await BinderRequest.find(request.id, on: app.db)
         let path = try XCTUnwrap(reloaded?.pdfPath, "Binder was not generated")
         XCTAssertTrue(try Data(contentsOf: URL(fileURLWithPath: path)).starts(with: Data("%PDF".utf8)))
+
+        let expiresAt = try XCTUnwrap(reloaded?.expiresAt, "A built binder is given an expiry (#83)")
+        let days = try await BinderCache.retention(on: app.db).days
+        XCTAssertEqual(expiresAt.timeIntervalSinceNow, Double(days) * 24 * 60 * 60, accuracy: 300)
     }
 
     // MARK: - Page sizes (#62)

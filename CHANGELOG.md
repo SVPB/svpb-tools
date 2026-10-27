@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-27
+
+### Added
+
+#### A droplet provisions itself (#5)
+
+- `provision.sh`, at the root of the repository, replaces the manual droplet setup. Passed as user
+  data when the droplet is created, cloud-init runs it on first boot: it installs Docker from
+  Docker's apt repository, adds a 2 GB swapfile, clones the repository, mounts the Block Storage
+  volume through `/etc/fstab` by its `by-id` path and proves the entry by mounting through it,
+  links the volume's `.env` into the checkout, and starts the stack and waits for the healthcheck.
+- It is safe to re-run by hand. Every step checks before it acts; packages already installed are
+  not reinstalled, since that would upgrade Docker and restart the stack; and it never formats the
+  volume or pulls an existing checkout.
+- It holds no secrets, because user data stays readable from the droplet's metadata service for as
+  long as the droplet exists. With no `.env` on the volume it stops after mounting it and says how
+  to create one, and it refuses to start the stack unless `TNG_STATE_DIR` puts the state binds on
+  the volume.
+- README § Digital Ocean Droplet is rewritten around it. What stays manual is what needs a person:
+  creating the volume, reserving an IP and pointing DNS at it, a firewall applied by tag, and
+  filling in `.env` the first time. A new § Replacing the droplet covers rebuilding from nothing.
+
+#### A rebuild button on the admin dashboard (#11)
+
+- Each known branch has a **⟳ Rebuild** button beside **↻ Sync**. It runs the same full build a
+  push does, so the binders go to Box and Slack is notified. **↻ Sync** still skips both. The
+  button is `POST /admin/branches/{branch}/rebuild`; it asks for confirmation, answers `404` for a
+  branch the server has never synced, and `409` while that branch is already being built or
+  removed.
+
+#### Personal binders expire (#83)
+
+- A personal binder is kept on the server for a fixed number of days after it is built, then its
+  PDF and its request are deleted. The builder page says when the link expires, and a link used
+  after that says the binder can be built again. Failed requests and stray files in the binders
+  directory are cleared on the same schedule. Before, every binder anyone had built stayed on
+  the server's disk for good.
+- The period defaults to 14 days, `BINDER_RETENTION_DAYS` in `.env` changes the default, and the
+  new admin **Binder cache** page (`/admin/binders`) overrides both. That page also shows how
+  many binder PDFs are on disk and how much space they take. A change applies to binders built
+  afterwards; those already built keep the expiry they were shown.
+
+### Fixed
+
+- Two builds of the same branch no longer run at once. A push, a sync or a rebuild requested
+  while that branch is building now waits for the running build to finish, then runs, in the
+  order they were requested. Before, the two pipelines took turns at every suspension point,
+  sharing one checkout, one output directory and one set of catalogue rows. Builds of different
+  branches still run side by side.
+
 ## [0.6.3] - 2026-10-26
 
 ### Changed
