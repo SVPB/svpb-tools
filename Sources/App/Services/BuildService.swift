@@ -32,6 +32,11 @@ import Vapor
 /// conversion loop has finished, so a build that throws part-way leaves the branch
 /// serving the entries it already had instead of the fraction this build reached.
 ///
+/// Builds of the same branch run one at a time, in the order they were asked for: they
+/// share a checkout, an output directory and catalogue rows, and the actor would otherwise
+/// interleave two pipelines at every suspension (#11). Builds of different branches still
+/// run concurrently.
+///
 /// The service also removes branches (`removeBranch`). Builds and removals of the
 /// same branch exclude each other, so a removal cannot race a build into recreating
 /// the directories it just deleted.
@@ -43,9 +48,13 @@ actor BuildService {
     private let binderService: BinderService
     private let musicWorkspaceURL: URL
 
-    /// Builds currently running in this process, per branch. Webhook and manual
-    /// syncs can overlap, hence a count rather than a set.
+    /// Builds running or waiting to run in this process, per branch. Webhook and
+    /// manual builds can be requested while one is running, hence a count rather than a set.
     private var buildsInFlight: [String: Int] = [:]
+    /// Branches with a build holding the pipeline.
+    private var pipelinesHeld: Set<String> = []
+    /// Builds waiting for a branch's pipeline, oldest first.
+    private var pipelineWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Branches whose removal is in progress; builds for them are refused.
     private var removalsInFlight: Set<String> = []
 
@@ -72,6 +81,7 @@ actor BuildService {
     /// `Build` record so the HTTP handler can return 202 immediately.
     func runBuild(branch: String, commitSha: String?, db: Database, logger: Logger) async {
         logger.info("[BuildService] Starting build for branch '\(branch)'")
+        guard claimBuild(branch: branch, logger: logger) else { return }
         await _performBuild(
             branch: branch, commitSha: commitSha,
             db: db, logger: logger,
@@ -86,6 +96,7 @@ actor BuildService {
     /// during development or before a full build has been triggered by a push.
     func syncCatalogue(branch: String, db: Database, logger: Logger) async {
         logger.info("[BuildService] Starting catalogue sync for branch '\(branch)'")
+        guard claimBuild(branch: branch, logger: logger) else { return }
         await _performBuild(
             branch: branch, commitSha: nil,
             db: db, logger: logger,
@@ -93,8 +104,47 @@ actor BuildService {
         )
     }
 
+    /// Starts a full build of `branch` — the webhook's path, Box upload and Slack
+    /// notification included — and returns once it is claimed, without waiting for it.
+    ///
+    /// For the admin dashboard's rebuild button. Unlike a webhook, a person asking twice
+    /// almost certainly meant once, so a branch that already has a build running or
+    /// waiting is refused rather than queued behind it.
+    ///
+    /// - Throws: `Abort(.conflict)` while the branch is being built or removed.
+    func triggerBuild(branch: String, db: Database, logger: Logger) throws {
+        guard !removalsInFlight.contains(branch) else {
+            throw Abort(.conflict, reason: "Branch '\(branch)' is being removed.")
+        }
+        guard buildsInFlight[branch] == nil else {
+            throw Abort(.conflict, reason: "A build of branch '\(branch)' is already running. Try again when it finishes.")
+        }
+        // Claimed here, synchronously, so a second request cannot pass the check above
+        // before this build has registered.
+        _ = beginBuild(branch: branch)
+        logger.info("[BuildService] Starting manual rebuild for branch '\(branch)'")
+        Task {
+            await self._performBuild(
+                branch: branch, commitSha: nil,
+                db: db, logger: logger,
+                uploadToBox: true, notifySlack: true
+            )
+        }
+    }
+
     // MARK: - Core pipeline
 
+    /// Registers a build of `branch` with `beginBuild`, logging a refusal.
+    private func claimBuild(branch: String, logger: Logger) -> Bool {
+        guard beginBuild(branch: branch) else {
+            logger.warning("[BuildService] Branch '\(branch)' is being removed; build not started")
+            return false
+        }
+        return true
+    }
+
+    /// Runs the pipeline for a build already registered with `beginBuild`, and
+    /// unregisters it when done.
     private func _performBuild(
         branch: String,
         commitSha: String?,
@@ -103,11 +153,9 @@ actor BuildService {
         uploadToBox: Bool,
         notifySlack: Bool
     ) async {
-        guard beginBuild(branch: branch) else {
-            logger.warning("[BuildService] Branch '\(branch)' is being removed; build not started")
-            return
-        }
         defer { endBuild(branch: branch) }
+        await acquirePipeline(branch: branch)
+        defer { releasePipeline(branch: branch) }
 
         // Ensure the Branch record exists before creating the Build (FK constraint).
         let branchRecord: Branch
@@ -365,6 +413,27 @@ actor BuildService {
             buildsInFlight[branch] = count - 1
         } else {
             buildsInFlight[branch] = nil
+        }
+    }
+
+    // MARK: - Per-branch serialisation
+
+    /// Waits until no other build of `branch` holds the pipeline, then holds it.
+    func acquirePipeline(branch: String) async {
+        if !pipelinesHeld.insert(branch).inserted {
+            // Resumed by `releasePipeline`, which hands over the hold without freeing it.
+            await withCheckedContinuation { pipelineWaiters[branch, default: []].append($0) }
+        }
+    }
+
+    /// Hands the pipeline of `branch` to the oldest waiting build, or frees it.
+    func releasePipeline(branch: String) {
+        if var waiters = pipelineWaiters[branch], !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            pipelineWaiters[branch] = waiters.isEmpty ? nil : waiters
+            next.resume()
+        } else {
+            pipelinesHeld.remove(branch)
         }
     }
 

@@ -11,6 +11,7 @@ import Vapor
 ///
 /// Branch routes (admin-only):
 ///   `POST   /admin/branches/:branch/sync`         — start a catalogue sync
+///   `POST   /admin/branches/:branch/rebuild`      — start a full build, distribution included
 ///   `GET    /admin/branches/:branch/latest-build` — status of its newest build
 ///   `DELETE /admin/branches/:branch`              — remove its rows and on-disk artifacts
 ///
@@ -34,6 +35,7 @@ struct AdminController: RouteCollection {
 
         // Catalogue sync.
         admin.post("admin", "branches", ":branch", "sync", use: syncBranch)
+        admin.post("admin", "branches", ":branch", "rebuild", use: rebuildBranch)
         admin.get("admin", "branches", ":branch", "latest-build", use: latestBuildStatus)
         admin.delete("admin", "branches", ":branch", use: deleteBranch)
 
@@ -171,6 +173,31 @@ struct AdminController: RouteCollection {
         Task {
             await buildService.syncCatalogue(branch: branch, db: appDB, logger: logger)
         }
+
+        return Response(status: .accepted,
+                        headers: ["Content-Type": "application/json"],
+                        body: .init(string: #"{"status":"accepted","branch":"\#(branch)"}"#))
+    }
+
+    /// `POST /admin/branches/:branch/rebuild`
+    ///
+    /// Starts a full build of a known branch — the path a webhook push takes, Box
+    /// upload and Slack notification included — so an operator can recover from a
+    /// failed build without SSH access to the server. `404` for a branch the server
+    /// has never built; `409` while the branch is being built or removed.
+    @Sendable
+    func rebuildBranch(_ req: Request) async throws -> Response {
+        guard let branch = req.parameters.get("branch"), !branch.isEmpty else {
+            throw Abort(.badRequest, reason: "Branch name is required.")
+        }
+        guard try await Branch.find(branch, on: req.db) != nil else {
+            throw Abort(.notFound, reason: "No branch '\(branch)'. Sync it first.")
+        }
+
+        let user = req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "unknown"
+        req.logger.notice("[admin] \(user) requested a rebuild of branch '\(branch)'")
+        try await req.application.buildService.triggerBuild(
+            branch: branch, db: req.application.db, logger: req.logger)
 
         return Response(status: .accepted,
                         headers: ["Content-Type": "application/json"],

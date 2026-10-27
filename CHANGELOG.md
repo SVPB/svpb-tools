@@ -26,6 +26,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   creating the volume, reserving an IP and pointing DNS at it, a firewall applied by tag, and
   filling in `.env` the first time. A new § Replacing the droplet covers rebuilding from nothing.
 
+#### A rebuild button on the admin dashboard (#11)
+
+- Each known branch has a **⟳ Rebuild** button beside **↻ Sync**. It runs the same full build a
+  push does, so the binders go to Box and Slack is notified. **↻ Sync** still skips both. The
+  button is `POST /admin/branches/{branch}/rebuild`; it asks for confirmation, answers `404` for a
+  branch the server has never synced, and `409` while that branch is already being built or
+  removed.
+
+### Fixed
+
+- Two builds of the same branch no longer run at once. A push, a sync or a rebuild requested
+  while that branch is building now waits for the running build to finish, then runs, in the
+  order they were requested. Before, the two pipelines took turns at every suspension point,
+  sharing one checkout, one output directory and one set of catalogue rows. Builds of different
+  branches still run side by side.
+
 ## [0.6.3] - 2026-10-26
 
 ### Changed
