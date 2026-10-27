@@ -6,6 +6,10 @@ import Vapor
 /// The `definition` column stores the full `BinderSpec` as JSON text.
 /// `pdfPath` is nil until the generation pipeline completes; the client polls
 /// `GET /binders/{id}` to check status.
+///
+/// A binder is kept for a fixed number of days after it is built (#83): `expiresAt` is
+/// stamped alongside `pdfPath`, and `BinderCache` deletes the PDF and this row once it
+/// has passed.
 final class BinderRequest: Model, @unchecked Sendable {
 
     static let schema = "binder_requests"
@@ -27,6 +31,11 @@ final class BinderRequest: Model, @unchecked Sendable {
     /// Local path to the generated PDF.  Nil until generation completes.
     @OptionalField(key: "pdf_path")
     var pdfPath: String?
+
+    /// When the PDF and this row are deleted. Nil until generation completes, and on
+    /// rows that predate retention (#83).
+    @OptionalField(key: "expires_at")
+    var expiresAt: Date?
 
     // MARK: - Lifecycle
 

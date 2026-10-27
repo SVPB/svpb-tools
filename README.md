@@ -185,6 +185,7 @@ each value before starting the stack.
 | `BACKUP_PREFIX` | Optional. Prepended to each backup's name; defaults to `tng/` |
 | `BACKUP_REGION` | Optional. The signing region; read from a DigitalOcean endpoint, `us-east-1` otherwise |
 | `BACKUP_INTERVAL_HOURS` | Optional. Hours between backups; defaults to 24 |
+| `BINDER_RETENTION_DAYS` | Optional. Days a personal binder stays on the server after it is built; defaults to 14, and can be changed on the admin **Binder cache** page |
 
 ---
 

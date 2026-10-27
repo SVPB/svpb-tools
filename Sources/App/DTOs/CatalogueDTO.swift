@@ -71,11 +71,17 @@ struct BinderStatusDTO: Content {
     let id: UUID
     let status: String
     let downloadURL: String?
+    /// When the server deletes the binder, ISO 8601 — so the builder page can say how long
+    /// the link lasts (#83). Nil until the binder is ready.
+    let expiresAt: String?
 
     init(from request: BinderRequest) throws {
         let id = try request.requireID()
         self.id = id
         self.status = request.pdfPath != nil ? "ready" : "pending"
         self.downloadURL = request.pdfPath != nil ? "/binders/\(id)/download" : nil
+        self.expiresAt = request.pdfPath != nil
+            ? request.expiresAt.map { ISO8601DateFormatter().string(from: $0) }
+            : nil
     }
 }

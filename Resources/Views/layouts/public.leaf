@@ -78,6 +78,7 @@
         <a href="/admin/users">Users</a>
         <a href="/admin">Builds</a>
         <a href="/admin/connections">Connections</a>
+        <a href="/admin/binders">Binder cache</a>
       </div>
     </div>
     #endif

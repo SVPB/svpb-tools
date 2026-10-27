@@ -34,6 +34,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   branch the server has never synced, and `409` while that branch is already being built or
   removed.
 
+#### Personal binders expire (#83)
+
+- A personal binder is kept on the server for a fixed number of days after it is built, then its
+  PDF and its request are deleted. The builder page says when the link expires, and a link used
+  after that says the binder can be built again. Failed requests and stray files in the binders
+  directory are cleared on the same schedule. Before, every binder anyone had built stayed on
+  the server's disk for good.
+- The period defaults to 14 days, `BINDER_RETENTION_DAYS` in `.env` changes the default, and the
+  new admin **Binder cache** page (`/admin/binders`) overrides both. That page also shows how
+  many binder PDFs are on disk and how much space they take. A change applies to binders built
+  afterwards; those already built keep the expiry they were shown.
+
 ### Fixed
 
 - Two builds of the same branch no longer run at once. A push, a sync or a rebuild requested
