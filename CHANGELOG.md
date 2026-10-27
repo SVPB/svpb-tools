@@ -6,14 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-26
+
+### Changed
+
+#### CeolKit 2.2.0 -> 3.0.0
+
+- A chord is drawn with one stem and beams with its neighbours (sbeitzel/CeolKit#233), and a
+  broken rhythm (`>`, `<`) applies to chords as well as notes (sbeitzel/CeolKit#238).
+- Double and triple augmentation dots are drawn (sbeitzel/CeolKit#236).
+- Every variant ending opened in a bar is kept, so `| ab [1 cd [2 ef |` draws both brackets
+  (sbeitzel/CeolKit#245), and an ending opened in a last bar with no closing bar line is no
+  longer dropped (sbeitzel/CeolKit#246). `%%ceolkit:closevariants` closes every ending
+  (sbeitzel/CeolKit#237).
+- An unclosed last bar stays on the stave it was written on (sbeitzel/CeolKit#249).
+- A stub beam in the middle of a group points toward its rhythmic partner
+  (sbeitzel/CeolKit#240), and `!beambr1!` and `!beambr2!` break beams (sbeitzel/CeolKit#243).
+- `U:` defines and redefines decoration symbols; one between tunes is ignored with a warning
+  (sbeitzel/CeolKit#254).
+- Information fields in the file header apply to every tune (sbeitzel/CeolKit#256), and a
+  directive between tunes applies only to the tunes after it (sbeitzel/CeolKit#257).
+- No code here changes; CeolKit's one breaking change, to how a measure records its variant
+  endings, is in API nothing here uses.
+
 ## [0.6.2] - 2026-10-25
 
 ### Changed
 
 #### CeolKit 2.1.0 -> 2.2.0
 
-- Tuplets are drawn (sbeitzel/CeolKit#231, #232), so a triplet engraves with its bracket and
-  number.
+- Tuplets are drawn (sbeitzel/CeolKit#231, sbeitzel/CeolKit#232), so a triplet engraves with its
+  bracket and number.
 - The beat note in a `Q:` tempo is drawn in Bravura (sbeitzel/CeolKit#230), and a tempo change
   stands above the music without pushing the staff down (sbeitzel/CeolKit#234).
 - CeolKit builds again under Swift 6.3, the toolchain CI uses.
