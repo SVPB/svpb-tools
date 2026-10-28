@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-28
+
+### Fixed
+
+#### CeolKit 3.0.0 -> 3.0.1
+
+- A directive in a file pulled in by `I:abc-include` applies where the include stands. Lines from
+  an included file were ordered against the tunes by their line number in that file, so an include
+  longer than the main file's header had its later directives treated as written after the first
+  tune and dropped with `directiveAfterLastTune` (sbeitzel/CeolKit#261).
+- No code here changes; 3.0.1 has no API changes.
+
 ## [0.7.0] - 2026-10-27
 
 ### Added
