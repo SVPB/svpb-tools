@@ -46,7 +46,7 @@ public struct HealthResponse: Content {
 /// Single source of truth for the server version string.
 public enum AppVersion {
     /// The release number, bumped by the release process.
-    public static let release = "0.7.0"
+    public static let release = "0.7.1"
 
     /// The commit the running image was built from (#65).
     ///
