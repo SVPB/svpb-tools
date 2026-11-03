@@ -13,8 +13,10 @@ import Vapor
 /// On success:
 ///   • `used_at` is set to now (single-use enforcement).
 ///   • `last_login_at` on the `User` record is updated.
-///   • A Vapor session is established (keyed by user UUID).
-///   • The client is redirected to `/admin`.
+///   • A Vapor session is established (keyed by user UUID), stamped with when it was
+///     signed in so that `SessionExpiryMiddleware` can end it after `SESSION_MAX_DAYS` (#93),
+///     and with the browser's `User-Agent`, so `/account` can say which browser it is (#90).
+///   • The client is redirected by role: admins to `/admin`, members to `/` (#91).
 struct AuthController: RouteCollection {
 
     func boot(routes: any RoutesBuilder) throws {
@@ -72,10 +74,17 @@ struct AuthController: RouteCollection {
         let userId = try user.requireID()
         req.session.data["userId"] = userId.uuidString
         req.session.data["userRole"] = user.role.rawValue
+        // Starts the absolute session limit (#93). Written over any earlier sign-in's
+        // stamp, since this is a new sign-in even when it reuses an emptied session.
+        req.session.data[SessionExpiry.signedInAtKey] =
+            SessionExpiry.stamp(req.application.sessionClock())
+        // Names the browser on `/account` (#90). Replaced, like the stamp, on a new sign-in.
+        req.session.data[UserSessions.userAgentKey] =
+            UserSessions.storedUserAgent(req.headers.first(name: .userAgent))
 
         req.logger.info("[Auth] User \(user.slackUserId) (\(user.role.rawValue)) logged in via token \(tokenUUID)")
 
-        return req.redirect(to: "/admin")
+        return req.redirect(to: user.role == .admin ? "/admin" : "/")
     }
 
     // MARK: - Helpers

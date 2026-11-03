@@ -41,6 +41,13 @@ private var isBoxAuthMode: Bool {
     CommandLine.arguments.contains(BoxAuthCommand.name)
 }
 
+/// The line `configure` logs at boot: which Vapor environment the server runs as, and the
+/// log level in force (#95). The published image sets `VAPOR_ENV=production` and
+/// `LOG_LEVEL=info`; `swift run` and `dev.sh` stay `development`.
+func bootSummary(environment: Environment, logLevel: Logger.Level) -> String {
+    "Environment: \(environment.name), log level: \(logLevel)"
+}
+
 public func configure(_ app: Application) async throws {
     // ── Register commands ───────────────────────────────────────────────────
     app.asyncCommands.use(BoxAuthCommand(), as: BoxAuthCommand.name)
@@ -48,6 +55,10 @@ public func configure(_ app: Application) async throws {
     // In box-auth mode, skip full configuration — the command only needs the
     // event loop and its own minimal HTTP setup.
     if isBoxAuthMode { return }
+
+    // ── Environment ────────────────────────────────────────────────────────
+    // First, so it heads `docker compose logs` even when configuration fails below (#95).
+    app.logger.notice("\(bootSummary(environment: app.environment, logLevel: app.logger.logLevel))")
 
     // ── Environment variable validation ────────────────────────────────────
     if app.environment != .testing {
@@ -64,7 +75,22 @@ public func configure(_ app: Application) async throws {
     // ── Sessions ───────────────────────────────────────────────────────────
     // Fluent-backed sessions persist across server restarts.
     app.sessions.use(.fluent)
+    // A sign-in ends after SESSION_IDLE_DAYS unused or SESSION_MAX_DAYS in all, and the
+    // cookie lasts as long as the idle limit (#93). The cookie is HttpOnly, and Secure
+    // unless DOMAIN names this machine (#94). Set before the middleware is made, since it
+    // copies the configuration.
+    let sessionPolicy = try SessionExpiry.Policy.load(from: Environment.get)
+    app.sessionExpiryPolicy = sessionPolicy
+    app.sessions.configuration = SessionCookie.sessionsConfiguration(
+        policy: sessionPolicy,
+        secure: SessionCookie.isSecure(domain: Environment.get("DOMAIN"))
+    )
     app.middleware.use(app.sessions.middleware)
+    // Immediately after, so its stamps are in what the sessions middleware stores.
+    app.middleware.use(SessionExpiryMiddleware())
+    // Inside the sessions middleware, so an empty session — including one just emptied
+    // because it expired — is discarded before it would be stored (#92).
+    app.middleware.use(EmptySessionMiddleware())
 
     // ── Templating ─────────────────────────────────────────────────────────
     app.views.use(.leaf)
@@ -139,6 +165,8 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(CreateSetting())
     app.migrations.add(CreateBoxUpload())
     app.migrations.add(AddExpiresAtToBinderRequest())
+    // Stamps the sessions signed in before #93 with the deploy time; needs SessionRecord.
+    app.migrations.add(StampExistingSessions())
 }
 
 // MARK: - Service initialisation
@@ -190,6 +218,9 @@ private func initServices(_ app: Application) {
 
     // Personal binders are kept for a fixed number of days, then deleted (#83).
     app.lifecycle.use(BinderCache())
+
+    // Sessions that can no longer sign anyone in are deleted, by #93's expiry rule (#90).
+    app.lifecycle.use(SessionSweeper())
 
     app.buildService = BuildService(
         gitService:         gitService,

@@ -44,6 +44,8 @@
     /* ── Right side: user info ── */
     .header-right { display: flex; align-items: center; gap: 1rem; padding: 0 0 0 1.5rem; min-width: 220px; justify-content: flex-end; }
     .header-right .meta { font-size: 0.82rem; opacity: 0.7; white-space: nowrap; }
+    .header-right a.account { color: #fff; text-decoration: none; }
+    .header-right a.account:hover { opacity: 1; text-decoration: underline; }
     form.logout { display: inline; }
     button.logout {
       background: none; border: 1px solid rgba(255,255,255,.4);
@@ -85,8 +87,8 @@
   </nav>
   <div class="header-right">
     #if(currentUser):
-    <span class="meta">Signed in as #(currentUser)</span>
-    <form class="logout" method="POST" action="/admin/logout">
+    <a class="meta account" href="/account" title="Your account and sign-in sessions">Signed in as #(currentUser)</a>
+    <form class="logout" method="POST" action="/logout">
       <button class="logout" type="submit">Sign out</button>
     </form>
     #endif

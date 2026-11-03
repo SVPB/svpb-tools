@@ -6,6 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-03
+
+### Added
+
+#### See and end your sign-ins (#90)
+
+- A new **Your account** page (`/account`), reached from "Signed in as …" in the header, lists every
+  browser the user is signed in on, newest activity first, with a short name for each ("Safari on
+  iPhone"; the full browser string on hover), when it signed in and when it was last used. The
+  current browser is marked **This browser**. Any signed-in user can open it, member or admin.
+- **End** on a row ends that one session (on this browser's row, that is signing out); **Sign out
+  other browsers** ends all but this one; **Sign out everywhere** ends all of them and returns to
+  the home page. A session is named by an ID that is not its cookie, and the cookie value is never
+  shown.
+- The admin **Users** page has a **Sessions** column with each user's count of live sessions and an
+  **End sessions** button, for a lost phone or someone leaving the band. Deleting a user now ends
+  their sessions at once, rather than leaving them until the next request finds no user.
+- Sessions that can no longer sign anyone in are deleted shortly after boot and then hourly: those
+  past either of #93's limits, those of deleted users, and those with no user at all, which clears
+  the empty rows #92's bug left in production. Expiry follows exactly the rule each request is
+  checked against, so the sweep never deletes a session a request would accept.
+- Sign-in records the browser's `User-Agent` in the session, to name it on the account page.
+  Sessions signed in before this show "Unknown browser".
+
+### Fixed
+
+#### Production runs as Vapor's production environment (#95)
+
+- The published image sets `VAPOR_ENV=production`. Nothing set the environment before, so Vapor
+  fell back to `development` on the droplet. No behaviour depends on it yet, but the first check
+  that wanted production behaviour would have silently got development behaviour in production.
+- The image also sets `LOG_LEVEL=info`, so production logs exactly what it did: Vapor's default in
+  production is `notice`, which would hide build progress and sign-ins from `docker compose logs`.
+- Both can be overridden from `.env`. `swift run` and `dev.sh` stay `development`.
+- The server's first log line names its environment and log level, e.g.
+  `Environment: production, log level: info`.
+
+#### The session cookie is `HttpOnly`, and `Secure` over HTTPS (#94)
+
+- No script on a TNG page can read the session cookie. It used to be readable from
+  `document.cookie`, so an injection bug in a template could have sent a signed-in user's session,
+  an admin's included, off-site. TNG's own pages never read it.
+- Wherever `DOMAIN` names a real host, the cookie is `Secure`: a browser no longer sends it on a
+  plain-HTTP request, such as the first one to a typed `http://` address before Caddy redirects it.
+  With `DOMAIN` unset, or naming `localhost`, `127.0.0.1` or `::1`, it is not, so local development
+  over `http://localhost` keeps working. The rule follows `DOMAIN` rather than Vapor's environment,
+  because production runs as `.development` (#95).
+- `SameSite=Lax` is unchanged, so following a link from Slack still arrives signed in.
+
+#### Sign-ins expire on the server (#93)
+
+- A sign-in ends once it has gone unused for `SESSION_IDLE_DAYS` (default 7) or `SESSION_MAX_DAYS`
+  (default 30) have passed since sign-in, whichever comes first, and the user signs in again with a
+  new Slack link. The only expiry used to be the browser forgetting its cookie a week after the last
+  request: the server honoured a session for good, so a copied cookie value never expired, and a
+  browser in daily use never had to sign in again.
+- Each session records when it was signed in and when it was last used. A migration stamps every
+  session from before this change with the time of the deploy, so nobody is signed out by it, and
+  its limits count from the deploy rather than from whenever its cookie is next used. A signed-in
+  session with no stamps is treated as expired.
+- The session cookie expires `SESSION_IDLE_DAYS` from the last request, rather than a week.
+- A value that is not a whole number of days, at least 1, or an idle limit longer than the
+  maximum, stops the server at startup.
+
+#### Requests without a session no longer create one (#92)
+
+- A request that signs nobody in no longer leaves an empty row in `_fluent_sessions`. Every page
+  that asks who is signed in (the home page, the binder pages, any `/admin` URL) used to create and
+  store an empty session, with a cookie, for each visitor that brought none. A client that keeps no
+  cookies wrote one row per request, and nothing ever removed them.
+- A session cookie naming no stored session is expired instead of being replaced by a new stored
+  session. An existing empty row is deleted the next time its cookie is used.
+- Reported upstream as vapor/vapor#3620.
+
+#### Members stay signed in (#91)
+
+- A member who redeems a login link lands on the home page, signed in. Every sign-in used to go to
+  `/admin`, whose guard took a member's session for a stale one and destroyed it, so a member was
+  signed out on the first request after signing in.
+- A member who opens an admin page gets `403 Forbidden` and stays signed in. A session is cleared
+  only when its user no longer exists.
+- **Sign out** posts to `POST /logout`, which works for any session. `POST /admin/logout` is gone.
+- The sign-in instructions say the link signs you in, not that it opens the admin dashboard.
+
 ## [0.7.1] - 2026-10-28
 
 ### Fixed
