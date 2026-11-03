@@ -19,7 +19,7 @@ final class BranchRemovalTests: XCTestCase {
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         service = BuildService(
             gitService: GitService(repoURL: "", workspaceBase: workspace),
-            boxService: app.boxService,
+            destination: app.artifactDestination,
             slackService: app.slackService,
             binderService: app.binderService,
             musicWorkspacePath: workspace.path)
@@ -28,6 +28,19 @@ final class BranchRemovalTests: XCTestCase {
     override func tearDown() async throws {
         try await app.asyncShutdown()
         try? FileManager.default.removeItem(at: workspace)
+    }
+
+    /// The dashboard reads the summary as JSON; the upload count is named for the
+    /// record, not for Box (#85).
+    func testTheSummaryNamesTheUploadCountForTheRecord() throws {
+        let summary = BranchRemovalSummary(
+            branch: "2019", tunes: 0, parts: 0, builds: 0, binderDefinitions: 0,
+            binderUploads: 3, directories: [], bytes: 0)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(summary)) as? [String: Any])
+
+        XCTAssertEqual(json["binder_uploads"] as? Int, 3)
+        XCTAssertNil(json["box_uploads"])
     }
 
     func testRemovesRowsAndDirectoriesForThatBranchOnly() async throws {
@@ -44,7 +57,7 @@ final class BranchRemovalTests: XCTestCase {
         let summary = try await service.removeBranch("2019", db: app.db, logger: app.logger)
 
         XCTAssertEqual(summary, BranchRemovalSummary(
-            branch: "2019", tunes: 2, parts: 4, builds: 1, binderDefinitions: 1, boxUploads: 1,
+            branch: "2019", tunes: 2, parts: 4, builds: 1, binderDefinitions: 1, binderUploads: 1,
             directories: ["2019", "output/2019"], bytes: 500))
 
         let branch2019 = try await Branch.find("2019", on: app.db)
@@ -55,9 +68,9 @@ final class BranchRemovalTests: XCTestCase {
         XCTAssertEqual(builds2019, 0)
         let binders2019 = try await BinderDefinition.query(on: app.db).filter(\.$branch.$id == "2019").count()
         XCTAssertEqual(binders2019, 0)
-        let uploads2019 = try await BoxUpload.query(on: app.db).filter(\.$branch.$id == "2019").count()
-        XCTAssertEqual(uploads2019, 0, "The record of what reached Box goes with the branch")
-        let uploads2026 = try await BoxUpload.query(on: app.db).filter(\.$branch.$id == "2026").count()
+        let uploads2019 = try await BinderUpload.query(on: app.db).filter(\.$branch.$id == "2019").count()
+        XCTAssertEqual(uploads2019, 0, "The record of what was published goes with the branch")
+        let uploads2026 = try await BinderUpload.query(on: app.db).filter(\.$branch.$id == "2026").count()
         XCTAssertEqual(uploads2026, 1, "Another branch's record is untouched")
         let allParts = try await Part.query(on: app.db).count()
         XCTAssertEqual(allParts, 2, "Only 2026's parts remain")
@@ -166,7 +179,7 @@ final class BranchRemovalTests: XCTestCase {
         try await Build(branch: branch, status: .success).save(on: app.db)
         let binder = OfficialBinder(name: "\(name) Binder", output: "\(name).pdf", sections: [])
         try await BinderDefinitionLoader.replaceDefinitions(for: name, with: [binder], on: app.db)
-        try await BoxUpload(branch: name, filename: "\(name).pdf",
+        try await BinderUpload(branch: name, filename: "\(name).pdf",
                             localPath: "/output/\(name)/binders/\(name).pdf",
                             contentHash: "deadbeef").create(on: app.db)
     }

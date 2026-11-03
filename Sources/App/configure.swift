@@ -148,7 +148,7 @@ private func addMigrations(_ app: Application) {
     //   6. LoginToken    — no FK (Slack user ID stored as plain TEXT)
     //   7. BinderDefinition — FK → Branch
     //   8. Setting        — no FKs
-    //   9. BoxUpload      — FK → Branch
+    //   9. BoxUpload      — FK → Branch; renamed BinderUpload by RenameBoxUploads
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(CreateBranch())
     app.migrations.add(CreateUser())
@@ -167,6 +167,8 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(AddExpiresAtToBinderRequest())
     // Stamps the sessions signed in before #93 with the deploy time; needs SessionRecord.
     app.migrations.add(StampExistingSessions())
+    // box_uploads → binder_uploads: nothing in the record is specific to Box (#85).
+    app.migrations.add(RenameBoxUploads())
 }
 
 // MARK: - Service initialisation
@@ -197,6 +199,9 @@ private func initServices(_ app: Application) {
         logger:       app.logger
     )
     app.boxService = boxService
+    // Where binders are published. The credential code above still talks to
+    // `boxService` directly; the build only knows it as a destination.
+    app.artifactDestination = boxService
 
     let slackService = SlackService(
         botToken:   Environment.get("SLACK_BOT_TOKEN")   ?? "",
@@ -224,7 +229,7 @@ private func initServices(_ app: Application) {
 
     app.buildService = BuildService(
         gitService:         gitService,
-        boxService:         boxService,
+        destination:        app.artifactDestination,
         slackService:       slackService,
         binderService:      binderService,
         musicWorkspacePath: musicWorkspacePath

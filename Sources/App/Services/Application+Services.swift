@@ -45,6 +45,17 @@ extension Application {
         set { storage[BoxServiceKey.self] = newValue }
     }
 
+    // MARK: ArtifactDestination
+
+    private struct ArtifactDestinationKey: StorageKey { typealias Value = any ArtifactDestination }
+
+    /// Where the build publishes official binders (#85). `BoxService` for now; the
+    /// credential code still reaches Box through `boxService`.
+    var artifactDestination: any ArtifactDestination {
+        get { storage[ArtifactDestinationKey.self]! }
+        set { storage[ArtifactDestinationKey.self] = newValue }
+    }
+
     // MARK: BinderService
 
     private struct BinderServiceKey: StorageKey { typealias Value = BinderService }

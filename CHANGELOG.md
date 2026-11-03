@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+#### Box sits behind a publishing-destination interface (#85)
+
+- The build no longer knows Box by name. It publishes binders to an `ArtifactDestination`, which
+  puts a file in a branch's place, replacing any earlier file of the same name, and says where
+  people can browse it. `BoxService` is the first destination, and nothing it does has changed:
+  the same binders go to the same year folders, and the Slack message reads the same.
+- A destination with no page to browse is still named in the Slack notification ("Published to
+  …"); Box always has one, so its message keeps its link.
+- The connections page's Box card is now written by `BoxService` itself, and reads as before.
+- The record of binders waiting to be delivered is renamed from `box_uploads` to
+  `binder_uploads` by a migration that keeps its rows. It records whether a binder was
+  delivered, not where to, so a binder still waiting when the destination changes goes to the
+  new one on the next build. The branch-removal summary's count is now `binder_uploads`.
+- Build-log lines about publishing are tagged `[publish]` instead of `[box]`.
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

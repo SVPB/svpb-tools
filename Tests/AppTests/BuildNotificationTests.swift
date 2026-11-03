@@ -10,7 +10,7 @@ final class BuildNotificationTests: XCTestCase {
         let text = SlackService.buildNotificationText(
             branch: "2026", status: .success,
             files: ["2026_binder.pdf", "2026_spec.pdf"],
-            boxFolderURL: "https://app.box.com/folder/111")
+            publishedTo: "Box", browseURL: URL(string: "https://app.box.com/folder/111"))
 
         XCTAssertEqual(text, """
         ✅ *Build success* — branch `2026`
@@ -21,9 +21,24 @@ final class BuildNotificationTests: XCTestCase {
         """)
     }
 
-    /// A build that never reached Box has nowhere to link to, and says so by
-    /// leaving the link out rather than offering a dead one.
-    func testSuccessWithoutABoxFolderOmitsTheLink() {
+    /// A destination with no page to browse is still named, so the channel knows the
+    /// binders went somewhere (#85); there is just nothing to link to.
+    func testADestinationWithoutABrowsePageIsNamedWithoutALink() {
+        let text = SlackService.buildNotificationText(
+            branch: "2026", status: .success, files: ["2026_binder.pdf"],
+            publishedTo: "Shared Drive")
+
+        XCTAssertEqual(text, """
+        ✅ *Build success* — branch `2026`
+        Binders rebuilt:
+        • 2026_binder.pdf
+        Published to Shared Drive.
+        """)
+    }
+
+    /// A build that never reached the destination has nowhere to link to, and says so
+    /// by leaving the link out rather than offering a dead one.
+    func testSuccessWithoutPublishingOmitsTheLink() {
         let text = SlackService.buildNotificationText(
             branch: "2026", status: .success, files: ["2026_binder.pdf"])
 
@@ -40,7 +55,7 @@ final class BuildNotificationTests: XCTestCase {
         let text = SlackService.buildNotificationText(
             branch: "2026", status: .success,
             files: ["2026_spec.pdf"],
-            boxFolderURL: "https://app.box.com/folder/111",
+            publishedTo: "Box", browseURL: URL(string: "https://app.box.com/folder/111"),
             alsoUploaded: ["2026_binder.pdf"])
 
         XCTAssertEqual(text, """
