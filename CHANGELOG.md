@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+#### The session cookie is `HttpOnly`, and `Secure` over HTTPS (#94)
+
+- No script on a TNG page can read the session cookie. It used to be readable from
+  `document.cookie`, so an injection bug in a template could have sent a signed-in user's session,
+  an admin's included, off-site. TNG's own pages never read it.
+- Wherever `DOMAIN` names a real host, the cookie is `Secure`: a browser no longer sends it on a
+  plain-HTTP request, such as the first one to a typed `http://` address before Caddy redirects it.
+  With `DOMAIN` unset, or naming `localhost`, `127.0.0.1` or `::1`, it is not, so local development
+  over `http://localhost` keeps working. The rule follows `DOMAIN` rather than Vapor's environment,
+  because production runs as `.development` (#95).
+- `SameSite=Lax` is unchanged, so following a link from Slack still arrives signed in.
+
 #### Sign-ins expire on the server (#93)
 
 - A sign-in ends once it has gone unused for `SESSION_IDLE_DAYS` (default 7) or `SESSION_MAX_DAYS`

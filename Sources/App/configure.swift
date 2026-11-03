@@ -65,11 +65,15 @@ public func configure(_ app: Application) async throws {
     // Fluent-backed sessions persist across server restarts.
     app.sessions.use(.fluent)
     // A sign-in ends after SESSION_IDLE_DAYS unused or SESSION_MAX_DAYS in all, and the
-    // cookie lasts as long as the idle limit (#93). Set before the middleware is made,
-    // since it copies the configuration.
+    // cookie lasts as long as the idle limit (#93). The cookie is HttpOnly, and Secure
+    // unless DOMAIN names this machine (#94). Set before the middleware is made, since it
+    // copies the configuration.
     let sessionPolicy = try SessionExpiry.Policy.load(from: Environment.get)
     app.sessionExpiryPolicy = sessionPolicy
-    app.sessions.configuration = SessionExpiry.sessionsConfiguration(policy: sessionPolicy)
+    app.sessions.configuration = SessionCookie.sessionsConfiguration(
+        policy: sessionPolicy,
+        secure: SessionCookie.isSecure(domain: Environment.get("DOMAIN"))
+    )
     app.middleware.use(app.sessions.middleware)
     // Immediately after, so its stamps are in what the sessions middleware stores.
     app.middleware.use(SessionExpiryMiddleware())
