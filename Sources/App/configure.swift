@@ -65,6 +65,9 @@ public func configure(_ app: Application) async throws {
     // Fluent-backed sessions persist across server restarts.
     app.sessions.use(.fluent)
     app.middleware.use(app.sessions.middleware)
+    // Immediately after, so it runs inside the sessions middleware and an empty session
+    // is discarded before it would be stored (#92).
+    app.middleware.use(EmptySessionMiddleware())
 
     // ── Templating ─────────────────────────────────────────────────────────
     app.views.use(.leaf)

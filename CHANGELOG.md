@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+#### Requests without a session no longer create one (#92)
+
+- A request that signs nobody in no longer leaves an empty row in `_fluent_sessions`. Every page
+  that asks who is signed in (the home page, the binder pages, any `/admin` URL) used to create and
+  store an empty session, with a cookie, for each visitor that brought none. A client that keeps no
+  cookies wrote one row per request, and nothing ever removed them.
+- A session cookie naming no stored session is expired instead of being replaced by a new stored
+  session. An existing empty row is deleted the next time its cookie is used.
+- Reported upstream as vapor/vapor#3620.
+
 #### Members stay signed in (#91)
 
 - A member who redeems a login link lands on the home page, signed in. Every sign-in used to go to

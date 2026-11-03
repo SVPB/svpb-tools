@@ -17,8 +17,12 @@ extension Request {
 
     /// Returns the session user if one is present, regardless of role.
     /// Does not redirect — safe to call on unauthenticated routes.
+    ///
+    /// Checks `hasSession` first: reading `session` on a request without one would
+    /// create an empty session just to find nothing in it (#92).
     func sessionUser() async -> User? {
-        guard let userIdString = session.data["userId"],
+        guard hasSession,
+              let userIdString = session.data["userId"],
               let userId = UUID(uuidString: userIdString)
         else { return nil }
         return try? await User.find(userId, on: db)
@@ -50,8 +54,9 @@ extension Request {
 struct AdminAuthMiddleware: AsyncMiddleware {
 
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
-        // Read user ID from the session.
-        guard let userIdString = request.session.data["userId"],
+        // Read user ID from the session, without creating one to read it from (#92).
+        guard request.hasSession,
+              let userIdString = request.session.data["userId"],
               let userId = UUID(uuidString: userIdString)
         else {
             return request.redirect(to: "/admin/login")
