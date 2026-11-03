@@ -13,7 +13,8 @@ import Vapor
 /// On success:
 ///   • `used_at` is set to now (single-use enforcement).
 ///   • `last_login_at` on the `User` record is updated.
-///   • A Vapor session is established (keyed by user UUID).
+///   • A Vapor session is established (keyed by user UUID), stamped with when it was
+///     signed in so that `SessionExpiryMiddleware` can end it after `SESSION_MAX_DAYS` (#93).
 ///   • The client is redirected by role: admins to `/admin`, members to `/` (#91).
 struct AuthController: RouteCollection {
 
@@ -72,6 +73,10 @@ struct AuthController: RouteCollection {
         let userId = try user.requireID()
         req.session.data["userId"] = userId.uuidString
         req.session.data["userRole"] = user.role.rawValue
+        // Starts the absolute session limit (#93). Written over any earlier sign-in's
+        // stamp, since this is a new sign-in even when it reuses an emptied session.
+        req.session.data[SessionExpiry.signedInAtKey] =
+            SessionExpiry.stamp(req.application.sessionClock())
 
         req.logger.info("[Auth] User \(user.slackUserId) (\(user.role.rawValue)) logged in via token \(tokenUUID)")
 

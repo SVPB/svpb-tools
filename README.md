@@ -186,6 +186,8 @@ each value before starting the stack.
 | `BACKUP_REGION` | Optional. The signing region; read from a DigitalOcean endpoint, `us-east-1` otherwise |
 | `BACKUP_INTERVAL_HOURS` | Optional. Hours between backups; defaults to 24 |
 | `BINDER_RETENTION_DAYS` | Optional. Days a personal binder stays on the server after it is built; defaults to 14, and can be changed on the admin **Binder cache** page |
+| `SESSION_IDLE_DAYS` | Optional. Days a sign-in lasts without being used; defaults to 7 |
+| `SESSION_MAX_DAYS` | Optional. Days a sign-in lasts at most, however often it is used; defaults to 30, and must be at least `SESSION_IDLE_DAYS` |
 
 ---
 
