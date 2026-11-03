@@ -132,30 +132,6 @@ enum SessionExpiry {
         return (try? stampStyle.parse(stamp))
             ?? (try? Date.ISO8601FormatStyle().parse(stamp))
     }
-
-    // MARK: Cookie
-
-    /// Vapor's default session cookie, except that it expires `policy.idleDays` from now
-    /// rather than a week. The factory sees only the session ID, so the cookie can follow
-    /// the idle limit but not the absolute one; the server enforces that.
-    ///
-    /// `SameSite=Lax`, and neither `HttpOnly` nor `Secure`, as Vapor's default has them
-    /// (the flags are #94).
-    static func sessionsConfiguration(policy: Policy) -> SessionsConfiguration {
-        let lifetime = policy.idleInterval
-        return SessionsConfiguration(cookieName: "vapor-session") { sessionID in
-            HTTPCookies.Value(
-                string: sessionID.string,
-                expires: Date(timeIntervalSinceNow: lifetime),
-                maxAge: nil,
-                domain: nil,
-                path: "/",
-                isSecure: false,
-                isHTTPOnly: false,
-                sameSite: .lax
-            )
-        }
-    }
 }
 
 private let stampStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
