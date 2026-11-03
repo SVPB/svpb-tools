@@ -168,6 +168,8 @@ each value before starting the stack.
 |---|---|
 | `DOMAIN` | Public hostname, e.g. `musictools.siliconvalleypipeband.com` — used by Caddy for TLS; unless it is unset or names `localhost`, `127.0.0.1` or `::1`, the sign-in cookie is sent only over HTTPS |
 | `TNG_IMAGE_TAG` | Optional. Which published image to run: `develop`, a release version, or unset for `latest` |
+| `VAPOR_ENV` | Optional. The published image runs as `production`; nothing needs to change it |
+| `LOG_LEVEL` | Optional. How much the server logs; defaults to `info`. `notice` or above hides build progress and sign-ins from `docker compose logs` |
 | `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
 | `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository. The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped |

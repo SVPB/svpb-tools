@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+#### Production runs as Vapor's production environment (#95)
+
+- The published image sets `VAPOR_ENV=production`. Nothing set the environment before, so Vapor
+  fell back to `development` on the droplet. No behaviour depends on it yet, but the first check
+  that wanted production behaviour would have silently got development behaviour in production.
+- The image also sets `LOG_LEVEL=info`, so production logs exactly what it did: Vapor's default in
+  production is `notice`, which would hide build progress and sign-ins from `docker compose logs`.
+- Both can be overridden from `.env`. `swift run` and `dev.sh` stay `development`.
+- The server's first log line names its environment and log level, e.g.
+  `Environment: production, log level: info`.
+
 #### The session cookie is `HttpOnly`, and `Secure` over HTTPS (#94)
 
 - No script on a TNG page can read the session cookie. It used to be readable from

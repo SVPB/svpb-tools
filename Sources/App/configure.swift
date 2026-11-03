@@ -41,6 +41,13 @@ private var isBoxAuthMode: Bool {
     CommandLine.arguments.contains(BoxAuthCommand.name)
 }
 
+/// The line `configure` logs at boot: which Vapor environment the server runs as, and the
+/// log level in force (#95). The published image sets `VAPOR_ENV=production` and
+/// `LOG_LEVEL=info`; `swift run` and `dev.sh` stay `development`.
+func bootSummary(environment: Environment, logLevel: Logger.Level) -> String {
+    "Environment: \(environment.name), log level: \(logLevel)"
+}
+
 public func configure(_ app: Application) async throws {
     // ── Register commands ───────────────────────────────────────────────────
     app.asyncCommands.use(BoxAuthCommand(), as: BoxAuthCommand.name)
@@ -48,6 +55,10 @@ public func configure(_ app: Application) async throws {
     // In box-auth mode, skip full configuration — the command only needs the
     // event loop and its own minimal HTTP setup.
     if isBoxAuthMode { return }
+
+    // ── Environment ────────────────────────────────────────────────────────
+    // First, so it heads `docker compose logs` even when configuration fails below (#95).
+    app.logger.notice("\(bootSummary(environment: app.environment, logLevel: app.logger.logLevel))")
 
     // ── Environment variable validation ────────────────────────────────────
     if app.environment != .testing {
