@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### See and end your sign-ins (#90)
+
+- A new **Your account** page (`/account`), reached from "Signed in as …" in the header, lists every
+  browser the user is signed in on, newest activity first, with a short name for each ("Safari on
+  iPhone"; the full browser string on hover), when it signed in and when it was last used. The
+  current browser is marked **This browser**. Any signed-in user can open it, member or admin.
+- **End** on a row ends that one session (on this browser's row, that is signing out); **Sign out
+  other browsers** ends all but this one; **Sign out everywhere** ends all of them and returns to
+  the home page. A session is named by an ID that is not its cookie, and the cookie value is never
+  shown.
+- The admin **Users** page has a **Sessions** column with each user's count of live sessions and an
+  **End sessions** button, for a lost phone or someone leaving the band. Deleting a user now ends
+  their sessions at once, rather than leaving them until the next request finds no user.
+- Sessions that can no longer sign anyone in are deleted shortly after boot and then hourly: those
+  past either of #93's limits, those of deleted users, and those with no user at all, which clears
+  the empty rows #92's bug left in production. Expiry follows exactly the rule each request is
+  checked against, so the sweep never deletes a session a request would accept.
+- Sign-in records the browser's `User-Agent` in the session, to name it on the account page.
+  Sessions signed in before this show "Unknown browser".
+
 ### Fixed
 
 #### Production runs as Vapor's production environment (#95)

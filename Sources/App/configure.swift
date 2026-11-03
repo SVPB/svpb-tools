@@ -219,6 +219,9 @@ private func initServices(_ app: Application) {
     // Personal binders are kept for a fixed number of days, then deleted (#83).
     app.lifecycle.use(BinderCache())
 
+    // Sessions that can no longer sign anyone in are deleted, by #93's expiry rule (#90).
+    app.lifecycle.use(SessionSweeper())
+
     app.buildService = BuildService(
         gitService:         gitService,
         boxService:         boxService,

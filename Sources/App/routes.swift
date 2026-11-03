@@ -20,6 +20,7 @@ public func routes(_ app: Application) throws {
     try app.register(collection: SlackEventsController())
     try app.register(collection: AuthController())
     try app.register(collection: SessionController())
+    try app.register(collection: AccountController())
     try app.register(collection: AdminController())
     try app.register(collection: ConnectionsController())
     try app.register(collection: BinderCacheController())
