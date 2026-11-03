@@ -64,9 +64,17 @@ public func configure(_ app: Application) async throws {
     // ── Sessions ───────────────────────────────────────────────────────────
     // Fluent-backed sessions persist across server restarts.
     app.sessions.use(.fluent)
+    // A sign-in ends after SESSION_IDLE_DAYS unused or SESSION_MAX_DAYS in all, and the
+    // cookie lasts as long as the idle limit (#93). Set before the middleware is made,
+    // since it copies the configuration.
+    let sessionPolicy = try SessionExpiry.Policy.load(from: Environment.get)
+    app.sessionExpiryPolicy = sessionPolicy
+    app.sessions.configuration = SessionExpiry.sessionsConfiguration(policy: sessionPolicy)
     app.middleware.use(app.sessions.middleware)
-    // Immediately after, so it runs inside the sessions middleware and an empty session
-    // is discarded before it would be stored (#92).
+    // Immediately after, so its stamps are in what the sessions middleware stores.
+    app.middleware.use(SessionExpiryMiddleware())
+    // Inside the sessions middleware, so an empty session — including one just emptied
+    // because it expired — is discarded before it would be stored (#92).
     app.middleware.use(EmptySessionMiddleware())
 
     // ── Templating ─────────────────────────────────────────────────────────
@@ -142,6 +150,8 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(CreateSetting())
     app.migrations.add(CreateBoxUpload())
     app.migrations.add(AddExpiresAtToBinderRequest())
+    // Stamps the sessions signed in before #93 with the deploy time; needs SessionRecord.
+    app.migrations.add(StampExistingSessions())
 }
 
 // MARK: - Service initialisation

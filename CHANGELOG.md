@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+#### Sign-ins expire on the server (#93)
+
+- A sign-in ends once it has gone unused for `SESSION_IDLE_DAYS` (default 7) or `SESSION_MAX_DAYS`
+  (default 30) have passed since sign-in, whichever comes first, and the user signs in again with a
+  new Slack link. The only expiry used to be the browser forgetting its cookie a week after the last
+  request: the server honoured a session for good, so a copied cookie value never expired, and a
+  browser in daily use never had to sign in again.
+- Each session records when it was signed in and when it was last used. A migration stamps every
+  session from before this change with the time of the deploy, so nobody is signed out by it, and
+  its limits count from the deploy rather than from whenever its cookie is next used. A signed-in
+  session with no stamps is treated as expired.
+- The session cookie expires `SESSION_IDLE_DAYS` from the last request, rather than a week.
+- A value that is not a whole number of days, at least 1, or an idle limit longer than the
+  maximum, stops the server at startup.
+
 #### Requests without a session no longer create one (#92)
 
 - A request that signs nobody in no longer leaves an empty row in `_fluent_sessions`. Every page
