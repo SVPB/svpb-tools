@@ -20,7 +20,8 @@ import Vapor
 ///   `GET    /admin/users`          — list all users
 ///   `POST   /admin/users`          — create a new user
 ///   `PATCH  /admin/users/:id`      — update a user's role
-///   `DELETE /admin/users/:id`      — delete a user
+///   `DELETE /admin/users/:id`      — delete a user, and end their sessions
+///   `POST   /admin/users/:id/sessions/end` — end all of a user's sessions (#90)
 struct AdminController: RouteCollection {
 
     func boot(routes: any RoutesBuilder) throws {
@@ -45,6 +46,7 @@ struct AdminController: RouteCollection {
         users.post(use: createUser)
         users.patch(":userId", use: updateUser)
         users.delete(":userId", use: deleteUser)
+        users.post(":userId", "sessions", "end", use: endUserSessions)
     }
 
     // MARK: - Unauthenticated pages
@@ -260,6 +262,8 @@ struct AdminController: RouteCollection {
             let role: String
             let createdAt: String
             let lastLoginAt: String
+            /// Sessions that still sign this user in (#90).
+            let sessionCount: Int
             let isSelf: Bool
         }
 
@@ -272,6 +276,9 @@ struct AdminController: RouteCollection {
 
         let isoFormatter = ISO8601DateFormatter()
         let selfId = req.authenticatedUser?.id?.uuidString ?? ""
+        let sessionCounts = try await UserSessions.liveCounts(
+            on: req.db, now: req.application.sessionClock(),
+            policy: req.application.sessionExpiryPolicy)
 
         let rows = try users.map { u in
             UserRow(
@@ -281,6 +288,7 @@ struct AdminController: RouteCollection {
                 role: u.role.rawValue,
                 createdAt: u.createdAt.map { isoFormatter.string(from: $0) } ?? "—",
                 lastLoginAt: u.lastLoginAt.map { isoFormatter.string(from: $0) } ?? "never",
+                sessionCount: sessionCounts[try u.requireID()] ?? 0,
                 isSelf: try u.requireID().uuidString == selfId
             )
         }
@@ -351,7 +359,32 @@ struct AdminController: RouteCollection {
             throw Abort(.forbidden, reason: "You cannot delete your own account.")
         }
 
+        // Their sessions go with them, rather than waiting for the next request to find
+        // no user (#90).
+        let ended = try await UserSessions.endAll(of: uuid, on: req.db)
         try await user.delete(on: req.db)
+        req.logger.notice("[admin] Deleted user \(user.slackUserId) and ended \(ended) session(s)")
         return .noContent
+    }
+
+    /// `POST /admin/users/:userId/sessions/end` — ends every session of that user, for a
+    /// lost phone or someone leaving the band (#90), and returns to the Users page.
+    /// An admin ends their own from `/account`, the same as anyone, so this refuses them.
+    @Sendable
+    func endUserSessions(_ req: Request) async throws -> Response {
+        guard let idString = req.parameters.get("userId"),
+              let uuid = UUID(uuidString: idString),
+              let user = try await User.find(uuid, on: req.db)
+        else {
+            throw Abort(.notFound)
+        }
+        if let self_ = req.authenticatedUser, (try? self_.requireID()) == uuid {
+            throw Abort(.forbidden, reason: "End your own sessions from /account.")
+        }
+
+        let ended = try await UserSessions.endAll(of: uuid, on: req.db)
+        let admin = req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "unknown"
+        req.logger.notice("[admin] \(admin) ended \(ended) session(s) of \(user.slackUserId)")
+        return req.redirect(to: "/admin/users")
     }
 }

@@ -3,13 +3,14 @@ import Vapor
 
 // MARK: - Session storage key
 
-/// Typed request-storage key for the currently authenticated admin user.
+/// Typed request-storage key for the user a guard middleware has signed in.
 struct AuthenticatedUserKey: StorageKey {
     typealias Value = User
 }
 
 extension Request {
-    /// The authenticated admin user, set by `AdminAuthMiddleware`.
+    /// The signed-in user, set by `AdminAuthMiddleware` (always an admin) or
+    /// `SignedInMiddleware` (any role).
     var authenticatedUser: User? {
         get { storage[AuthenticatedUserKey.self] }
         set { storage[AuthenticatedUserKey.self] = newValue }

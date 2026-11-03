@@ -18,6 +18,7 @@
   .btn-danger { color: #c00; border-color: #f99; }
   .btn-danger:hover { background: #fee; }
   .btn:disabled { opacity: 0.4; cursor: default; }
+  form.inline { display: inline; margin-left: 0.4rem; }
   .add-card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
   .add-card h2 { margin-top: 0; }
   .field-row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
@@ -40,6 +41,7 @@
         <th>Role</th>
         <th>Created</th>
         <th>Last login</th>
+        <th>Sessions</th>
         <th></th>
       </tr>
     </thead>
@@ -55,12 +57,22 @@
         </td>
         <td style="font-size:0.82rem;color:#555;">#(user.createdAt)</td>
         <td style="font-size:0.82rem;color:#555;">#(user.lastLoginAt)</td>
+        <td style="font-size:0.82rem;color:#555;white-space:nowrap;">
+          #(user.sessionCount)
+          #if(!user.isSelf && user.sessionCount > 0):
+          <form class="inline" method="POST" action="/admin/users/#(user.id)/sessions/end"
+                data-name="#(user.displayName)"
+                onsubmit="return confirm('Sign ' + this.dataset.name + ' out of every browser?');">
+            <button class="btn" type="submit">End sessions</button>
+          </form>
+          #endif
+        </td>
         <td style="white-space:nowrap;">
           #if(!user.isSelf):
           <button class="btn" onclick="toggleRole('#(user.id)', '#(user.role)')">Toggle role</button>
           <button class="btn btn-danger" onclick="deleteUser('#(user.id)', '#(user.displayName)')">Delete</button>
           #else:
-          <span style="font-size:0.8rem;color:#888;">(you)</span>
+          <span style="font-size:0.8rem;color:#888;">(you — <a href="/account">your sessions</a>)</span>
           #endif
         </td>
       </tr>
