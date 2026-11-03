@@ -40,7 +40,8 @@ extension Application {
 
     private struct ArtifactDestinationKey: StorageKey { typealias Value = any ArtifactDestination }
 
-    /// Where the build publishes official binders (#85). `BoxService` for now.
+    /// Where the build publishes official binders (#85): the one `ARTIFACT_DESTINATION`
+    /// names (#87).
     var artifactDestination: any ArtifactDestination {
         get { storage[ArtifactDestinationKey.self]! }
         set { storage[ArtifactDestinationKey.self] = newValue }

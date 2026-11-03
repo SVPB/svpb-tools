@@ -55,7 +55,7 @@
       <h2>binders.yaml</h2>
       <label for="binder-output">Output filename</label>
       <input type="text" id="binder-output" placeholder="e.g. 2026_binder.pdf" value="">
-      <p class="hint">The PDF the build writes and uploads to Box. A plain filename ending in <code>.pdf</code>, different from every other binder in the file.</p>
+      <p class="hint">The PDF the build writes and publishes to #(destinationName). A plain filename ending in <code>.pdf</code>, different from every other binder in the file.</p>
 
       <textarea id="yaml-output" spellcheck="false" placeholder="Paste an existing binders.yaml here and click &quot;Load&quot; to edit it, or build a binder on the left and click &quot;Generate YAML&quot;."></textarea>
       <p class="hint" style="margin-top:0.25rem;">This is the <strong>whole</strong> file. Copy it over <code>binders.yaml</code> at the root of the year's branch — do not append it to what is there, or every binder would be declared twice. Comments in the original file are not kept.</p>
