@@ -567,9 +567,18 @@ actor BoxService {
 
 // MARK: - ArtifactDestination
 
-extension BoxService: ArtifactDestination {
+extension BoxService: AuthorizableDestination {
+
+    nonisolated var id: String { "box" }
 
     nonisolated var displayName: String { "Box" }
+
+    /// Registered in the production Box app's console, so it stays where it has always
+    /// been (#86).
+    nonisolated var callbackPath: String { "/box-callback" }
+
+    /// Box expires a refresh token 60 days after its last use.
+    nonisolated var credentialLifetime: TimeInterval? { 60 * 24 * 60 * 60 }
 
     /// Uploads `file` into the year folder for `branch`, as a new version of any file of
     /// the same name already there, and links the year folder.
@@ -589,12 +598,12 @@ extension BoxService: ArtifactDestination {
             + Self.renewalInterval + ", so it cannot expire while TNG is running."
 
         let credential: String
-        if let rotated = status.lastRotated {
-            let expires = rotated.addingTimeInterval(ConnectionStatus.boxTokenLifetime)
+        if let rotated = status.lastRotated, let lifetime = credentialLifetime {
+            let expires = rotated.addingTimeInterval(lifetime)
             let days = Int(expires.timeIntervalSinceNow / 86400)
             credential = days > 0
                 ? "Refresh token last renewed \(ConnectionsReport.relative(rotated)); expires in \(days) day(s) otherwise." + renewal
-                : "⚠ Refresh token last renewed \(ConnectionsReport.relative(rotated)) and has passed its 60-day expiry"
+                : "⚠ Refresh token last renewed \(ConnectionsReport.relative(rotated)) and has passed its \(Int(lifetime / 86400))-day expiry"
         } else if status.hasSeedToken {
             credential = "Using the BOX_REFRESH_TOKEN from .env; nothing renewed yet"
         } else {
@@ -603,7 +612,7 @@ extension BoxService: ArtifactDestination {
 
         guard configured else {
             return ConnectionStatus(
-                id: "box", name: displayName, purpose: Self.purpose,
+                id: id, name: displayName, purpose: Self.purpose,
                 state: .unconfigured, detail: nil, credential: credential,
                 error: "BOX_CLIENT_ID and BOX_CLIENT_SECRET must be set before TNG can be authorised",
                 authorizePath: nil,
@@ -611,21 +620,20 @@ extension BoxService: ArtifactDestination {
         }
 
         return ConnectionStatus(
-            id: "box", name: displayName, purpose: Self.purpose,
+            id: id, name: displayName, purpose: Self.purpose,
             state: status.isWorking ? .working : .failing,
             detail: status.rootFolderName.map { "Uploading into \($0)" },
             credential: credential,
             error: status.error,
             // The one service TNG can re-authorise from here: Box hands out its tokens
             // through a browser redirect, which is exactly what this page can drive.
-            authorizePath: "/admin/connections/box/authorize",
+            authorizePath: ConnectionsController.authorizePath,
             remedy: nil)
     }
 
     /// How often the scheduled renewal runs, as the page says it.
     private static var renewalInterval: String {
-        BoxTokenKeepAlive.describe(
-            BoxTokenKeepAlive.interval(from: Environment.get("BOX_TOKEN_REFRESH_HOURS")))
+        RecurringSchedule.describe(DestinationKeepAlive.interval())
     }
 
     private static let purpose =

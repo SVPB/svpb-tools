@@ -26,7 +26,7 @@ import Vapor
 /// anything: expiring old copies is the bucket's own lifecycle rule (README § Backups), so
 /// a server that misbehaves can add backups but has no code path that removes them.
 ///
-/// In-process for the same reason as `BoxTokenKeepAlive`: an external timer is one more
+/// In-process for the same reason as `DestinationKeepAlive`: an external timer is one more
 /// thing to forget when the droplet is rebuilt, and an in-process one can say in Slack
 /// when it stops working.
 struct DatabaseBackup: LifecycleHandler {
@@ -48,7 +48,7 @@ struct DatabaseBackup: LifecycleHandler {
 
     /// Hours between backups, from `BACKUP_INTERVAL_HOURS`. Nightly by default.
     static func interval(from environment: @autoclosure () -> String?) -> Duration {
-        BoxTokenKeepAlive.interval(from: environment())
+        RecurringSchedule.interval(hours: environment())
     }
 
     // MARK: - Lifecycle
@@ -81,7 +81,7 @@ struct DatabaseBackup: LifecycleHandler {
 
         let interval = Self.interval(from: Environment.get("BACKUP_INTERVAL_HOURS"))
         app.logger.notice(
-            "[Backup] Backing up to \(configuration.bucket) every \(BoxTokenKeepAlive.describe(interval))")
+            "[Backup] Backing up to \(configuration.bucket) every \(RecurringSchedule.describe(interval))")
 
         app.storage[TaskKey.self] = Task {
             do {

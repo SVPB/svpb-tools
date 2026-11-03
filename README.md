@@ -626,7 +626,8 @@ its database, and the server starts without one precisely so that it can be auth
 > and writes each new one to its database — so as long as the server is running, its Box access
 > cannot lapse. This matters because the band goes months between edits to the music: renewing
 > only when a build uploads would mean a quiet winter ended with a dead token. Set
-> `BOX_TOKEN_REFRESH_HOURS` to change the interval.
+> `DESTINATION_TOKEN_REFRESH_HOURS` to change the interval (`BOX_TOKEN_REFRESH_HOURS`, its
+> earlier name, is still accepted).
 >
 > The daily renewal doubles as a check that Box still works. If one fails, TNG posts to the
 > Slack channel — once when it starts failing and once when it recovers, not every day — and the

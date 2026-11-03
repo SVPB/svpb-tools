@@ -23,6 +23,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   new one on the next build. The branch-removal summary's count is now `binder_uploads`.
 - Build-log lines about publishing are tagged `[publish]` instead of `[box]`.
 
+#### OAuth credential upkeep is something a destination opts into (#86)
+
+- Authorising from the Connections page, renewing on a schedule, and announcing the outcome in
+  Slack now work for any destination that declares itself authorisable, not just Box. One with
+  fixed keys, such as a storage bucket, gets none of it: no Authorise button, no callback
+  route, no redirect panel and no renewal timer. Box behaves as before.
+- The Authorise button now opens `/admin/connections/destination/authorize`. Box's callback
+  stays at `/box-callback`, the address registered in the Box Developer Console, so nothing
+  there needs changing.
+- The renewal interval is set by `DESTINATION_TOKEN_REFRESH_HOURS`. `BOX_TOKEN_REFRESH_HOURS`
+  is still read when it is unset, so an existing `.env` keeps its setting. Box's last recorded
+  renewal outcome is still kept under `box.keepalive.healthy`, and its token under
+  `box.refresh_token`, so the database needs no migration.
+- The authorisation result page and the redirect-URI panel name the destination rather than
+  saying Box. The panel is shown only for a destination that has a callback to register.
+- `box-auth` stays Box-only.
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

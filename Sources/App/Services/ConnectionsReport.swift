@@ -137,7 +137,7 @@ enum ConnectionsReport {
                 error: "Not backing up: \(problems.joined(separator: "; "))",
                 authorizePath: nil, remedy: remedy)
         case .ready(let configuration):
-            let interval = BoxTokenKeepAlive.describe(
+            let interval = RecurringSchedule.describe(
                 DatabaseBackup.interval(from: Environment.get("BACKUP_INTERVAL_HOURS")))
             let destination = "\(configuration.bucket)/\(configuration.prefix) at "
                 + (configuration.endpoint.host ?? "") + ", every \(interval)"

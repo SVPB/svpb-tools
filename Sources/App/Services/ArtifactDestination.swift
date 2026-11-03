@@ -21,6 +21,10 @@ import Foundation
 /// the next build sends it to the new one.
 protocol ArtifactDestination: Sendable {
 
+    /// Stable identifier: `box`. The id of its connection card, and the prefix of the
+    /// settings kept for it, such as its keep-alive's health (#86).
+    var id: String { get }
+
     /// "Box", "Google Drive": what the build log, Slack and the connections page call it.
     var displayName: String { get }
 
@@ -37,6 +41,50 @@ protocol ArtifactDestination: Sendable {
     /// Each destination writes its own, because only it knows what its configuration is
     /// and what fixes it.
     func connectionStatus() async -> ConnectionStatus
+}
+
+// MARK: - AuthorizableDestination
+
+/// A destination whose credential is an OAuth grant, which TNG obtains from the
+/// connections page and keeps alive on a timer (#86).
+///
+/// Opting in gets a destination three things: an Authorise button on its connection
+/// card, driving the consent flow through ``authorizationURL(redirectURI:state:)`` and
+/// ``adoptAuthorizationCode(_:redirectURI:)``; a callback route at ``callbackPath``; and
+/// `DestinationKeepAlive`, which calls ``renew()`` on a schedule and tells Slack when the
+/// outcome changes. A destination with fixed keys, such as an S3 bucket, conforms to
+/// `ArtifactDestination` alone and gets none of it.
+///
+/// How the token is stored is not part of this. Box retires its refresh token on every
+/// refresh and Google normally keeps the same one, so each destination saves its own,
+/// under its own `Setting` key, whenever it changes.
+protocol AuthorizableDestination: ArtifactDestination {
+
+    /// The server path the provider sends the browser back to, e.g. `/box-callback`.
+    ///
+    /// Each destination declares its own, because the address is registered in the
+    /// provider's console and changing it means changing that registration too.
+    var callbackPath: String { get }
+
+    /// How long the credential survives without use — 60 days for a Box refresh token —
+    /// or `nil` when it does not expire from disuse. The connections page counts down
+    /// from the last renewal with it.
+    var credentialLifetime: TimeInterval? { get }
+
+    /// Where the operator is sent to grant TNG access.
+    ///
+    /// - Parameters:
+    ///   - redirectURI: The full address of ``callbackPath`` on this server. Must be the
+    ///     one later given to ``adoptAuthorizationCode(_:redirectURI:)``.
+    ///   - state: Opaque value echoed back to the callback, checked against the session.
+    func authorizationURL(redirectURI: String, state: String) async -> String
+
+    /// Exchanges the code from the provider's redirect for a credential, stores it, and
+    /// takes it into use. Throws unless a usable credential is left behind.
+    func adoptAuthorizationCode(_ code: String, redirectURI: String) async throws
+
+    /// Renews the credential whether or not it is due, so it cannot die of disuse.
+    func renew() async throws
 }
 
 // MARK: - PublishedLocation

@@ -66,12 +66,14 @@
   </div>
   #endfor
 
+  #if(redirectURI):
   <p class="redirect">
-    <strong>Box redirect URI.</strong> Box only sends a browser back to an address
-    registered for the application, so this exact value has to be listed under
-    <em>OAuth 2.0 Redirect URIs</em> in the Box Developer Console:<br>
+    <strong>#(destinationName) redirect URI.</strong> #(destinationName) only sends a browser
+    back to an address registered for the application, so this exact value has to be listed
+    among the OAuth redirect URIs in its developer console:<br>
     <code>#(redirectURI)</code>
   </p>
+  #endif
 
   <p class="refresh"><a href="/admin/connections">Check again</a></p>
 </main>

@@ -198,9 +198,7 @@ private func initServices(_ app: Application) {
         httpClient:   httpClient,
         logger:       app.logger
     )
-    app.boxService = boxService
-    // Where binders are published. The credential code above still talks to
-    // `boxService` directly; the build only knows it as a destination.
+    // Where binders are published. Everything else knows Box only as a destination.
     app.artifactDestination = boxService
 
     let slackService = SlackService(
@@ -214,9 +212,12 @@ private func initServices(_ app: Application) {
     let binderService = BinderService(musicWorkspacePath: musicWorkspacePath)
     app.binderService = binderService
 
-    // Box's refresh token expires after 60 days of disuse, and a build is the only thing
-    // that would otherwise use it. Renew it on a timer so a quiet season cannot kill it.
-    app.lifecycle.use(BoxTokenKeepAlive())
+    // An OAuth destination's credential can expire from disuse — Box's after 60 days —
+    // and a build is the only thing that would otherwise use it. Renew it on a timer so
+    // a quiet season cannot kill it. A destination with fixed keys has nothing to renew.
+    if let destination = app.authorizableDestination {
+        app.lifecycle.use(DestinationKeepAlive(destination: destination))
+    }
 
     // The database is the one thing TNG cannot regenerate; copy it off the server nightly.
     app.lifecycle.use(DatabaseBackup())

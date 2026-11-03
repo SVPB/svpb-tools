@@ -14,6 +14,7 @@ actor StubDestination: ArtifactDestination {
         var description: String { "stub refused \(filename)" }
     }
 
+    nonisolated let id = "stub"
     nonisolated let displayName = "Stub"
 
     static let browseURL = URL(string: "https://stub.example/2026")!
@@ -46,7 +47,7 @@ actor StubDestination: ArtifactDestination {
 
     func connectionStatus() async -> ConnectionStatus {
         ConnectionStatus(
-            id: "stub", name: displayName, purpose: "Where test binders go.",
+            id: id, name: displayName, purpose: "Where test binders go.",
             state: .working, detail: nil, credential: nil, error: nil,
             authorizePath: nil, remedy: nil)
     }
