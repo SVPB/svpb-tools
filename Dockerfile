@@ -88,6 +88,15 @@ RUN set -eu; \
 ARG GIT_COMMIT=
 ENV TNG_GIT_COMMIT=$GIT_COMMIT
 
+# This image is the release artifact, built -c release, and production runs
+# nothing else, so it declares itself production (#95). Without this Vapor
+# falls back to development. Vapor's default log level in production is
+# notice, which would hide every info line operators follow builds and
+# sign-ins by, so LOG_LEVEL keeps today's level. Both are ENV rather than
+# flags on CMD so a value in .env (through env_file) can override them.
+ENV VAPOR_ENV=production
+ENV LOG_LEVEL=info
+
 # The database and built PDFs live on the named volume, not in the image.
 RUN mkdir -p data
 
