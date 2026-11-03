@@ -46,7 +46,7 @@
     <ol>
       <li>Open Slack and send <em>any message</em> to the <strong>TNG</strong> bot.</li>
       <li>The bot will reply with a one-time login link valid for 10 minutes.</li>
-      <li>Click the link to access the admin dashboard.</li>
+      <li>Click the link to sign in.</li>
     </ol>
     <p>If you do not have access, ask a band administrator to add your Slack account.</p>
   </div>

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### Members stay signed in (#91)
+
+- A member who redeems a login link lands on the home page, signed in. Every sign-in used to go to
+  `/admin`, whose guard took a member's session for a stale one and destroyed it, so a member was
+  signed out on the first request after signing in.
+- A member who opens an admin page gets `403 Forbidden` and stays signed in. A session is cleared
+  only when its user no longer exists.
+- **Sign out** posts to `POST /logout`, which works for any session. `POST /admin/logout` is gone.
+- The sign-in instructions say the link signs you in, not that it opens the admin dashboard.
+
 ## [0.7.1] - 2026-10-28
 
 ### Fixed

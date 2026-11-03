@@ -7,7 +7,8 @@ import Vapor
 ///   `GET  /admin`              — build history dashboard
 ///   `GET  /admin/login`        — unauthenticated landing page
 ///   `GET  /admin/builds/{id}`  — full build log
-///   `POST /admin/logout`       — destroy session and redirect
+///
+/// Sign-out is `POST /logout`, in `SessionController`, since members sign out too (#91).
 ///
 /// Branch routes (admin-only):
 ///   `POST   /admin/branches/:branch/sync`         — start a catalogue sync
@@ -31,7 +32,6 @@ struct AdminController: RouteCollection {
         let admin = routes.grouped(AdminAuthMiddleware())
         admin.get("admin", use: dashboard)
         admin.get("admin", "builds", ":buildId", use: buildDetail)
-        admin.post("admin", "logout", use: logout)
 
         // Catalogue sync.
         admin.post("admin", "branches", ":branch", "sync", use: syncBranch)
@@ -144,14 +144,6 @@ struct AdminController: RouteCollection {
             log: build.log ?? "(no log)"
         )
         return try await req.view.render("admin/build-detail", ctx)
-    }
-
-    // MARK: - Logout
-
-    @Sendable
-    func logout(_ req: Request) async throws -> Response {
-        req.session.destroy()
-        return req.redirect(to: "/")
     }
 
     // MARK: - Catalogue sync

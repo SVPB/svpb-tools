@@ -14,7 +14,7 @@ import Vapor
 ///   • `used_at` is set to now (single-use enforcement).
 ///   • `last_login_at` on the `User` record is updated.
 ///   • A Vapor session is established (keyed by user UUID).
-///   • The client is redirected to `/admin`.
+///   • The client is redirected by role: admins to `/admin`, members to `/` (#91).
 struct AuthController: RouteCollection {
 
     func boot(routes: any RoutesBuilder) throws {
@@ -75,7 +75,7 @@ struct AuthController: RouteCollection {
 
         req.logger.info("[Auth] User \(user.slackUserId) (\(user.role.rawValue)) logged in via token \(tokenUUID)")
 
-        return req.redirect(to: "/admin")
+        return req.redirect(to: user.role == .admin ? "/admin" : "/")
     }
 
     // MARK: - Helpers
