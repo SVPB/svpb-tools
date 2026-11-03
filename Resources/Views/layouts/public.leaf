@@ -86,7 +86,7 @@
   <div class="header-right">
     #if(currentUser):
     <span class="meta">Signed in as #(currentUser)</span>
-    <form class="logout" method="POST" action="/admin/logout">
+    <form class="logout" method="POST" action="/logout">
       <button class="logout" type="submit">Sign out</button>
     </form>
     #endif
