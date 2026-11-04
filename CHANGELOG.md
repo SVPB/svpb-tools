@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Google Drive as a publishing destination (#88)
+
+- `ARTIFACT_DESTINATION=google_drive` publishes binders to Google Drive, with a year folder per
+  branch, as for Box. A binder published again becomes a new revision of the same file, so saved
+  links keep working. It needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+  `GOOGLE_DRIVE_FOLDER_NAME`, and is authorised from the Connections page. See README.md
+  § Google Drive OAuth2.
+- TNG asks only for the `drive.file` scope, so it creates its own folder on the first publish,
+  remembers it as `google_drive.root_folder_id`, and the band shares it from Drive. If that folder
+  is deleted or trashed, publishing fails with an error naming it, rather than making a new one
+  shared with nobody.
+- Destination cards on the Connections page can link to the place binders are published.
+
 ### Changed
 
 #### Box sits behind a publishing-destination interface (#85)

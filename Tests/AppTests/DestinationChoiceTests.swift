@@ -94,10 +94,51 @@ final class DestinationChoiceTests: XCTestCase {
     /// Each destination asks only for its own variables; none asks for another's.
     func testNoDestinationRequiresAnotherDestinationsVariables() {
         for kind in DestinationKind.allCases {
-            let prefix = kind.rawValue.uppercased() + "_"
-            for key in kind.requiredEnvironmentVariables {
-                XCTAssertTrue(key.hasPrefix(prefix), "\(kind) requires \(key)")
+            for other in DestinationKind.allCases where other != kind {
+                let shared = Set(kind.requiredEnvironmentVariables)
+                    .intersection(other.requiredEnvironmentVariables)
+                XCTAssertTrue(shared.isEmpty, "\(kind) and \(other) both require \(shared)")
             }
+        }
+    }
+
+    // MARK: - Google Drive
+
+    private var googleDriveDeployment: [String: String] {
+        var env = boxDeployment.filter { !$0.key.hasPrefix("BOX_") }
+        env["ARTIFACT_DESTINATION"] = "google_drive"
+        env["GOOGLE_CLIENT_ID"] = "client.apps.googleusercontent.com"
+        env["GOOGLE_CLIENT_SECRET"] = "GOCSPX-secret"
+        env["GOOGLE_DRIVE_FOLDER_NAME"] = "pipe_music"
+        return env
+    }
+
+    /// Chosen by name, and started without any of Box's variables.
+    func testGoogleDriveByName() throws {
+        XCTAssertEqual(try validate(googleDriveDeployment), .googleDrive)
+    }
+
+    func testGoogleDriveNeedsItsOwnCredentialsAndFolderName() {
+        for key in ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_DRIVE_FOLDER_NAME"] {
+            var env = googleDriveDeployment
+            env[key] = nil
+            XCTAssertThrowsError(try validate(env), "\(key) is required for Google Drive") { error in
+                XCTAssertTrue("\(error)".contains(key), "\(error)")
+            }
+        }
+    }
+
+    /// Like Box, it is authorised from the connections page, so it starts without a token.
+    func testGoogleDriveStartsWithoutARefreshToken() throws {
+        XCTAssertNil(googleDriveDeployment["GOOGLE_REFRESH_TOKEN"])
+        XCTAssertEqual(try validate(googleDriveDeployment), .googleDrive)
+    }
+
+    func testTheStartupErrorListsGoogleDrive() {
+        var env = boxDeployment
+        env["ARTIFACT_DESTINATION"] = "gdrive"
+        XCTAssertThrowsError(try validate(env)) { error in
+            XCTAssertTrue("\(error)".contains("Accepted values: box, google_drive"), "\(error)")
         }
     }
 
@@ -125,6 +166,23 @@ final class DestinationChoiceTests: XCTestCase {
         do {
             try await configure(app)
             XCTAssertTrue(app.artifactDestination is BoxService)
+        } catch {
+            XCTFail("\(error)")
+        }
+        try await app.asyncShutdown()
+    }
+
+    func testConfigureBuildsGoogleDrive() async throws {
+        setenv("ARTIFACT_DESTINATION", "google_drive", 1)
+        defer { unsetenv("ARTIFACT_DESTINATION") }
+
+        let app = try await Application.make(.testing)
+        do {
+            try await configure(app)
+            XCTAssertTrue(app.artifactDestination is GoogleDriveService)
+            // Its id is the value that chose it, and the prefix of its settings.
+            XCTAssertEqual(app.artifactDestination.id, DestinationKind.googleDrive.rawValue)
+            XCTAssertEqual(app.authorizableDestination?.callbackPath, "/google-drive-callback")
         } catch {
             XCTFail("\(error)")
         }
