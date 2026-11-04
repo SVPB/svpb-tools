@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+#### Box sits behind a publishing-destination interface (#85)
+
+- The build no longer knows Box by name. It publishes binders to an `ArtifactDestination`, which
+  puts a file in a branch's place, replacing any earlier file of the same name, and says where
+  people can browse it. `BoxService` is the first destination, and nothing it does has changed:
+  the same binders go to the same year folders, and the Slack message reads the same.
+- A destination with no page to browse is still named in the Slack notification ("Published to
+  …"); Box always has one, so its message keeps its link.
+- The connections page's Box card is now written by `BoxService` itself, and reads as before.
+- The record of binders waiting to be delivered is renamed from `box_uploads` to
+  `binder_uploads` by a migration that keeps its rows. It records whether a binder was
+  delivered, not where to, so a binder still waiting when the destination changes goes to the
+  new one on the next build. The branch-removal summary's count is now `binder_uploads`.
+- Build-log lines about publishing are tagged `[publish]` instead of `[box]`.
+
+#### OAuth credential upkeep is something a destination opts into (#86)
+
+- Authorising from the Connections page, renewing on a schedule, and announcing the outcome in
+  Slack now work for any destination that declares itself authorisable, not just Box. One with
+  fixed keys, such as a storage bucket, gets none of it: no Authorise button, no callback
+  route, no redirect panel and no renewal timer. Box behaves as before.
+- The Authorise button now opens `/admin/connections/destination/authorize`. Box's callback
+  stays at `/box-callback`, the address registered in the Box Developer Console, so nothing
+  there needs changing.
+- The renewal interval is set by `DESTINATION_TOKEN_REFRESH_HOURS`. `BOX_TOKEN_REFRESH_HOURS`
+  is still read when it is unset, so an existing `.env` keeps its setting. Box's last recorded
+  renewal outcome is still kept under `box.keepalive.healthy`, and its token under
+  `box.refresh_token`, so the database needs no migration.
+- The authorisation result page and the redirect-URI panel name the destination rather than
+  saying Box. The panel is shown only for a destination that has a callback to register.
+- `box-auth` stays Box-only.
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

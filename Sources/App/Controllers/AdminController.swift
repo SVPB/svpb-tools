@@ -84,6 +84,8 @@ struct AdminController: RouteCollection {
             let currentUser: String
             /// Read-only: which music repository the branches below came from.
             let musicRepo: String?
+            /// Where a rebuild publishes, for the Rebuild button's wording (#87).
+            let destinationName: String
         }
 
         let isoFormatter = ISO8601DateFormatter()
@@ -103,7 +105,8 @@ struct AdminController: RouteCollection {
             builds: buildRows,
             branchNames: branches.map(\.name),
             currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "",
-            musicRepo: req.application.gitService.configuredRepoURL
+            musicRepo: req.application.gitService.configuredRepoURL,
+            destinationName: req.application.artifactDestination.displayName
         )
         return try await req.view.render("admin/index", ctx)
     }
@@ -153,7 +156,7 @@ struct AdminController: RouteCollection {
     /// `POST /admin/branches/:branch/sync`
     ///
     /// Triggers a catalogue sync for the named branch: git pull + ABC conversion +
-    /// Tune/Part upsert, without uploading to Box or posting to Slack.
+    /// Tune/Part upsert, without publishing binders or posting to Slack.
     /// Accepts branch names that do not yet exist in the database (first-time sync).
     @Sendable
     func syncBranch(_ req: Request) async throws -> Response {
@@ -175,8 +178,8 @@ struct AdminController: RouteCollection {
 
     /// `POST /admin/branches/:branch/rebuild`
     ///
-    /// Starts a full build of a known branch — the path a webhook push takes, Box
-    /// upload and Slack notification included — so an operator can recover from a
+    /// Starts a full build of a known branch — the path a webhook push takes,
+    /// publishing and Slack notification included — so an operator can recover from a
     /// failed build without SSH access to the server. `404` for a branch the server
     /// has never built; `409` while the branch is being built or removed.
     @Sendable
@@ -234,8 +237,8 @@ struct AdminController: RouteCollection {
     ///
     /// Removes the branch's catalogue, build history and binder definitions from the
     /// database, and its checkout and output directories from the music workspace.
-    /// Box is not touched. Everything removed is derived, so re-syncing the branch
-    /// rebuilds it. `409` while the branch is being built.
+    /// The publishing destination is not touched. Everything removed is derived, so
+    /// re-syncing the branch rebuilds it. `409` while the branch is being built.
     @Sendable
     func deleteBranch(_ req: Request) async throws -> BranchRemovalSummary {
         guard let branch = req.parameters.get("branch") else {

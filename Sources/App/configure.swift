@@ -11,30 +11,49 @@ struct ConfigurationError: Error, CustomStringConvertible {
     static func missingEnvironmentVariable(_ key: String) -> ConfigurationError {
         ConfigurationError(description: "Required environment variable '\(key)' is not set.")
     }
+
+    static func unrecognisedDestination(_ value: String) -> ConfigurationError {
+        ConfigurationError(description: """
+            \(DestinationKind.environmentKey) is '\(value)', which is not a destination TNG \
+            knows. Accepted values: \(DestinationKind.acceptedValues). Unset means \
+            \(DestinationKind.defaultKind.rawValue).
+            """)
+    }
 }
 
-/// All environment variables the server depends on.
+/// The environment variables every deployment depends on, whatever it publishes to.
+/// The destination's own are added by ``DestinationKind/requiredEnvironmentVariables``.
 ///
 /// Variables are validated at startup so that misconfiguration is caught
 /// immediately rather than surfacing as a runtime failure hours later.
 /// In the `.testing` environment the check is skipped so unit tests can
 /// run without a full `.env` file.
-///
-/// `BOX_REFRESH_TOKEN` is deliberately *not* here. It is the one credential the server
-/// can obtain for itself — from `/admin/connections`, which a deployment has to be able
-/// to boot far enough to reach. Refusing to start without one would mean a fresh
-/// deployment could never be authorised at all.
-private let requiredEnvironmentVariables: [String] = [
+private let commonEnvironmentVariables: [String] = [
     "GITHUB_WEBHOOK_SECRET",
     "SVPB_MUSIC_REPO_URL",
-    "BOX_CLIENT_ID",
-    "BOX_CLIENT_SECRET",
-    "BOX_FOLDER_ID",
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
     "SLACK_WEBHOOK_URL",
     "INITIAL_ADMIN_SLACK_USER_ID",
 ]
+
+/// Reads `ARTIFACT_DESTINATION` and checks that every variable this deployment needs is
+/// set — the common ones and the chosen destination's, and no other destination's (#87).
+///
+/// - Parameter checkRequired: `false` in `.testing`, where only the destination is read.
+/// - Throws: `ConfigurationError` for an unrecognised destination or a missing variable.
+func validateEnvironment(
+    _ get: (String) -> String?, checkRequired: Bool = true
+) throws -> DestinationKind {
+    let destination = try DestinationKind.load(from: get)
+    guard checkRequired else { return destination }
+    for key in commonEnvironmentVariables + destination.requiredEnvironmentVariables {
+        guard get(key) != nil else {
+            throw ConfigurationError.missingEnvironmentVariable(key)
+        }
+    }
+    return destination
+}
 
 /// Returns `true` when the process was invoked as `TNG box-auth …`
 private var isBoxAuthMode: Bool {
@@ -61,13 +80,10 @@ public func configure(_ app: Application) async throws {
     app.logger.notice("\(bootSummary(environment: app.environment, logLevel: app.logger.logLevel))")
 
     // ── Environment variable validation ────────────────────────────────────
-    if app.environment != .testing {
-        for key in requiredEnvironmentVariables {
-            guard Environment.get(key) != nil else {
-                throw ConfigurationError.missingEnvironmentVariable(key)
-            }
-        }
-    }
+    // The destination is read even in tests, so an unrecognised one fails there too.
+    let destination = try validateEnvironment(
+        Environment.get, checkRequired: app.environment != .testing)
+    app.logger.info("Publishing destination: \(destination.rawValue)")
 
     // ── Static file serving ────────────────────────────────────────────────
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
@@ -112,7 +128,7 @@ public func configure(_ app: Application) async throws {
     try await app.autoMigrate()
 
     // ── Services ───────────────────────────────────────────────────────────
-    initServices(app)
+    initServices(app, destination: destination)
 
     // ── Routes ─────────────────────────────────────────────────────────────
     try routes(app)
@@ -148,7 +164,7 @@ private func addMigrations(_ app: Application) {
     //   6. LoginToken    — no FK (Slack user ID stored as plain TEXT)
     //   7. BinderDefinition — FK → Branch
     //   8. Setting        — no FKs
-    //   9. BoxUpload      — FK → Branch
+    //   9. BoxUpload      — FK → Branch; renamed BinderUpload by RenameBoxUploads
     app.migrations.add(SessionRecord.migration)
     app.migrations.add(CreateBranch())
     app.migrations.add(CreateUser())
@@ -167,11 +183,13 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(AddExpiresAtToBinderRequest())
     // Stamps the sessions signed in before #93 with the deploy time; needs SessionRecord.
     app.migrations.add(StampExistingSessions())
+    // box_uploads → binder_uploads: nothing in the record is specific to Box (#85).
+    app.migrations.add(RenameBoxUploads())
 }
 
 // MARK: - Service initialisation
 
-private func initServices(_ app: Application) {
+private func initServices(_ app: Application, destination kind: DestinationKind) {
     // Shared HTTP client — shutdown is handled by HTTPClientLifecycleHandler.
     let httpClient = HTTPClient(eventLoopGroupProvider: .shared(app.eventLoopGroup))
     app.sharedHTTPClient = httpClient
@@ -185,18 +203,9 @@ private func initServices(_ app: Application) {
     )
     app.gitService = gitService
 
-    let boxService = BoxService(
-        clientID:     Environment.get("BOX_CLIENT_ID")     ?? "",
-        clientSecret: Environment.get("BOX_CLIENT_SECRET") ?? "",
-        rootFolderID: Environment.get("BOX_FOLDER_ID")     ?? "",
-        refreshToken: Environment.get("BOX_REFRESH_TOKEN") ?? "",
-        // The environment seeds the refresh token; the database holds the rotated one,
-        // so a restart does not reach for a token Box has already retired.
-        db:           app.db,
-        httpClient:   httpClient,
-        logger:       app.logger
-    )
-    app.boxService = boxService
+    // Where binders are published: the one destination `.env` chose, and only that one is
+    // built. Everything else knows it only as a destination.
+    app.artifactDestination = makeDestination(kind, app: app, httpClient: httpClient)
 
     let slackService = SlackService(
         botToken:   Environment.get("SLACK_BOT_TOKEN")   ?? "",
@@ -209,9 +218,12 @@ private func initServices(_ app: Application) {
     let binderService = BinderService(musicWorkspacePath: musicWorkspacePath)
     app.binderService = binderService
 
-    // Box's refresh token expires after 60 days of disuse, and a build is the only thing
-    // that would otherwise use it. Renew it on a timer so a quiet season cannot kill it.
-    app.lifecycle.use(BoxTokenKeepAlive())
+    // An OAuth destination's credential can expire from disuse — Box's after 60 days —
+    // and a build is the only thing that would otherwise use it. Renew it on a timer so
+    // a quiet season cannot kill it. A destination with fixed keys has nothing to renew.
+    if let destination = app.authorizableDestination {
+        app.lifecycle.use(DestinationKeepAlive(destination: destination))
+    }
 
     // The database is the one thing TNG cannot regenerate; copy it off the server nightly.
     app.lifecycle.use(DatabaseBackup())
@@ -224,11 +236,31 @@ private func initServices(_ app: Application) {
 
     app.buildService = BuildService(
         gitService:         gitService,
-        boxService:         boxService,
+        destination:        app.artifactDestination,
         slackService:       slackService,
         binderService:      binderService,
         musicWorkspacePath: musicWorkspacePath
     )
+}
+
+/// Builds the destination `ARTIFACT_DESTINATION` named (#87).
+private func makeDestination(
+    _ kind: DestinationKind, app: Application, httpClient: HTTPClient
+) -> any ArtifactDestination {
+    switch kind {
+    case .box:
+        BoxService(
+            clientID:     Environment.get("BOX_CLIENT_ID")     ?? "",
+            clientSecret: Environment.get("BOX_CLIENT_SECRET") ?? "",
+            rootFolderID: Environment.get("BOX_FOLDER_ID")     ?? "",
+            refreshToken: Environment.get("BOX_REFRESH_TOKEN") ?? "",
+            // The environment seeds the refresh token; the database holds the rotated one,
+            // so a restart does not reach for a token Box has already retired.
+            db:           app.db,
+            httpClient:   httpClient,
+            logger:       app.logger
+        )
+    }
 }
 
 // MARK: - Admin bootstrap

@@ -17,7 +17,8 @@ import Vapor
 ///      tunes whose `.abc` file has left the working tree.
 ///   6. Read `binders.yaml` and replace the branch's `BinderDefinition` records.
 ///   7. Assemble the official binders that file declares (via `BinderService`).
-///   8. Optionally upload those binders — and only those — to Box (via `BoxService`).
+///   8. Optionally publish those binders — and only those — to the `ArtifactDestination`
+///      in use (Box, via `BoxService`).
 ///   9. Optionally post a Slack notification (via `SlackService`).
 ///  10. Update the `Build` record (status, log, files).
 ///
@@ -43,7 +44,7 @@ import Vapor
 actor BuildService {
 
     private let gitService: GitService
-    private let boxService: BoxService
+    private let destination: any ArtifactDestination
     private let slackService: SlackService
     private let binderService: BinderService
     private let musicWorkspaceURL: URL
@@ -60,13 +61,13 @@ actor BuildService {
 
     init(
         gitService: GitService,
-        boxService: BoxService,
+        destination: any ArtifactDestination,
         slackService: SlackService,
         binderService: BinderService,
         musicWorkspacePath: String
     ) {
         self.gitService = gitService
-        self.boxService = boxService
+        self.destination = destination
         self.slackService = slackService
         self.binderService = binderService
         self.musicWorkspaceURL = URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
@@ -74,8 +75,8 @@ actor BuildService {
 
     // MARK: - Public API
 
-    /// Runs a full build for `branch`: converts ABC files, uploads PDFs to Box,
-    /// updates the catalogue, and posts a Slack notification.
+    /// Runs a full build for `branch`: converts ABC files, updates the catalogue,
+    /// publishes the official binders, and posts a Slack notification.
     ///
     /// Never throws — all errors are caught, logged, and persisted to the
     /// `Build` record so the HTTP handler can return 202 immediately.
@@ -85,12 +86,12 @@ actor BuildService {
         await _performBuild(
             branch: branch, commitSha: commitSha,
             db: db, logger: logger,
-            uploadToBox: true, notifySlack: true
+            publish: true, notifySlack: true
         )
     }
 
     /// Syncs the repository and updates the tune catalogue for `branch` without
-    /// uploading to Box or posting a Slack notification.
+    /// publishing binders or posting a Slack notification.
     ///
     /// Use this to populate (or refresh) `Branch`, `Tune`, and `Part` records
     /// during development or before a full build has been triggered by a push.
@@ -100,11 +101,11 @@ actor BuildService {
         await _performBuild(
             branch: branch, commitSha: nil,
             db: db, logger: logger,
-            uploadToBox: false, notifySlack: false
+            publish: false, notifySlack: false
         )
     }
 
-    /// Starts a full build of `branch` — the webhook's path, Box upload and Slack
+    /// Starts a full build of `branch` — the webhook's path, publishing and Slack
     /// notification included — and returns once it is claimed, without waiting for it.
     ///
     /// For the admin dashboard's rebuild button. Unlike a webhook, a person asking twice
@@ -127,7 +128,7 @@ actor BuildService {
             await self._performBuild(
                 branch: branch, commitSha: nil,
                 db: db, logger: logger,
-                uploadToBox: true, notifySlack: true
+                publish: true, notifySlack: true
             )
         }
     }
@@ -150,7 +151,7 @@ actor BuildService {
         commitSha: String?,
         db: Database,
         logger: Logger,
-        uploadToBox: Bool,
+        publish: Bool,
         notifySlack: Bool
     ) async {
         defer { endBuild(branch: branch) }
@@ -186,7 +187,7 @@ actor BuildService {
             return
         }
 
-        var log = uploadToBox ? "" : "[catalogue-sync] Box upload and Slack notification skipped.\n"
+        var log = publish ? "" : "[catalogue-sync] Publishing and Slack notification skipped.\n"
         /// The assembled official binders — what this build produced.
         var producedFiles: [String] = []
         /// Per-tune PDFs, counted for the log. They are intermediates, not products.
@@ -325,20 +326,20 @@ actor BuildService {
 
             // ── assemble the official binders ───────────────────────────────
             // These are the build's product: what `Build.files` lists, what Slack names,
-            // and the only thing that goes to Box.
+            // and the only thing that is published.
             let assembly = await assembleOfficialBinders(
                 branch: branch, binders: definitions.binders, db: db, log: &log, logger: logger)
             failedSteps += assembly.failures
             producedFiles = assembly.binders.map(\.filename)
 
-            // ── Box upload (skipped for catalogue sync) ─────────────────────
-            var boxFolderURL: String?
+            // ── publish (skipped for catalogue sync) ────────────────────────
+            var published: PublishedLocation?
             var caughtUp: [String] = []
-            if uploadToBox {
-                let upload = await uploadBinders(
+            if publish {
+                let upload = await publishBinders(
                     assembly.binders, branch: branch, db: db, log: &log, logger: logger)
                 failedSteps += upload.failures
-                boxFolderURL = upload.folderID.map(BoxService.folderURL(id:))
+                published = upload.location
                 caughtUp = upload.retried
             }
 
@@ -357,7 +358,8 @@ actor BuildService {
                         branch: branch,
                         status: failedSteps == 0 ? .success : .partial,
                         files: producedFiles,
-                        boxFolderURL: boxFolderURL,
+                        publishedTo: published.map { _ in destination.displayName },
+                        browseURL: published?.browseURL,
                         alsoUploaded: caughtUp)
                 } catch {
                     log += "[slack] Notification failed: \(error)\n"
@@ -447,8 +449,8 @@ actor BuildService {
     /// `parts`, `tunes`, `builds` and `branches` rows (in one transaction), then its
     /// git checkout and its SVG/PDF output directory.
     ///
-    /// Box is never touched. Removing rows without directories, or directories
-    /// without rows, succeeds; a branch with neither is `404`.
+    /// The publishing destination is never touched. Removing rows without directories,
+    /// or directories without rows, succeeds; a branch with neither is `404`.
     ///
     /// - Throws: `Abort(.badRequest)` for a name that could escape the workspace,
     ///   `Abort(.conflict)` while the branch is being built or already being removed.
@@ -480,8 +482,8 @@ actor BuildService {
             let binders = try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).count()
             try await BinderDefinition.query(on: tx).filter(\.$branch.$id == branch).delete()
 
-            let uploads = try await BoxUpload.query(on: tx).filter(\.$branch.$id == branch).count()
-            try await BoxUpload.query(on: tx).filter(\.$branch.$id == branch).delete()
+            let uploads = try await BinderUpload.query(on: tx).filter(\.$branch.$id == branch).count()
+            try await BinderUpload.query(on: tx).filter(\.$branch.$id == branch).delete()
 
             let branchRow = try await Branch.find(branch, on: tx)
             try await branchRow?.delete(on: tx)
@@ -505,7 +507,7 @@ actor BuildService {
 
         let summary = BranchRemovalSummary(
             branch: branch, tunes: rows.tunes, parts: rows.parts, builds: rows.builds,
-            binderDefinitions: rows.binders, boxUploads: rows.uploads,
+            binderDefinitions: rows.binders, binderUploads: rows.uploads,
             directories: removed, bytes: bytes)
         logger.notice("[BuildService] Removed branch '\(branch)': \(summary.tunes) tune(s), \(summary.parts) part(s), \(summary.builds) build(s), \(summary.binderDefinitions) binder definition(s); deleted \(removed.isEmpty ? "no directories" : removed.joined(separator: ", ")) (\(bytes) bytes)")
         return summary
@@ -749,7 +751,8 @@ actor BuildService {
 
     /// One assembled official binder.
     struct AssembledBinder: Sendable {
-        /// The `output:` filename the binder declared, which is also its name in Box.
+        /// The `output:` filename the binder declared, which is also the name it is
+        /// published under.
         let filename: String
         /// Where it was written on disk.
         let url: URL
@@ -791,10 +794,10 @@ actor BuildService {
                     failures += 1
                 }
                 do {
-                    // The record of this file's journey to Box, written before any
-                    // attempt on it: a build that dies mid-upload still leaves the next
-                    // one something to reconcile from.
-                    _ = try await BoxUpload.record(
+                    // The record of this file's journey to the destination, written
+                    // before any attempt on it: a build that dies mid-upload still leaves
+                    // the next one something to reconcile from.
+                    _ = try await BinderUpload.record(
                         branch: branch, filename: binder.output, url: result.url, on: db)
                 } catch {
                     log += "[binder]   ⚠ Could not record \(binder.output) for upload: \(error)\n"
@@ -811,42 +814,43 @@ actor BuildService {
         return (assembled, failures)
     }
 
-    // MARK: - Box upload
+    // MARK: - Publishing
 
-    /// Uploads the assembled binders to the branch's year folder in Box.
+    /// Publishes the assembled binders to the destination's place for the branch.
     ///
-    /// Only these go to Box (C5): the per-tune PDFs are intermediates the binders are
+    /// Only these are published (C5): the per-tune PDFs are intermediates the binders are
     /// made from, and a personalised binder is downloaded from TNG itself. One binder
     /// failing does not stop the next — a band with two binders should get the one that
-    /// is fine — and every failure is a failed step, so a build that reached Box with
-    /// none of its binders cannot come out green.
+    /// is fine — and every failure is a failed step, so a build that reached the
+    /// destination with none of its binders cannot come out green.
     ///
     /// Before returning, it catches up on any binder an earlier build assembled but
     /// could not send (O6) — see `retryOutstandingUploads`.
     ///
-    /// - Returns: The ID of the year folder the binders went to, the binders held over
-    ///   from earlier builds that went up with them, and the number of failed uploads.
-    private func uploadBinders(
+    /// - Returns: Where the binders went, when any did; the binders held over from
+    ///   earlier builds that went with them; and the number of failed uploads.
+    private func publishBinders(
         _ binders: [AssembledBinder],
         branch: String,
         db: Database,
         log: inout String,
         logger: Logger
-    ) async -> (folderID: String?, retried: [String], failures: Int) {
-        var folderID: String?
+    ) async -> (location: PublishedLocation?, retried: [String], failures: Int) {
+        var location: PublishedLocation?
         var failures = 0
+        let name = destination.displayName
 
         if binders.isEmpty {
-            log += "[box] No binders to upload\n"
+            log += "[publish] No binders to upload\n"
         }
         for binder in binders {
             do {
-                folderID = try await boxService.upload(pdf: binder.url, forBranch: branch)
-                log += "[box] Uploaded \(binder.filename)\n"
+                location = try await destination.publish(binder.url, forBranch: branch)
+                log += "[publish] Uploaded \(binder.filename) to \(name)\n"
                 await markUploaded(branch: branch, filename: binder.filename, db: db, logger: logger)
             } catch {
-                log += "[box] ✗ Upload failed for \(binder.filename): \(error)\n"
-                logger.warning("[BuildService] Box upload failed for \(binder.filename): \(error)")
+                log += "[publish] ✗ Upload failed for \(binder.filename): \(error)\n"
+                logger.warning("[BuildService] Upload of \(binder.filename) to \(name) failed: \(error)")
                 await markFailed(branch: branch, filename: binder.filename,
                                  error: error, db: db, logger: logger)
                 failures += 1
@@ -856,9 +860,9 @@ actor BuildService {
         let caughtUp = await retryOutstandingUploads(
             branch: branch, excluding: Set(binders.map(\.filename)),
             db: db, log: &log, logger: logger)
-        folderID = folderID ?? caughtUp.folderID
+        location = location ?? caughtUp.location
         failures += caughtUp.failures
-        return (folderID, caughtUp.uploaded, failures)
+        return (location, caughtUp.uploaded, failures)
     }
 
     /// Uploads the binders of `branch` that an earlier build assembled but could not
@@ -867,72 +871,77 @@ actor BuildService {
     /// This is O6's "retry on the next build", and it runs here rather than before
     /// conversion for a reason: a binder this build is about to reassemble does not want
     /// last week's bytes pushed ahead of it, and a build that fails before assembly has
-    /// no working Box session to retry through anyway.
+    /// no working session with the destination to retry through anyway.
+    ///
+    /// The rows say nothing about which destination they were meant for, and need not:
+    /// one still outstanding after the band switches destination is current output that
+    /// was never delivered, so it goes to the destination in use now (#85).
     ///
     /// A pending file that is gone, or whose bytes are no longer the ones the row
     /// describes, is dropped rather than uploaded: something later rebuilt it, and
-    /// uploading what is on disk now under a row that means something else would put
-    /// the wrong version in Box.
+    /// uploading what is on disk now under a row that means something else would publish
+    /// the wrong version.
     private func retryOutstandingUploads(
         branch: String,
         excluding handled: Set<String>,
         db: Database,
         log: inout String,
         logger: Logger
-    ) async -> (folderID: String?, uploaded: [String], failures: Int) {
-        let outstanding: [BoxUpload]
+    ) async -> (location: PublishedLocation?, uploaded: [String], failures: Int) {
+        let outstanding: [BinderUpload]
         do {
-            outstanding = try await BoxUpload.outstanding(for: branch, on: db)
+            outstanding = try await BinderUpload.outstanding(for: branch, on: db)
                 .filter { !handled.contains($0.filename) }
         } catch {
-            log += "[box] Could not check for outstanding uploads: \(error)\n"
+            log += "[publish] Could not check for outstanding uploads: \(error)\n"
             logger.warning("[BuildService] Reading outstanding uploads for '\(branch)' failed: \(error)")
             return (nil, [], 1)
         }
         guard !outstanding.isEmpty else { return (nil, [], 0) }
 
-        log += "[box] \(outstanding.count) binder(s) held over from an earlier build\n"
-        var folderID: String?
+        log += "[publish] \(outstanding.count) binder(s) held over from an earlier build\n"
+        var location: PublishedLocation?
         var uploaded: [String] = []
         var failures = 0
 
         for row in outstanding {
             let url = URL(fileURLWithPath: row.localPath)
             guard FileManager.default.fileExists(atPath: row.localPath),
-                  let hash = try? BoxUpload.hash(of: url), hash == row.contentHash else {
-                log += "[box]   \(row.filename) is no longer on disk as assembled; dropping it\n"
+                  let hash = try? BinderUpload.hash(of: url), hash == row.contentHash else {
+                log += "[publish]   \(row.filename) is no longer on disk as assembled; dropping it\n"
                 logger.info("[BuildService] Dropping stale outstanding upload \(row.filename) for '\(branch)'")
                 try? await row.delete(on: db)
                 continue
             }
 
             do {
-                folderID = try await boxService.upload(pdf: url, forBranch: branch)
-                log += "[box]   Uploaded \(row.filename), held over from an earlier build\n"
+                location = try await destination.publish(url, forBranch: branch)
+                log += "[publish]   Uploaded \(row.filename) to \(destination.displayName), held over from an earlier build\n"
                 row.uploadedAt = Date()
                 row.lastError = nil
                 row.attempts += 1
                 try await row.save(on: db)
                 uploaded.append(row.filename)
             } catch {
-                log += "[box]   ✗ \(row.filename) failed again: \(error)\n"
+                log += "[publish]   ✗ \(row.filename) failed again: \(error)\n"
                 logger.warning("[BuildService] Retrying \(row.filename) for '\(branch)' failed: \(error)")
                 await markFailed(branch: branch, filename: row.filename,
                                  error: error, db: db, logger: logger)
                 failures += 1
             }
         }
-        return (folderID, uploaded, failures)
+        return (location, uploaded, failures)
     }
 
-    /// Stamps a binder as having reached Box.
+    /// Stamps a binder as having reached the destination.
     ///
-    /// Bookkeeping failures are logged but do not fail the build: the binder *is* in
-    /// Box. The cost is that the next build may upload it a second time, which Box
-    /// records as a new version of the same file and nobody has to clean up.
+    /// Bookkeeping failures are logged but do not fail the build: the binder *was*
+    /// published. The cost is that the next build may upload it a second time, which a
+    /// destination replaces in place — Box records it as a new version of the same file —
+    /// and nobody has to clean up.
     private func markUploaded(branch: String, filename: String, db: Database, logger: Logger) async {
         do {
-            guard let row = try await BoxUpload.query(on: db)
+            guard let row = try await BinderUpload.query(on: db)
                 .filter(\.$branch.$id == branch)
                 .filter(\.$filename == filename)
                 .first() else { return }
@@ -945,12 +954,12 @@ actor BuildService {
         }
     }
 
-    /// Records why a binder did not reach Box, so the next build has something to
-    /// retry and the operator has something to read.
+    /// Records why a binder did not reach the destination, so the next build has
+    /// something to retry and the operator has something to read.
     private func markFailed(branch: String, filename: String, error: any Error,
                             db: Database, logger: Logger) async {
         do {
-            guard let row = try await BoxUpload.query(on: db)
+            guard let row = try await BinderUpload.query(on: db)
                 .filter(\.$branch.$id == branch)
                 .filter(\.$filename == filename)
                 .first() else { return }

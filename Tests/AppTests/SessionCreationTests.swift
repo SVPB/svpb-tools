@@ -99,7 +99,7 @@ final class SessionCreationTests: XCTestCase {
         let cookies = try await signInAsAdmin()
 
         var state: String?
-        try await app.test(.GET, "/admin/connections/box/authorize", beforeRequest: { req async in
+        try await app.test(.GET, "/admin/connections/destination/authorize", beforeRequest: { req async in
             req.headers.cookie = cookies
         }, afterResponse: { res async in
             XCTAssertEqual(res.status, .seeOther)

@@ -38,7 +38,7 @@ final class CatalogueReconciliationTests: XCTestCase {
 
         service = BuildService(
             gitService: GitService(repoURL: origin.path, workspaceBase: workspace),
-            boxService: app.boxService,
+            destination: app.artifactDestination,
             slackService: app.slackService,
             binderService: app.binderService,
             musicWorkspacePath: workspace.path)

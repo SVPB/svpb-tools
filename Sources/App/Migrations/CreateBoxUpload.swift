@@ -1,9 +1,15 @@
 import Fluent
 
+/// Creates the upload record under its original name, `box_uploads`.
+///
+/// History, so the table name is spelled out rather than taken from the model:
+/// `RenameBoxUploads` renames it to `BinderUpload.schema` afterwards (#85).
 struct CreateBoxUpload: AsyncMigration {
 
+    static let schema = "box_uploads"
+
     func prepare(on database: any Database) async throws {
-        try await database.schema(BoxUpload.schema)
+        try await database.schema(Self.schema)
             .id()
             .field("branch_name", .string, .required, .references(Branch.schema, "name"))
             .field("filename", .string, .required)
@@ -19,6 +25,6 @@ struct CreateBoxUpload: AsyncMigration {
     }
 
     func revert(on database: any Database) async throws {
-        try await database.schema(BoxUpload.schema).delete()
+        try await database.schema(Self.schema).delete()
     }
 }

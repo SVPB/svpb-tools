@@ -36,13 +36,21 @@ extension Application {
         set { storage[GitServiceKey.self] = newValue }
     }
 
-    // MARK: BoxService
+    // MARK: ArtifactDestination
 
-    private struct BoxServiceKey: StorageKey { typealias Value = BoxService }
+    private struct ArtifactDestinationKey: StorageKey { typealias Value = any ArtifactDestination }
 
-    var boxService: BoxService {
-        get { storage[BoxServiceKey.self]! }
-        set { storage[BoxServiceKey.self] = newValue }
+    /// Where the build publishes official binders (#85): the one `ARTIFACT_DESTINATION`
+    /// names (#87).
+    var artifactDestination: any ArtifactDestination {
+        get { storage[ArtifactDestinationKey.self]! }
+        set { storage[ArtifactDestinationKey.self] = newValue }
+    }
+
+    /// The destination, when its credential is an OAuth grant TNG obtains and renews
+    /// itself (#86); `nil` for one with fixed keys.
+    var authorizableDestination: (any AuthorizableDestination)? {
+        artifactDestination as? any AuthorizableDestination
     }
 
     // MARK: BinderService

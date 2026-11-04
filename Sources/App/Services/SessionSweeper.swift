@@ -35,7 +35,7 @@ struct SessionSweeper: LifecycleHandler {
         // Tests boot the whole application; none of them want a timer deleting sessions.
         guard app.environment != .testing else { return }
 
-        app.logger.notice("[SessionSweeper] Sweeping ended sessions every \(BoxTokenKeepAlive.describe(Self.sweepInterval))")
+        app.logger.notice("[SessionSweeper] Sweeping ended sessions every \(RecurringSchedule.describe(Self.sweepInterval))")
 
         app.storage[TaskKey.self] = Task {
             do {

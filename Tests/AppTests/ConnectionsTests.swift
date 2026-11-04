@@ -80,7 +80,7 @@ final class ConnectionsTests: XCTestCase {
         let request = Request(application: app, on: app.eventLoopGroup.next())
         request.headers.replaceOrAdd(name: .host, value: "tng:8080")
 
-        XCTAssertEqual(ConnectionsController.redirectURI(for: request),
+        XCTAssertEqual(ConnectionsController.redirectURI(for: request, callbackPath: "/box-callback"),
                        "https://tng.siliconvalleypipeband.org/box-callback")
     }
 
@@ -91,7 +91,7 @@ final class ConnectionsTests: XCTestCase {
         let request = Request(application: app, on: app.eventLoopGroup.next())
         request.headers.replaceOrAdd(name: .host, value: "localhost:8080")
 
-        XCTAssertEqual(ConnectionsController.redirectURI(for: request),
+        XCTAssertEqual(ConnectionsController.redirectURI(for: request, callbackPath: "/box-callback"),
                        "http://localhost:8080/box-callback")
     }
 
@@ -134,7 +134,7 @@ final class ConnectionsTests: XCTestCase {
     }
 
     func testAuthorizeIsAdminOnly() async throws {
-        try await app.test(.GET, "/admin/connections/box/authorize") { response async in
+        try await app.test(.GET, "/admin/connections/destination/authorize") { response async in
             XCTAssertEqual(response.status, .seeOther)
             XCTAssertEqual(response.headers.first(name: .location), "/admin/login")
         }
@@ -177,7 +177,8 @@ final class ConnectionsTests: XCTestCase {
             let isAdmin: Bool
             let currentUser: String
             let connections: [ConnectionStatus]
-            let redirectURI: String
+            let redirectURI: String?
+            let destinationName: String
         }
         let connections = [
             ConnectionStatus(
@@ -189,7 +190,7 @@ final class ConnectionsTests: XCTestCase {
                 id: "box", name: "Box", purpose: "Where binders are published.",
                 state: .failing, detail: nil, credential: "No refresh token",
                 error: "Box rejected the refresh token", 
-                authorizePath: "/admin/connections/box/authorize", remedy: nil),
+                authorizePath: ConnectionsController.authorizePath, remedy: nil),
             ConnectionStatus(
                 id: "slack", name: "Slack", purpose: "Login links and notifications.",
                 state: .unconfigured, detail: nil, credential: nil,
@@ -199,7 +200,8 @@ final class ConnectionsTests: XCTestCase {
 
         let view = try await app.view.render("admin/connections", Context(
             appVersion: AppVersion.current, isAdmin: true, currentUser: "tester",
-            connections: connections, redirectURI: "https://tng.example.org/box-callback"))
+            connections: connections, redirectURI: "https://tng.example.org/box-callback",
+            destinationName: "Box"))
         let html = String(buffer: view.data)
 
         XCTAssertTrue(html.contains("state-working"), html)
@@ -210,6 +212,7 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertTrue(html.contains("Box rejected the refresh token"))
         XCTAssertTrue(html.contains("https://tng.example.org/box-callback"),
                       "The URI to register with Box is on the page to be copied")
+        XCTAssertTrue(html.contains("Box redirect URI."), "The panel names the destination")
         XCTAssertTrue(html.contains("How to fix this"))
         XCTAssertFalse(html.contains("#if("), "Unrendered Leaf tags left in the output")
     }
@@ -222,21 +225,63 @@ final class ConnectionsTests: XCTestCase {
             let isAdmin: Bool
             let currentUser: String
             let connections: [ConnectionStatus]
-            let redirectURI: String
+            let redirectURI: String?
+            let destinationName: String
         }
         let box = ConnectionStatus(
             id: "box", name: "Box", purpose: "Where binders are published.",
             state: .working, detail: "Uploading into pipe_music",
             credential: "Refresh token last renewed 2 days ago", error: nil,
-            authorizePath: "/admin/connections/box/authorize", remedy: nil)
+            authorizePath: ConnectionsController.authorizePath, remedy: nil)
 
         let view = try await app.view.render("admin/connections", Context(
             appVersion: AppVersion.current, isAdmin: true, currentUser: "tester",
-            connections: [box], redirectURI: "https://tng.example.org/box-callback"))
+            connections: [box], redirectURI: "https://tng.example.org/box-callback",
+            destinationName: "Box"))
         let html = String(buffer: view.data)
 
         XCTAssertTrue(html.contains("Re-authorise Box"), html)
         XCTAssertTrue(html.contains("Uploading into pipe_music"))
+    }
+
+    /// A destination with fixed keys has no callback to register, so the page has no
+    /// redirect panel for it (#86).
+    func testNoRedirectPanelForADestinationThatCannotBeAuthorised() async throws {
+        struct Context: Encodable {
+            let appVersion: String
+            let isAdmin: Bool
+            let currentUser: String
+            let connections: [ConnectionStatus]
+            let redirectURI: String?
+            let destinationName: String
+        }
+        let view = try await app.view.render("admin/connections", Context(
+            appVersion: AppVersion.current, isAdmin: true, currentUser: "tester",
+            connections: [], redirectURI: nil, destinationName: "Bucket"))
+        let html = String(buffer: view.data)
+
+        XCTAssertFalse(html.contains("redirect URI"), html)
+    }
+
+    // MARK: - Routes
+
+    /// Box's callback address is registered in the production Box app's console, so the
+    /// server has to keep answering at it; the authorise route is the generic one (#86).
+    func testBoxAuthorisesThroughTheGenericRouteAndItsOwnCallback() {
+        let paths = Set(app.routes.all.map { "/" + $0.path.map(\.description).joined(separator: "/") })
+        XCTAssertTrue(paths.contains("/box-callback"), "\(paths)")
+        XCTAssertTrue(paths.contains(ConnectionsController.authorizePath), "\(paths)")
+        XCTAssertFalse(paths.contains("/admin/connections/box/authorize"))
+    }
+
+    /// A destination that cannot be authorised gets the page and nothing else.
+    func testNoAuthorisationRoutesWithoutAnAuthorisableDestination() async throws {
+        let bare = try await Application.make(.testing)
+        try bare.register(collection: ConnectionsController(destination: nil))
+
+        let paths = bare.routes.all.map { "/" + $0.path.map(\.description).joined(separator: "/") }
+        XCTAssertEqual(paths, ["/admin/connections"])
+        try await bare.asyncShutdown()
     }
 
     // MARK: - Credential age
