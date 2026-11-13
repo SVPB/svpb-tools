@@ -173,6 +173,7 @@ each value before starting the stack.
 | `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
 | `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository. The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped |
+| `ARTIFACT_DESTINATION` | Optional. Where official binders are published: `box`, the default. Only that destination's variables are required — see [Publishing destination](#publishing-destination) |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
 | `BOX_CLIENT_SECRET` | Box OAuth2 application client secret |
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |
@@ -556,6 +557,25 @@ identity. All three are configured in the same app.
 
 ---
 
+### Publishing destination
+
+TNG publishes each branch's official binders to one destination, named by
+`ARTIFACT_DESTINATION` in `.env`. Today the only one is `box`, which is also what an unset
+value means. The server checks at startup that the chosen destination's variables are set
+and asks for no other destination's; an unrecognised value stops it, naming the accepted
+values. The admin **Connections** page shows the chosen destination's card.
+
+| Value | Set up with |
+|---|---|
+| `box` | [Box OAuth2](#box-oauth2) |
+
+**Switching destinations moves nothing.** Change `ARTIFACT_DESTINATION`, fill in the new
+destination's group in `.env`, and run `docker compose up -d tng`. Binders already published
+stay where they are: TNG neither copies nor deletes anything at the old destination. The new
+destination receives each branch's binders from its next build onward, along with any that were
+still waiting to be delivered at the switch. To put a branch's current binders there straight
+away, use **Rebuild** on the admin dashboard. Moving the back catalogue is up to the band.
+
 ### Box OAuth2
 
 TNG uploads PDFs to Box using OAuth2, the same authentication method used by the Gen.1 toolchain.
@@ -626,7 +646,8 @@ its database, and the server starts without one precisely so that it can be auth
 > and writes each new one to its database — so as long as the server is running, its Box access
 > cannot lapse. This matters because the band goes months between edits to the music: renewing
 > only when a build uploads would mean a quiet winter ended with a dead token. Set
-> `BOX_TOKEN_REFRESH_HOURS` to change the interval.
+> `DESTINATION_TOKEN_REFRESH_HOURS` to change the interval (`BOX_TOKEN_REFRESH_HOURS`, its
+> earlier name, is still accepted).
 >
 > The daily renewal doubles as a check that Box still works. If one fails, TNG posts to the
 > Slack channel — once when it starts failing and once when it recovers, not every day — and the

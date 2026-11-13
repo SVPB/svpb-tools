@@ -452,7 +452,7 @@ untitled section.
 ### Phase 3 — Hardening and Handoff (2–3 days)
 
 - Retry logic for Box uploads. *(Done: a binder that could not be sent is retained locally and
-  goes up on the next build, tracked per binder in `box_uploads`.)* Slack notifications are
+  goes up on the next build, tracked per binder in `binder_uploads`.)* Slack notifications are
   deliberately **not** replayed — a "build succeeded" arriving hours late reads worse than
   silence — so the build that catches up names what it caught up on instead.
 - Admin dashboard: manual rebuild trigger, binder PDF cache cleanup.

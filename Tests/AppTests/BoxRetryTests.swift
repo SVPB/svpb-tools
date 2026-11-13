@@ -4,11 +4,12 @@ import XCTVapor
 import XCTest
 @testable import App
 
-/// O6: a binder that could not reach Box is retained locally and sent on the next build.
+/// O6: a binder that could not reach the destination is retained locally and sent on the
+/// next build.
 ///
-/// The builds here run with no usable Box credentials, which is exactly the shape of the
-/// failure being tested — every upload fails before a request is made, so the tests are
-/// offline and the retry path is driven by the same code that a Box outage would drive.
+/// The builds publish to a `StubDestination`, which starts out refusing everything — the
+/// shape of a Box outage — and can be told to let some or all binders through, so the
+/// tests are offline and can watch a held-over binder go up as well as fail again (#85).
 /// What is asserted is the record: which binders are outstanding, and what the next build
 /// does about them.
 final class BoxRetryTests: XCTestCase {
@@ -17,6 +18,7 @@ final class BoxRetryTests: XCTestCase {
     var workspace: URL!
     var origin: URL!
     var service: BuildService!
+    var destination: StubDestination!
 
     private let branch = "2026"
 
@@ -33,9 +35,10 @@ final class BoxRetryTests: XCTestCase {
         }
         try git(["init", "--initial-branch", branch], in: origin)
 
+        destination = StubDestination(failsEverything: true)
         service = BuildService(
             gitService: GitService(repoURL: origin.path, workspaceBase: workspace),
-            boxService: app.boxService,
+            destination: destination,
             slackService: app.slackService,
             binderService: app.binderService,
             musicWorkspacePath: workspace.path)
@@ -77,7 +80,7 @@ final class BoxRetryTests: XCTestCase {
         await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
 
         // The next build declares a different binder, so the first one is not reassembled
-        // and can only reach Box through the retry pass.
+        // and can only be published through the retry pass.
         try commit(["binders.yaml": binders(output: "2026_spec.pdf")], message: "rename")
         await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
 
@@ -112,7 +115,7 @@ final class BoxRetryTests: XCTestCase {
     }
 
     /// The same, for a file that is still there but is no longer the one the row
-    /// describes: uploading those bytes under this row would put the wrong version in Box.
+    /// describes: uploading those bytes under this row would publish the wrong version.
     func testAnOutstandingBinderWhoseBytesChangedIsDropped() async throws {
         try commit(["march.abc": Self.abc, "binders.yaml": binders(output: "2026_binder.pdf")])
         await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
@@ -144,11 +147,81 @@ final class BoxRetryTests: XCTestCase {
 
         await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
 
-        let rows = try await BoxUpload.query(on: app.db).all()
+        let rows = try await BinderUpload.query(on: app.db).all()
         XCTAssertEqual(rows.count, 1, "One row per binder per branch, carried across builds")
         let row = try XCTUnwrap(rows.first)
         XCTAssertNil(row.uploadedAt)
         XCTAssertEqual(row.attempts, 1, "Reset by the rebuild, then bumped by this build's attempt")
+    }
+
+    // MARK: - Recovery
+
+    /// When the destination is back, the held-over binder goes up with the next build,
+    /// is stamped as delivered, and is named in the build's log as a catch-up.
+    func testAHeldOverBinderIsPublishedOnceTheDestinationIsBack() async throws {
+        try commit(["march.abc": Self.abc, "binders.yaml": binders(output: "2026_binder.pdf")])
+        await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
+
+        await destination.fail([])
+        try commit(["binders.yaml": binders(output: "2026_spec.pdf")], message: "rename")
+        await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
+
+        let log = try await latestBuild().log ?? ""
+        XCTAssertTrue(log.contains("[publish] Uploaded 2026_spec.pdf to Stub"), log)
+        XCTAssertTrue(log.contains("Uploaded 2026_binder.pdf to Stub, held over from an earlier build"), log)
+        let published = await destination.published
+        XCTAssertEqual(published, ["2026_spec.pdf", "2026_binder.pdf"],
+                       "This build's binder first, then the one held over")
+
+        let pending = try await outstanding()
+        XCTAssertEqual(pending.map(\.filename), [], "Nothing is left outstanding")
+        let rows = try await BinderUpload.query(on: app.db).sort(\.$filename).all()
+        let heldOver = try XCTUnwrap(rows.first { $0.filename == "2026_binder.pdf" })
+        XCTAssertNotNil(heldOver.uploadedAt)
+        XCTAssertNil(heldOver.lastError, "A delivered binder carries no stale error")
+        XCTAssertEqual(heldOver.attempts, 2, "Failed once, then delivered")
+    }
+
+    /// One binder failing does not hold back the next, and the record says which one
+    /// is outstanding. The next build sends that one and leaves the delivered one alone:
+    /// nothing already published is sent again.
+    func testOnlyTheBinderThatFailedIsRetried() async throws {
+        await destination.fail(["2026_spec.pdf"])
+        try commit(["march.abc": Self.abc,
+                    "binders.yaml": binders(output: "2026_binder.pdf", "2026_spec.pdf")])
+        await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
+
+        var log = try await latestBuild().log ?? ""
+        XCTAssertTrue(log.contains("[publish] Uploaded 2026_binder.pdf to Stub"), log)
+        XCTAssertTrue(log.contains("[publish] ✗ Upload failed for 2026_spec.pdf"), log)
+        let pendingAfterFirst = try await outstanding()
+        XCTAssertEqual(pendingAfterFirst.map(\.filename), ["2026_spec.pdf"])
+
+        await destination.fail([])
+        await destination.resetPublished()
+        try commit(["binders.yaml": binders(output: "2026_parade.pdf")], message: "rename")
+        await service.runBuild(branch: branch, commitSha: nil, db: app.db, logger: app.logger)
+
+        log = try await latestBuild().log ?? ""
+        XCTAssertTrue(log.contains("1 binder(s) held over from an earlier build"), log)
+        let published = await destination.published
+        XCTAssertEqual(published, ["2026_parade.pdf", "2026_spec.pdf"],
+                       "The delivered 2026_binder.pdf is not sent a second time")
+        let pending = try await outstanding()
+        XCTAssertEqual(pending.map(\.filename), [])
+    }
+
+    /// A catalogue sync publishes nothing, even with a destination that would accept it.
+    func testACatalogueSyncPublishesNothing() async throws {
+        await destination.fail([])
+        try commit(["march.abc": Self.abc, "binders.yaml": binders(output: "2026_binder.pdf")])
+
+        await service.syncCatalogue(branch: branch, db: app.db, logger: app.logger)
+
+        let log = try await latestBuild().log ?? ""
+        XCTAssertTrue(log.contains("Publishing and Slack notification skipped"), log)
+        let published = await destination.published
+        XCTAssertEqual(published, [])
     }
 
     // MARK: - Fixtures
@@ -164,22 +237,22 @@ final class BoxRetryTests: XCTestCase {
     ABcd efga | gfed cBAG |]
     """.utf8)
 
-    private func binders(output: String) -> Data {
-        Data("""
-        binders:
-          - name: "Band Binder"
-            output: \(output)
-            sections:
-              - title: "Grade 4 Tunes"
-                entries:
-                  - tune: march
-        """.utf8)
+    private func binders(output: String...) -> Data {
+        Data(("binders:\n" + output.map { name in """
+              - name: "Band Binder \(name)"
+                output: \(name)
+                sections:
+                  - title: "Grade 4 Tunes"
+                    entries:
+                      - tune: march
+
+            """ }.joined()).utf8)
     }
 
     // MARK: - Helpers
 
-    private func outstanding() async throws -> [BoxUpload] {
-        try await BoxUpload.outstanding(for: branch, on: app.db)
+    private func outstanding() async throws -> [BinderUpload] {
+        try await BinderUpload.outstanding(for: branch, on: app.db)
     }
 
     private func latestBuild() async throws -> Build {

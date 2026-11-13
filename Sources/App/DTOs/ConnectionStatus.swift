@@ -24,7 +24,7 @@ struct ConnectionStatus: Content, Equatable {
         case unconfigured
     }
 
-    /// Stable identifier, used in routes and as the DOM id: `box`, `slack`, `github`.
+    /// Stable identifier, used as the DOM id: `box`, `slack`, `github`.
     let id: String
 
     /// Display name.
@@ -60,8 +60,4 @@ struct ConnectionStatus: Content, Equatable {
     // No `isWorking` convenience here on purpose: the templates that draw this are the
     // main reader, and Leaf sees only the encoded stored properties — a computed helper
     // would silently be `false` in every `#if` that used it. Templates compare `state`.
-
-    /// Box refresh tokens expire after this long without use. Nothing else TNG talks to
-    /// has an expiring credential today.
-    static let boxTokenLifetime: TimeInterval = 60 * 24 * 60 * 60
 }

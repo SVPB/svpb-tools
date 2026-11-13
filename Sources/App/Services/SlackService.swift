@@ -53,12 +53,14 @@ actor SlackService {
     ///
     /// - Parameters:
     ///   - files: The binders this build rebuilt, by filename.
-    ///   - boxFolderURL: The year folder the binders went to, when they reached Box.
+    ///   - publishedTo: The destination's `displayName`, when binders reached it.
+    ///   - browseURL: Where people can see the branch's binders there, if it has such a page.
     func postBuildNotification(
         branch: String,
         status: BuildStatus,
         files: [String],
-        boxFolderURL: String? = nil,
+        publishedTo: String? = nil,
+        browseURL: URL? = nil,
         alsoUploaded: [String] = []
     ) async throws {
         struct WebhookBody: Encodable {
@@ -68,7 +70,8 @@ actor SlackService {
             to: webhookURL,
             body: WebhookBody(text: Self.buildNotificationText(
                 branch: branch, status: status, files: files,
-                boxFolderURL: boxFolderURL, alsoUploaded: alsoUploaded)),
+                publishedTo: publishedTo, browseURL: browseURL,
+                alsoUploaded: alsoUploaded)),
             authorizationHeader: nil
         )
         logger.info("[Slack] Notification posted for branch '\(branch)' (\(status.rawValue))")
@@ -80,13 +83,15 @@ actor SlackService {
     /// members without dashboard habits find out whether the new PDFs are real.
     ///
     /// What it names is the binders — the build's product — not the per-tune PDFs it
-    /// made them from, and it links the Box folder they went to, because "the new
-    /// binder is up" is only useful with somewhere to go and read it.
+    /// made them from, and it links the folder they were published to, because "the new
+    /// binder is up" is only useful with somewhere to go and read it. A destination with
+    /// no such page still gets named, so the channel knows where the binders went (#85).
     static func buildNotificationText(
         branch: String,
         status: BuildStatus,
         files: [String],
-        boxFolderURL: String? = nil,
+        publishedTo destination: String? = nil,
+        browseURL: URL? = nil,
         alsoUploaded: [String] = []
     ) -> String {
         let emoji: String
@@ -113,8 +118,12 @@ actor SlackService {
             text += "\nAlso uploaded, held over from an earlier build:\n"
             text += alsoUploaded.map { "• \($0)" }.joined(separator: "\n")
         }
-        if let boxFolderURL {
-            text += "\n<\(boxFolderURL)|Open the \(branch) folder in Box>"
+        if let destination {
+            if let browseURL {
+                text += "\n<\(browseURL.absoluteString)|Open the \(branch) folder in \(destination)>"
+            } else {
+                text += "\nPublished to \(destination)."
+            }
         }
         return text
     }

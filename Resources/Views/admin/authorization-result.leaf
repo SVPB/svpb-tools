@@ -25,7 +25,7 @@
     <p><a href="/admin/connections" target="_blank" rel="noopener">Back to Connections</a></p>
     #else:
     <h1>Authorised ✓</h1>
-    <p>TNG has a fresh Box refresh token. This window closes itself.</p>
+    <p>TNG has a fresh #(destinationName) token. This window closes itself.</p>
     <p><a href="/admin/connections">Back to Connections</a></p>
     #endif
   </div>

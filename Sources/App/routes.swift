@@ -22,7 +22,7 @@ public func routes(_ app: Application) throws {
     try app.register(collection: SessionController())
     try app.register(collection: AccountController())
     try app.register(collection: AdminController())
-    try app.register(collection: ConnectionsController())
+    try app.register(collection: ConnectionsController(destination: app.authorizableDestination))
     try app.register(collection: BinderCacheController())
     try app.register(collection: CatalogueController())
     try app.register(collection: BinderController())

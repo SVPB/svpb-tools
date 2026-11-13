@@ -92,8 +92,7 @@ actor BoxService {
     ///   - branch:  Git branch name (used as the year subfolder name, e.g. `"2026"`).
     /// - Returns: The Box ID of the year folder, which is what a link to the band's
     ///   binders for that year is built from.
-    @discardableResult
-    func upload(pdf pdfURL: URL, forBranch branch: String) async throws -> String {
+    private func upload(pdf pdfURL: URL, forBranch branch: String) async throws -> String {
         do {
             return try await performUpload(pdf: pdfURL, forBranch: branch)
         } catch BoxError.unauthorized {
@@ -106,7 +105,8 @@ actor BoxService {
         }
     }
 
-    /// The Box web URL of the year folder for `branch`, for the build notification.
+    /// The Box web URL of the year folder whose ID is `id`: the `browseURL` that
+    /// ``publish(_:forBranch:)`` hands back for the build notification.
     nonisolated static func folderURL(id: String) -> String {
         "https://app.box.com/folder/\(id)"
     }
@@ -563,6 +563,81 @@ actor BoxService {
         let buffer = try await response.body.collect(upTo: 8 * 1024 * 1024)
         return BoxResponse(status: response.status, body: Data(buffer: buffer))
     }
+}
+
+// MARK: - ArtifactDestination
+
+extension BoxService: AuthorizableDestination {
+
+    nonisolated var id: String { "box" }
+
+    nonisolated var displayName: String { "Box" }
+
+    /// Registered in the production Box app's console, so it stays where it has always
+    /// been (#86).
+    nonisolated var callbackPath: String { "/box-callback" }
+
+    /// Box expires a refresh token 60 days after its last use.
+    nonisolated var credentialLifetime: TimeInterval? { 60 * 24 * 60 * 60 }
+
+    /// Uploads `file` into the year folder for `branch`, as a new version of any file of
+    /// the same name already there, and links the year folder.
+    func publish(_ file: URL, forBranch branch: String) async throws -> PublishedLocation {
+        let folderID = try await upload(pdf: file, forBranch: branch)
+        return PublishedLocation(browseURL: URL(string: Self.folderURL(id: folderID)))
+    }
+
+    func connectionStatus() async -> ConnectionStatus {
+        let status = await status()
+        // Read from the environment rather than from `clientID`, as the connections page
+        // always has: it reports what .env says now, not what it said at boot.
+        let configured = !(Environment.get("BOX_CLIENT_ID") ?? "").isEmpty
+            && !(Environment.get("BOX_CLIENT_SECRET") ?? "").isEmpty
+
+        let renewal = " Renewed automatically every "
+            + Self.renewalInterval + ", so it cannot expire while TNG is running."
+
+        let credential: String
+        if let rotated = status.lastRotated, let lifetime = credentialLifetime {
+            let expires = rotated.addingTimeInterval(lifetime)
+            let days = Int(expires.timeIntervalSinceNow / 86400)
+            credential = days > 0
+                ? "Refresh token last renewed \(ConnectionsReport.relative(rotated)); expires in \(days) day(s) otherwise." + renewal
+                : "⚠ Refresh token last renewed \(ConnectionsReport.relative(rotated)) and has passed its \(Int(lifetime / 86400))-day expiry"
+        } else if status.hasSeedToken {
+            credential = "Using the BOX_REFRESH_TOKEN from .env; nothing renewed yet"
+        } else {
+            credential = "No refresh token — TNG has never been authorised"
+        }
+
+        guard configured else {
+            return ConnectionStatus(
+                id: id, name: displayName, purpose: Self.purpose,
+                state: .unconfigured, detail: nil, credential: credential,
+                error: "BOX_CLIENT_ID and BOX_CLIENT_SECRET must be set before TNG can be authorised",
+                authorizePath: nil,
+                remedy: "Take both from the Box Developer Console (§ Box OAuth2 in the README) and put them in .env.")
+        }
+
+        return ConnectionStatus(
+            id: id, name: displayName, purpose: Self.purpose,
+            state: status.isWorking ? .working : .failing,
+            detail: status.rootFolderName.map { "Uploading into \($0)" },
+            credential: credential,
+            error: status.error,
+            // The one service TNG can re-authorise from here: Box hands out its tokens
+            // through a browser redirect, which is exactly what this page can drive.
+            authorizePath: ConnectionsController.authorizePath,
+            remedy: nil)
+    }
+
+    /// How often the scheduled renewal runs, as the page says it.
+    private static var renewalInterval: String {
+        RecurringSchedule.describe(DestinationKeepAlive.interval())
+    }
+
+    private static let purpose =
+        "Where the band's official binders are published, in a folder per year."
 }
 
 // MARK: - BoxError

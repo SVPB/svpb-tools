@@ -143,7 +143,7 @@ final class TunePageRendererTests: XCTestCase {
             let abc = """
             %abc-2.2
             %%footer "\(footer)"
-            %%pagescale 1.1
+            %%pagescale 1.05
             X:1
             T:Long
             M:4/4

@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-13
+
+### Changed
+
+#### Box sits behind a publishing-destination interface (#85)
+
+- The build no longer knows Box by name. It publishes binders to an `ArtifactDestination`, which
+  puts a file in a branch's place, replacing any earlier file of the same name, and says where
+  people can browse it. `BoxService` is the first destination, and nothing it does has changed:
+  the same binders go to the same year folders, and the Slack message reads the same.
+- A destination with no page to browse is still named in the Slack notification ("Published to
+  …"); Box always has one, so its message keeps its link.
+- The connections page's Box card is now written by `BoxService` itself, and reads as before.
+- The record of binders waiting to be delivered is renamed from `box_uploads` to
+  `binder_uploads` by a migration that keeps its rows. It records whether a binder was
+  delivered, not where to, so a binder still waiting when the destination changes goes to the
+  new one on the next build. The branch-removal summary's count is now `binder_uploads`.
+- Build-log lines about publishing are tagged `[publish]` instead of `[box]`.
+
+#### OAuth credential upkeep is something a destination opts into (#86)
+
+- Authorising from the Connections page, renewing on a schedule, and announcing the outcome in
+  Slack now work for any destination that declares itself authorisable, not just Box. One with
+  fixed keys, such as a storage bucket, gets none of it: no Authorise button, no callback
+  route, no redirect panel and no renewal timer. Box behaves as before.
+- The Authorise button now opens `/admin/connections/destination/authorize`. Box's callback
+  stays at `/box-callback`, the address registered in the Box Developer Console, so nothing
+  there needs changing.
+- The renewal interval is set by `DESTINATION_TOKEN_REFRESH_HOURS`. `BOX_TOKEN_REFRESH_HOURS`
+  is still read when it is unset, so an existing `.env` keeps its setting. Box's last recorded
+  renewal outcome is still kept under `box.keepalive.healthy`, and its token under
+  `box.refresh_token`, so the database needs no migration.
+- The authorisation result page and the redirect-URI panel name the destination rather than
+  saying Box. The panel is shown only for a destination that has a callback to register.
+- `box-auth` stays Box-only.
+
+#### The publishing destination is chosen in configuration (#87)
+
+- `ARTIFACT_DESTINATION` in `.env` names the one destination a server publishes to. Unset or
+  blank means `box`, so an existing deployment needs no change. An unrecognised value stops
+  startup with a message listing the accepted values.
+- Only the chosen destination's variables are required. A server publishing somewhere other
+  than Box no longer refuses to start without `BOX_CLIENT_ID`, `BOX_CLIENT_SECRET` and
+  `BOX_FOLDER_ID`, and only that destination is built.
+- The dashboard's Rebuild and Remove branch confirmations and the binder constructor's help
+  text name the active destination rather than Box.
+- `.env.example` groups `ARTIFACT_DESTINATION` and `DESTINATION_TOKEN_REFRESH_HOURS` under
+  "Publishing destination", and heads Box's variables "Destination: Box". Switching
+  destinations moves nothing: binders already published stay where they are, and the new
+  destination gets each branch's binders from its next build.
+
+#### Engraving uses CeolKit 4.0 (#103)
+
+- Every ABC decoration is now drawn, where CeolKit 3 drew only the fermata: ornaments,
+  articulations, bowing and fingering marks, dynamics and hairpins, segno and coda, D.C.,
+  D.S. and Fine, breaths and caesuras, each with room reserved for it.
+- Layout changes. A note off the staff gets room out to the edge of its notehead, so a high
+  note no longer runs into the title. An accidental's room is in front of its note, so it no
+  longer touches the bar line before it. A stem on the middle line follows the other stems
+  in its bar.
+- Pages in the `2027` music change slightly. One tune, `iron_horse.abc`, no longer fits on
+  one page: its last system moves to a second page.
+- A grace group left open at the end of its line is reported in the build log as
+  `unclosedGraceGroup`.
+
 ## [0.8.0] - 2026-11-03
 
 ### Added

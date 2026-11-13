@@ -32,12 +32,15 @@ struct BinderController: RouteCollection {
             let appVersion: String
             let isAdmin: Bool
             let currentUser: String?
+            /// Where the build publishes the binders this page defines (#87).
+            let destinationName: String
         }
         let user = await req.sessionUser()
         let ctx = BinderConstructorContext(
             appVersion: AppVersion.current,
             isAdmin: user?.role == .admin,
-            currentUser: user.map { $0.displayName ?? $0.slackUserId }
+            currentUser: user.map { $0.displayName ?? $0.slackUserId },
+            destinationName: req.application.artifactDestination.displayName
         )
         return try await req.view.render("binder-constructor", ctx)
     }

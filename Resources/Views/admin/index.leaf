@@ -47,7 +47,7 @@
       <span class="branch-item">
         <span class="badge">#(branch)</span>
         <button class="sync-btn" onclick="syncBranch('#(branch)', this)" title="Sync catalogue for #(branch)">↻ Sync</button>
-        <button class="sync-btn" onclick="rebuildBranch('#(branch)', this)" title="Full build of #(branch): binders to Box, notice to Slack">⟳ Rebuild</button>
+        <button class="sync-btn" onclick="rebuildBranch('#(branch)', this)" title="Full build of #(branch): binders to #(destinationName), notice to Slack">⟳ Rebuild</button>
         <button class="sync-btn delete-btn" onclick="deleteBranch('#(branch)', this)" title="Remove #(branch) from the server">✕ Remove</button>
       </span>
     #endfor
@@ -121,7 +121,7 @@ async function syncBranch(branch, btn) {
 
 async function rebuildBranch(branch, btn) {
   const question = 'Rebuild branch "' + branch + '"?\n\n'
-    + 'This is a full build, the same as a push: its binders are uploaded to Box '
+    + 'This is a full build, the same as a push: its binders are published to #(destinationName) '
     + 'and the band is notified in Slack.';
   if (!confirm(question)) return;
 
@@ -185,7 +185,7 @@ function pollBuildStatus(branch, btn, what, idleLabel) {
 async function deleteBranch(branch, btn) {
   const question = 'Remove branch "' + branch + '" from the server?\n\n'
     + 'This deletes its tune catalogue, build history and logs, binder definitions, '
-    + 'git checkout, and generated SVG/PDF files. Nothing in Box is touched. '
+    + 'git checkout, and generated SVG/PDF files. Nothing in #(destinationName) is touched. '
     + 'Syncing "' + branch + '" again rebuilds it from the repository.';
   if (!confirm(question)) return;
 

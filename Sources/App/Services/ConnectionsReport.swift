@@ -15,12 +15,15 @@ enum ConnectionsReport {
 
     /// Every connection, in the order they matter to a build: where the music comes from,
     /// where the binders go, who gets told.
+    ///
+    /// Where the binders go is whichever `ArtifactDestination` is in use, and it writes its
+    /// own card: only it knows what its configuration is and what fixes it.
     static func gather(on app: Application) async -> [ConnectionStatus] {
         async let github = githubStatus(app)
-        async let box = boxStatus(app)
+        async let destination = app.artifactDestination.connectionStatus()
         async let slack = slackStatus(app)
         async let backup = backupStatus(app)
-        return await [github, box, slack, backup]
+        return await [github, destination, slack, backup]
     }
 
     // MARK: - GitHub
@@ -67,59 +70,6 @@ enum ConnectionsReport {
 
     private static let githubPurpose =
         "Where the music comes from. A push here starts a build."
-
-    // MARK: - Box
-
-    private static func boxStatus(_ app: Application) async -> ConnectionStatus {
-        let status = await app.boxService.status()
-        let configured = !(Environment.get("BOX_CLIENT_ID") ?? "").isEmpty
-            && !(Environment.get("BOX_CLIENT_SECRET") ?? "").isEmpty
-
-        let renewal = " Renewed automatically every "
-            + ConnectionsReport.renewalInterval + ", so it cannot expire while TNG is running."
-
-        let credential: String
-        if let rotated = status.lastRotated {
-            let expires = rotated.addingTimeInterval(ConnectionStatus.boxTokenLifetime)
-            let days = Int(expires.timeIntervalSinceNow / 86400)
-            credential = days > 0
-                ? "Refresh token last renewed \(Self.relative(rotated)); expires in \(days) day(s) otherwise." + renewal
-                : "⚠ Refresh token last renewed \(Self.relative(rotated)) and has passed its 60-day expiry"
-        } else if status.hasSeedToken {
-            credential = "Using the BOX_REFRESH_TOKEN from .env; nothing renewed yet"
-        } else {
-            credential = "No refresh token — TNG has never been authorised"
-        }
-
-        guard configured else {
-            return ConnectionStatus(
-                id: "box", name: "Box", purpose: boxPurpose,
-                state: .unconfigured, detail: nil, credential: credential,
-                error: "BOX_CLIENT_ID and BOX_CLIENT_SECRET must be set before TNG can be authorised",
-                authorizePath: nil,
-                remedy: "Take both from the Box Developer Console (§ Box OAuth2 in the README) and put them in .env.")
-        }
-
-        return ConnectionStatus(
-            id: "box", name: "Box", purpose: boxPurpose,
-            state: status.isWorking ? .working : .failing,
-            detail: status.rootFolderName.map { "Uploading into \($0)" },
-            credential: credential,
-            error: status.error,
-            // The one service TNG can re-authorise from here: Box hands out its tokens
-            // through a browser redirect, which is exactly what this page can drive.
-            authorizePath: "/admin/connections/box/authorize",
-            remedy: nil)
-    }
-
-    /// How often the scheduled renewal runs, as the page says it.
-    private static var renewalInterval: String {
-        BoxTokenKeepAlive.describe(
-            BoxTokenKeepAlive.interval(from: Environment.get("BOX_TOKEN_REFRESH_HOURS")))
-    }
-
-    private static let boxPurpose =
-        "Where the band's official binders are published, in a folder per year."
 
     // MARK: - Slack
 
@@ -187,7 +137,7 @@ enum ConnectionsReport {
                 error: "Not backing up: \(problems.joined(separator: "; "))",
                 authorizePath: nil, remedy: remedy)
         case .ready(let configuration):
-            let interval = BoxTokenKeepAlive.describe(
+            let interval = RecurringSchedule.describe(
                 DatabaseBackup.interval(from: Environment.get("BACKUP_INTERVAL_HOURS")))
             let destination = "\(configuration.bucket)/\(configuration.prefix) at "
                 + (configuration.endpoint.host ?? "") + ", every \(interval)"

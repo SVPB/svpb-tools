@@ -27,7 +27,7 @@ import Vapor
 /// Only the personal binders directory is touched. Official binders live under
 /// `output/<branch>/binders/`, are overwritten by every build, and go with their branch.
 ///
-/// In-process for the same reason as `BoxTokenKeepAlive`: an external timer is one more
+/// In-process for the same reason as `DestinationKeepAlive`: an external timer is one more
 /// thing to forget when the droplet is rebuilt.
 struct BinderCache: LifecycleHandler {
 
@@ -49,7 +49,7 @@ struct BinderCache: LifecycleHandler {
         guard app.environment != .testing else { return }
 
         let directory = app.binderService.personalBindersDirectory
-        app.logger.notice("[BinderCache] Sweeping expired binders from \(directory.path) every \(BoxTokenKeepAlive.describe(Self.sweepInterval))")
+        app.logger.notice("[BinderCache] Sweeping expired binders from \(directory.path) every \(RecurringSchedule.describe(Self.sweepInterval))")
 
         app.storage[TaskKey.self] = Task {
             do {
