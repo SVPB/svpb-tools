@@ -183,7 +183,7 @@ each value before starting the stack.
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |
 | `BOX_FOLDER_ID` | ID of the top-level Box folder binders go into (SVPB's is `pipe_music`); TNG creates year subfolders inside it automatically |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud OAuth client, when publishing to Google Drive |
-| `GOOGLE_DRIVE_FOLDER_NAME` | Name of the folder TNG creates in Google Drive and publishes into, e.g. `pipe_music` |
+| `GOOGLE_DRIVE_FOLDER_NAME` | Name of the folder TNG creates in Google Drive and publishes into (SVPB's is `pipe_music`) |
 | `GOOGLE_REFRESH_TOKEN` | Optional. Seeds the Google Drive refresh token; normally obtained from the Connections page |
 | `SLACK_BOT_TOKEN` | Bot token (`xoxb-…`) for sending login links and build notifications |
 | `SLACK_SIGNING_SECRET` | Signing secret for verifying inbound Events API payloads |
