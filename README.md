@@ -177,11 +177,14 @@ each value before starting the stack.
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
 | `ORG_MUSIC_REPO_URL` | HTTPS clone URL of the band's music repository (SVPB's is `svpb-music`). The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped. Its old name, `SVPB_MUSIC_REPO_URL`, is still read when this is unset, with a warning in the log |
 | `ORG_NAME` / `ORG_SHORT_NAME` | Optional. The band's full and short names, e.g. `Silicon Valley Pipe Band` and `SVPB`. Unset, pages just say "TNG". Both can be changed on the admin **Organisation** page — see [Organisation name and artwork](#organisation-name-and-artwork) |
-| `ARTIFACT_DESTINATION` | Optional. Where official binders are published: `box`, the default. Only that destination's variables are required — see [Publishing destination](#publishing-destination) |
+| `ARTIFACT_DESTINATION` | Optional. Where official binders are published: `box`, the default, or `google_drive`. Only that destination's variables are required — see [Publishing destination](#publishing-destination) |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
 | `BOX_CLIENT_SECRET` | Box OAuth2 application client secret |
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |
 | `BOX_FOLDER_ID` | ID of the top-level Box folder binders go into (SVPB's is `pipe_music`); TNG creates year subfolders inside it automatically |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud OAuth client, when publishing to Google Drive |
+| `GOOGLE_DRIVE_FOLDER_NAME` | Name of the folder TNG creates in Google Drive and publishes into (SVPB's is `pipe_music`) |
+| `GOOGLE_REFRESH_TOKEN` | Optional. Seeds the Google Drive refresh token; normally obtained from the Connections page |
 | `SLACK_BOT_TOKEN` | Bot token (`xoxb-…`) for sending login links and build notifications |
 | `SLACK_SIGNING_SECRET` | Signing secret for verifying inbound Events API payloads |
 | `SLACK_WEBHOOK_URL` | Incoming Webhook URL for posting build notifications |
@@ -590,14 +593,15 @@ identity. All three are configured in the same app.
 ### Publishing destination
 
 TNG publishes each branch's official binders to one destination, named by
-`ARTIFACT_DESTINATION` in `.env`. Today the only one is `box`, which is also what an unset
-value means. The server checks at startup that the chosen destination's variables are set
+`ARTIFACT_DESTINATION` in `.env`: `box`, which is also what an unset value means, or
+`google_drive`. The server checks at startup that the chosen destination's variables are set
 and asks for no other destination's; an unrecognised value stops it, naming the accepted
 values. The admin **Connections** page shows the chosen destination's card.
 
 | Value | Set up with |
 |---|---|
 | `box` | [Box OAuth2](#box-oauth2) |
+| `google_drive` | [Google Drive OAuth2](#google-drive-oauth2) |
 
 **Switching destinations moves nothing.** Change `ARTIFACT_DESTINATION`, fill in the new
 destination's group in `.env`, and run `docker compose up -d tng`. Binders already published
@@ -739,6 +743,81 @@ directly in the year folder.
 
 Nothing else is uploaded: per-tune PDFs are build intermediates kept on the server for the binder
 builder, and personalised binders are downloaded straight from TNG.
+
+### Google Drive OAuth2
+
+With `ARTIFACT_DESTINATION=google_drive`, TNG publishes into a folder in Google Drive, with a
+year folder per branch exactly as for Box. A binder published again replaces the file's content
+as a new revision of the same file, so links people have saved keep working.
+
+**What TNG can see.** TNG asks for the `drive.file` scope only: it can see and change the files it
+created, and nothing else in the account. That is why **TNG creates its own folder** rather than
+being pointed at one: on its first publish it makes a folder named `GOOGLE_DRIVE_FOLDER_NAME` at
+the top of the authorising account's My Drive, and remembers its ID. Share that folder with the
+band from Drive; the Connections page links to it. Renaming or moving it in Drive is fine.
+
+`drive.file` is one of Google's *non-sensitive* scopes, and an app that uses only non-sensitive
+scopes does not need Google's app verification
+([Drive API scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth),
+[OAuth app verification](https://support.google.com/cloud/answer/13463073)). Full Drive access
+(`drive`) is *restricted* and would need a third-party security assessment, which is why TNG does
+not ask for it.
+
+**Before you start: use a band account.** The files TNG creates belong to the Google account that
+authorises it. Authorise as an account the band owns, not a member's personal one, so the binders
+do not go with that member.
+
+**Creating the Google Cloud project and client:**
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), signed in as the band account,
+   create a project (e.g. "TNG").
+2. **APIs & Services → Library**: find **Google Drive API** and press **Enable**.
+3. **Google Auth Platform → Branding** (the OAuth consent screen): user type **External**; app
+   name, support email and developer contact. Add the server's domain under authorised domains.
+4. **Data Access**: add the scope `https://www.googleapis.com/auth/drive.file` and nothing else.
+5. **Audience**: press **Publish app** to move it from *Testing* to *In production*. This is not
+   optional. Google expires the refresh tokens of an app in Testing after 7 days
+   ([OAuth 2.0, refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)),
+   which the daily renewal cannot prevent. With only a non-sensitive scope, publishing does not
+   start a verification review.
+6. **Clients → Create client**: type **Web application**. Under **Authorised redirect URIs** add
+   `https://<your-domain>/google-drive-callback`, the exact value shown at the bottom of TNG's
+   Connections page. Create it, and put the **Client ID** and **Client secret** in `.env` as
+   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+**What the consent screen shows.** Until the app's branding is verified, Google shows the app's
+domain rather than its name and logo, and it may say that Google hasn't verified the app.
+Google's help pages tie that warning to apps in Testing and do not settle whether a production app
+with only non-sensitive scopes sees it. If it appears, choose **Advanced → Go to … (unsafe)**: the
+grant is to your own band's server. The permission listed is to see, edit, create and delete only
+the Google Drive files that TNG uses.
+
+**Authorizing TNG:**
+
+1. Set `ARTIFACT_DESTINATION=google_drive`, the `GOOGLE_*` values and `GOOGLE_DRIVE_FOLDER_NAME`
+   in `.env`, and run `docker compose up -d tng`.
+2. On **Connections** (`/admin/connections`), check the redirect URI at the bottom against the
+   one registered on the client, then press **Authorise Google Drive**, sign in as the band
+   account, and allow access.
+3. Google Drive should read **working**, signed in as the band account. The folder does not exist
+   yet: the first publish creates it. Use **Rebuild** on the admin dashboard to publish straight
+   away, then share the folder from Drive.
+
+Google keeps the same refresh token rather than issuing a new one on each refresh, and expires one
+only after **six months unused**. TNG still renews daily (`DESTINATION_TOKEN_REFRESH_HOURS`), which
+also checks that Drive works and tells Slack when it stops. A token can also stop working if the
+account removes TNG's access, or if the account authorises the same client more than 100 times.
+Press **Re-authorise Google Drive** for either.
+
+**If the folder is deleted.** Publishing fails with an error naming the folder, and the Connections
+page shows it. TNG does not quietly make a new folder, because the band has shared the old one and
+a new one would be shared with nobody. Restore the folder from Drive's trash if you can. Otherwise
+delete the stored ID, and the next publish creates a new folder to share:
+
+```sh
+sqlite3 "$TNG_STATE_DIR/data/tng.sqlite" \
+  "DELETE FROM settings WHERE key = 'google_drive.root_folder_id'"
+```
 
 ---
 

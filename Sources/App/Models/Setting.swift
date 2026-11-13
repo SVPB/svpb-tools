@@ -2,8 +2,8 @@ import Fluent
 import Vapor
 
 /// A single piece of server state that outlives the process but does not belong to
-/// any of the domain models — the rotated Box refresh token, and values an admin page
-/// overrides `.env` with (#83, #89).
+/// any of the domain models — the destinations' OAuth tokens, for instance, and values an
+/// admin page overrides `.env` with (#83, #89).
 ///
 /// The `.env` file seeds configuration; this table holds the values the server itself
 /// changes at runtime. A Box refresh token is the motivating case: Box issues a new one
@@ -16,6 +16,20 @@ final class Setting: Model, @unchecked Sendable {
 
     /// The key of the Box refresh token, rotated on every token refresh.
     static let boxRefreshToken = "box.refresh_token"
+
+    /// The key of the Google Drive refresh token (#88). Google does not rotate it, so it is
+    /// written when an authorisation issues one, not on every refresh.
+    static let googleDriveRefreshToken = "google_drive.refresh_token"
+
+    /// When the Google Drive credential was last used to renew the access token, as
+    /// ISO 8601. Google's six months of disuse count from here, and since the refresh
+    /// token itself rarely changes, its row's timestamp cannot say (#88).
+    static let googleDriveTokenRenewedAt = "google_drive.token_renewed_at"
+
+    /// The ID of the root folder TNG created in Google Drive on its first publish (#88).
+    /// With only the `drive.file` scope TNG cannot see a folder it did not make, so it
+    /// makes its own and remembers it here.
+    static let googleDriveRootFolderID = "google_drive.root_folder_id"
 
     /// The key of the binder retention period in days, when an admin has set one (#83).
     /// Overrides `BINDER_RETENTION_DAYS`.

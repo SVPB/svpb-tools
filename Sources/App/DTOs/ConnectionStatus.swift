@@ -55,6 +55,9 @@ struct ConnectionStatus: Content, Equatable {
     /// and where its value comes from.
     let remedy: String?
 
+    /// A page to open on the other end, such as the folder binders are published into.
+    var link: String? = nil
+
     // MARK: - Convenience
 
     // No `isWorking` convenience here on purpose: the templates that draw this are the

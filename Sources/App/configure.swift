@@ -285,6 +285,17 @@ private func makeDestination(
             httpClient:   httpClient,
             logger:       app.logger
         )
+    case .googleDrive:
+        GoogleDriveService(
+            clientID:       Environment.get("GOOGLE_CLIENT_ID")         ?? "",
+            clientSecret:   Environment.get("GOOGLE_CLIENT_SECRET")     ?? "",
+            rootFolderName: Environment.get("GOOGLE_DRIVE_FOLDER_NAME") ?? "",
+            // Only a seed, as with Box: the database holds the token in use.
+            refreshToken:   Environment.get("GOOGLE_REFRESH_TOKEN")     ?? "",
+            db:             app.db,
+            httpClient:     httpClient,
+            logger:         app.logger
+        )
     }
 }
 

@@ -15,6 +15,7 @@ import Foundation
 /// waiting for delivery at the switch (#85).
 enum DestinationKind: String, CaseIterable, Sendable {
     case box
+    case googleDrive = "google_drive"
 
     /// The environment variable that names the destination.
     static let environmentKey = "ARTIFACT_DESTINATION"
@@ -42,6 +43,8 @@ enum DestinationKind: String, CaseIterable, Sendable {
     var requiredEnvironmentVariables: [String] {
         switch self {
         case .box: ["BOX_CLIENT_ID", "BOX_CLIENT_SECRET", "BOX_FOLDER_ID"]
+        // `GOOGLE_REFRESH_TOKEN` is optional for the same reason as Box's.
+        case .googleDrive: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_DRIVE_FOLDER_NAME"]
         }
     }
 
