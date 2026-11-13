@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):Connections — SVPB TNG#endexport
+#export("title"):Connections — #org("site")#endexport
 
 #export("styles"):
 <style>

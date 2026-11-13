@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):SVPB TNG#endexport
+#export("title"):#org("site")#endexport
 
 #export("styles"):
 <style>

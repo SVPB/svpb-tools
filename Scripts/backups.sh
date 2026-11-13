@@ -196,7 +196,7 @@ cmd_check() {
     mkdir "$WORK/scratch"
     cp "$WORK/tng.sqlite" "$WORK/scratch/tng.sqlite"
     local dummy=() name
-    for name in GITHUB_WEBHOOK_SECRET SVPB_MUSIC_REPO_URL BOX_CLIENT_ID BOX_CLIENT_SECRET \
+    for name in GITHUB_WEBHOOK_SECRET ORG_MUSIC_REPO_URL BOX_CLIENT_ID BOX_CLIENT_SECRET \
                 BOX_FOLDER_ID SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACK_WEBHOOK_URL \
                 INITIAL_ADMIN_SLACK_USER_ID; do
         dummy+=(-e "$name=restore-check")

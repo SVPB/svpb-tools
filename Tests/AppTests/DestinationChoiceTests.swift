@@ -10,7 +10,7 @@ final class DestinationChoiceTests: XCTestCase {
     /// Everything a Box deployment sets, so each test can take one thing away.
     private let boxDeployment: [String: String] = [
         "GITHUB_WEBHOOK_SECRET": "secret",
-        "SVPB_MUSIC_REPO_URL": "https://github.com/SVPB/svpb-music.git",
+        "ORG_MUSIC_REPO_URL": "https://github.com/SVPB/svpb-music.git",
         "SLACK_BOT_TOKEN": "xoxb-test",
         "SLACK_SIGNING_SECRET": "signing",
         "SLACK_WEBHOOK_URL": "https://hooks.slack.com/test",
@@ -83,11 +83,29 @@ final class DestinationChoiceTests: XCTestCase {
     }
 
     func testTheCommonVariablesAreRequiredWhateverTheDestination() {
-        for key in ["GITHUB_WEBHOOK_SECRET", "SVPB_MUSIC_REPO_URL", "SLACK_BOT_TOKEN",
+        for key in ["GITHUB_WEBHOOK_SECRET", "ORG_MUSIC_REPO_URL", "SLACK_BOT_TOKEN",
                     "SLACK_SIGNING_SECRET", "SLACK_WEBHOOK_URL", "INITIAL_ADMIN_SLACK_USER_ID"] {
             var env = boxDeployment
             env[key] = nil
             XCTAssertThrowsError(try validate(env), "\(key) is required")
+        }
+    }
+
+    /// The production `.env` still says `SVPB_MUSIC_REPO_URL`, and must keep starting the
+    /// server on the day #89 deploys.
+    func testTheMusicRepositorysOldNameSatisfiesTheCheck() throws {
+        var env = boxDeployment
+        env["ORG_MUSIC_REPO_URL"] = nil
+        env["SVPB_MUSIC_REPO_URL"] = "https://github.com/SVPB/svpb-music.git"
+        XCTAssertEqual(try validate(env), .box)
+    }
+
+    /// A missing repository is reported by its new name.
+    func testAMissingMusicRepositoryIsReportedByItsNewName() {
+        var env = boxDeployment
+        env["ORG_MUSIC_REPO_URL"] = nil
+        XCTAssertThrowsError(try validate(env)) { error in
+            XCTAssertTrue("\(error)".contains("ORG_MUSIC_REPO_URL"), "\(error)")
         }
     }
 

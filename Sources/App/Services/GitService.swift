@@ -19,7 +19,8 @@ enum GitError: Error, CustomStringConvertible {
 
 // MARK: - GitService
 
-/// Manages per-branch working-directory checkouts of the `svpb-music` repository.
+/// Manages per-branch working-directory checkouts of the band's music repository
+/// (`ORG_MUSIC_REPO_URL`; SVPB's is `svpb-music`).
 ///
 /// Each branch gets its own subdirectory under `workspaceBase`:
 ///   `<workspaceBase>/<branch>/`
@@ -87,7 +88,7 @@ actor GitService {
     /// - Returns: The number of branches the remote advertises.
     func probeRemote() async throws -> Int {
         guard !repoURL.isEmpty else {
-            throw GitError.failed(status: 0, output: "SVPB_MUSIC_REPO_URL is not set")
+            throw GitError.failed(status: 0, output: "\(Self.repoURLVariable) is not set")
         }
         // Run somewhere that certainly exists: `ls-remote` needs no working copy, but a
         // Process with a missing currentDirectoryURL fails before git is reached.
@@ -117,6 +118,41 @@ actor GitService {
     /// value of its own rather than an empty string that renders as a gap.
     nonisolated var configuredRepoURL: String? {
         repoURL.isEmpty ? nil : displayRepoURL
+    }
+
+    /// The repository's name, for telling people where to push: the last component of its
+    /// path without `.git` — `svpb-music` for `https://github.com/SVPB/svpb-music.git` —
+    /// or `nil` when no repository is set (#89).
+    nonisolated var repoName: String? {
+        guard !repoURL.isEmpty else { return nil }
+        // An scp-style remote (`git@github.com:SVPB/svpb-music.git`) is no URL, so the
+        // path is split by hand rather than read through URLComponents.
+        let path = URLComponents(string: displayRepoURL)?.path ?? displayRepoURL
+        let last = path.split(whereSeparator: { $0 == "/" || $0 == ":" }).last.map(String.init) ?? ""
+        let name = last.hasSuffix(".git") ? String(last.dropLast(4)) : last
+        return name.isEmpty ? nil : name
+    }
+
+    // MARK: - Configuration
+
+    /// The variable naming the music repository's clone URL (#89).
+    static let repoURLVariable = "ORG_MUSIC_REPO_URL"
+    /// Its name before #89, still read when the new one is unset or empty, so an existing
+    /// `.env` keeps working.
+    static let legacyRepoURLVariable = "SVPB_MUSIC_REPO_URL"
+
+    /// The music repository's clone URL: `ORG_MUSIC_REPO_URL`, else `SVPB_MUSIC_REPO_URL`.
+    ///
+    /// - Returns: The URL and the variable it was read from, or `nil` when neither is set.
+    static func repoURL(
+        from environment: (String) -> String? = Environment.get
+    ) -> (url: String, variable: String)? {
+        for name in [repoURLVariable, legacyRepoURLVariable] {
+            if let raw = environment(name)?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+                return (raw, name)
+            }
+        }
+        return nil
     }
 
     // MARK: - Private helpers
