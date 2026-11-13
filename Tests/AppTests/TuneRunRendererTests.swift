@@ -327,7 +327,7 @@ final class TuneRunRendererTests: XCTestCase {
     func testATuneThatWouldReachTheFooterOpensItsOwnPage() throws {
         func run(footer: String) throws -> TuneRunRenderer.Rendering {
             try TuneRunRenderer().render(
-                [try source("tall", music: Self.lines(14), footer: footer, scale: 1.05),
+                [try source("tall", music: Self.lines(14), footer: footer, scale: 1.0),
                  try source("short", music: "ABcd efga | gfed cBAG |]", footer: footer)],
                 firstPageNumber: 1)
         }
