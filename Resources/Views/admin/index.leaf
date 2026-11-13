@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):Admin — SVPB TNG#endexport
+#export("title"):Admin — #org("site")#endexport
 
 #export("styles"):
 <style>
@@ -63,7 +63,7 @@
 
   <h2>Recent Builds</h2>
   #if(builds.isEmpty):
-    <p style="color:#888">No builds recorded yet. Push to <code>svpb-music</code> to trigger the first build.</p>
+    <p style="color:#888">No builds recorded yet. #if(musicRepoName):Push to <code>#(musicRepoName)</code> to trigger the first build.#else:Set the music repository in <code>.env</code>, then push to it to trigger the first build.#endif</p>
   #else:
   <table>
     <thead>

@@ -2,7 +2,8 @@ import Fluent
 import Vapor
 
 /// A single piece of server state that outlives the process but does not belong to
-/// any of the domain models — the destinations' OAuth tokens, for instance.
+/// any of the domain models — the destinations' OAuth tokens, for instance, and values an
+/// admin page overrides `.env` with (#83, #89).
 ///
 /// The `.env` file seeds configuration; this table holds the values the server itself
 /// changes at runtime. A Box refresh token is the motivating case: Box issues a new one
@@ -34,6 +35,13 @@ final class Setting: Model, @unchecked Sendable {
     /// Overrides `BINDER_RETENTION_DAYS`.
     static let binderRetentionDays = "binders.retention_days"
 
+    /// The organisation's long name, when an admin has set one (#89). Overrides `ORG_NAME`.
+    static let orgName = "org.name"
+
+    /// The organisation's short name, when an admin has set one (#89). Overrides
+    /// `ORG_SHORT_NAME`.
+    static let orgShortName = "org.short_name"
+
     // MARK: - Fields
 
     /// Dotted key, e.g. `box.refresh_token`. Acts as the primary key.
@@ -60,6 +68,47 @@ final class Setting: Model, @unchecked Sendable {
     /// The stored value for `key`, or `nil` when nothing has been stored under it.
     static func value(for key: String, on db: any Database) async throws -> String? {
         try await Setting.find(key, on: db)?.value
+    }
+
+    /// Where a value with an admin override came from, for the page that sets it.
+    enum Source: String, Encodable, Sendable {
+        /// Set from an admin page, and stored in `settings`.
+        case admin
+        /// From the environment (`.env`).
+        case environment
+        /// Neither.
+        case builtIn
+    }
+
+    /// A value an admin can override: the stored setting under `key`, else the environment
+    /// variable `environmentKey`, else `nil` with source ``Source/builtIn``.
+    ///
+    /// Blank values, stored or in the environment, count as unset. Values are trimmed.
+    static func layered(
+        _ key: String,
+        environmentKey: String,
+        on db: any Database,
+        environment: (String) -> String? = Environment.get
+    ) async throws -> (value: String?, source: Source) {
+        if let stored = nonBlank(try await value(for: key, on: db)) {
+            return (stored, .admin)
+        }
+        if let fromEnvironment = nonBlank(environment(environmentKey)) {
+            return (fromEnvironment, .environment)
+        }
+        return (nil, .builtIn)
+    }
+
+    /// `raw` trimmed, or `nil` when that leaves nothing.
+    static func nonBlank(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// Removes whatever is stored under `key`; a no-op when nothing is.
+    static func clear(_ key: String, on db: any Database) async throws {
+        try await Setting.find(key, on: db)?.delete(on: db)
     }
 
     /// Stores `value` under `key`, replacing whatever was there.

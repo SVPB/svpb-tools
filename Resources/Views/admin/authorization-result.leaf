@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>#if(error):Authorisation failed#else:Authorised#endif — SVPB TNG</title>
+  <title>#if(error):Authorisation failed#else:Authorised#endif — #org("site")</title>
   <style>
     body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0;
            display: grid; place-items: center; min-height: 100vh; background: #f7f7f8;

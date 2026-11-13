@@ -21,6 +21,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shared with nobody.
 - Destination cards on the Connections page can link to the place binders are published.
 
+#### The organisation's name and artwork are configurable (#89)
+
+- A new admin page, **Organisation** (`/admin/org`), sets the band's short and full names and
+  uploads its header logo, favicon and touch icon. `ORG_SHORT_NAME` and `ORG_NAME` in `.env`
+  give the starting names; the page overrides them and says where each value in force came
+  from. The short name goes before "TNG" in page titles, the header and footers; the full name
+  is on the sign-in page.
+- Artwork is stored in the database, so the nightly backup carries it. Uploads are at most
+  1 MB: the logo SVG or PNG, the favicon SVG, PNG or ICO, the touch icon a 180×180 PNG. An SVG
+  is refused, with the reason, if it has script, event handlers, a DOCTYPE, links outside the
+  file, or elements other than plain drawing ones; it is never rewritten. Artwork is served
+  with a sandboxing `Content-Security-Policy` and `X-Content-Type-Options: nosniff`.
+- With nothing set, the server looks like plain TNG: pages say "TNG", and the logo and icons
+  are TNG's own neutral mark.
+
+### Changed
+
+#### SVPB's name and artwork are no longer built in (#89)
+
+- **After deploying, the production site looks neutral until it is set up again.** This is
+  intended. Set `ORG_SHORT_NAME=SVPB` and `ORG_NAME=Silicon Valley Pipe Band` in the droplet's
+  `.env` (or on the Organisation page), and upload the thistle files from `Brand/web/`, as
+  `Brand/README.md` describes.
+- The thistle files have moved from `Public/` to `Brand/web/`. `/favicon.ico`, `/favicon.svg`,
+  `/apple-touch-icon.png` and the header logo, now `/img/logo`, are served by routes.
+- `SVPB_MUSIC_REPO_URL` is renamed `ORG_MUSIC_REPO_URL`. The old name is still read when the
+  new one is unset, with a warning in the log, so the production `.env` needs no change on the
+  day this deploys.
+- With no builds yet, the admin dashboard names the configured repository to push to, rather
+  than `svpb-music`.
+
+## [0.9.0] - 2026-11-13
+
 ### Changed
 
 #### Box sits behind a publishing-destination interface (#85)
@@ -54,6 +87,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The authorisation result page and the redirect-URI panel name the destination rather than
   saying Box. The panel is shown only for a destination that has a callback to register.
 - `box-auth` stays Box-only.
+
+#### The publishing destination is chosen in configuration (#87)
+
+- `ARTIFACT_DESTINATION` in `.env` names the one destination a server publishes to. Unset or
+  blank means `box`, so an existing deployment needs no change. An unrecognised value stops
+  startup with a message listing the accepted values.
+- Only the chosen destination's variables are required. A server publishing somewhere other
+  than Box no longer refuses to start without `BOX_CLIENT_ID`, `BOX_CLIENT_SECRET` and
+  `BOX_FOLDER_ID`, and only that destination is built.
+- The dashboard's Rebuild and Remove branch confirmations and the binder constructor's help
+  text name the active destination rather than Box.
+- `.env.example` groups `ARTIFACT_DESTINATION` and `DESTINATION_TOKEN_REFRESH_HOURS` under
+  "Publishing destination", and heads Box's variables "Destination: Box". Switching
+  destinations moves nothing: binders already published stay where they are, and the new
+  destination gets each branch's binders from its next build.
+
+#### Engraving uses CeolKit 4.0 (#103)
+
+- Every ABC decoration is now drawn, where CeolKit 3 drew only the fermata: ornaments,
+  articulations, bowing and fingering marks, dynamics and hairpins, segno and coda, D.C.,
+  D.S. and Fine, breaths and caesuras, each with room reserved for it.
+- Layout changes. A note off the staff gets room out to the edge of its notehead, so a high
+  note no longer runs into the title. An accidental's room is in front of its note, so it no
+  longer touches the bar line before it. A stem on the middle line follows the other stems
+  in its bar.
+- Pages in the `2027` music change slightly. One tune, `iron_horse.abc`, no longer fits on
+  one page: its last system moves to a second page.
+- A grace group left open at the end of its line is reported in the build log as
+  `unclosedGraceGroup`.
 
 ## [0.8.0] - 2026-11-03
 

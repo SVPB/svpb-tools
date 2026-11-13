@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign In — SVPB TNG</title>
+  <title>Sign In — #org("site")</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -17,8 +17,8 @@
   </style>
 </head>
 <body>
-  <h1>SVPB TNG Admin</h1>
-  <p class="sub">Silicon Valley Pipe Band · Tools Next Generation · v#(appVersion)</p>
+  <h1>#org("site") Admin</h1>
+  <p class="sub">#org("subtitle") · v#(appVersion)</p>
 
   <div class="card">
     <h2>Sign In</h2>
@@ -31,6 +31,6 @@
     <p>If you do not have access, ask a band administrator to add your Slack account.</p>
   </div>
 
-  <footer>SVPB TNG v#(appVersion)</footer>
+  <footer>#org("site") v#(appVersion)</footer>
 </body>
 </html>
