@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):Personal Binder Builder — SVPB TNG#endexport
+#export("title"):Personal Binder Builder — #org("site")#endexport
 
 #export("styles"):
 #extend("partials/tune-selector-styles")

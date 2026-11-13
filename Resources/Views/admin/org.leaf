@@ -1,0 +1,217 @@
+#extend("layouts/public"):
+
+#export("title"):Organisation — #org("site")#endexport
+
+#export("styles"):
+<style>
+  main  { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  .lede { color: #555; font-size: 0.92rem; margin-bottom: 1.5rem; max-width: 62ch; }
+  .card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 1rem; }
+  .card h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+  .source { font-size: 0.83rem; color: #555; margin: 0.3rem 0 0; max-width: 62ch; }
+  code { background: #f3f4f6; padding: 2px 6px; border-radius: 3px; font-size: 0.82rem; }
+  .field { margin-bottom: 1rem; }
+  .field label { display: block; font-weight: 600; font-size: 0.9rem; margin-bottom: 0.3rem; }
+  .field input[type=text] { padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; width: 100%; max-width: 28rem; }
+  .shown { font-size: 0.88rem; color: #333; margin: 0 0 1rem; }
+  .shown strong { color: #1a1a2e; }
+  .btn { padding: 6px 16px; border-radius: 4px; border: 1px solid #1a1a2e; background: #1a1a2e; color: #fff; cursor: pointer; font-size: 0.85rem; }
+  .btn:hover { background: #2a2a4e; }
+  .btn.secondary { background: #fff; color: #1a1a2e; }
+  .btn.secondary:hover { background: #f3f4f6; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .status { font-size: 0.85rem; color: #555; margin-top: 0.5rem; min-height: 1.2em; }
+  .status.error { color: #991b1b; }
+  .slot { display: flex; gap: 1.25rem; align-items: flex-start; padding: 1rem 0; border-top: 1px solid #eee; }
+  .slot:first-of-type { border-top: none; padding-top: 0; }
+  .preview { flex: none; width: 96px; height: 96px; border-radius: 6px; display: flex; align-items: center; justify-content: center; border: 1px solid #ddd; background: #fff; }
+  .preview.dark { background: #1a1a2e; border-color: #1a1a2e; }
+  .preview img { max-width: 80px; max-height: 80px; }
+  .slot-body { flex: 1; min-width: 0; }
+  .slot-body h3 { font-size: 0.95rem; margin: 0 0 0.2rem; }
+  .slot-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
+  .slot-actions input[type=file] { font-size: 0.85rem; max-width: 100%; }
+</style>
+#endexport
+
+#export("content"):
+<main>
+  <h1>Organisation</h1>
+  <p class="lede">
+    The name and artwork this server shows. A server that sets none of them looks like plain
+    TNG. Changes show on every page at once.
+  </p>
+
+  <div class="card">
+    <h2>Name</h2>
+    <p class="shown">
+      Pages are titled <strong>#(siteName)</strong>; the sign-in page's subtitle reads
+      <strong>#(subtitle)</strong>.
+    </p>
+
+    <div class="field">
+      <label for="short-name-input">Short name</label>
+      <input type="text" id="short-name-input" value="#(shortNameOverride)"
+             placeholder="#if(shortNameFromEnvironment):#(shortNameFromEnvironment)#else:e.g. SVPB#endif">
+      <p class="source">
+        Put before “TNG” in page titles, the header and footers.
+        #if(shortNameSource == "admin"):
+          Set on this page; it overrides <code>ORG_SHORT_NAME</code> in <code>.env</code>. Clear the box and save to go back to that.
+        #elseif(shortNameSource == "environment"):
+          From <code>ORG_SHORT_NAME</code> in <code>.env</code>. Saving a value here overrides it.
+        #else:
+          Not set, so pages say just “TNG”. Set <code>ORG_SHORT_NAME</code> in <code>.env</code>, or save a value here.
+        #endif
+      </p>
+    </div>
+
+    <div class="field">
+      <label for="name-input">Full name</label>
+      <input type="text" id="name-input" value="#(nameOverride)"
+             placeholder="#if(nameFromEnvironment):#(nameFromEnvironment)#else:e.g. Silicon Valley Pipe Band#endif">
+      <p class="source">
+        Shown on the sign-in page.
+        #if(nameSource == "admin"):
+          Set on this page; it overrides <code>ORG_NAME</code> in <code>.env</code>. Clear the box and save to go back to that.
+        #elseif(nameSource == "environment"):
+          From <code>ORG_NAME</code> in <code>.env</code>. Saving a value here overrides it.
+        #else:
+          Not set. Set <code>ORG_NAME</code> in <code>.env</code>, or save a value here.
+        #endif
+      </p>
+    </div>
+
+    <button class="btn" id="names-save" onclick="saveNames()">Save names</button>
+    <div class="status" id="names-status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Artwork</h2>
+    <p class="source" style="margin-bottom:1rem">
+      Each image is optional; without one, TNG's own is shown. Uploads may be at most
+      #(maxBytes). An SVG must be plain drawing: no script, event handlers, DOCTYPE, links
+      to other files, or editor metadata. If one is refused, the message says what to remove.
+    </p>
+
+    #for(row in slots):
+    <div class="slot">
+      <div class="preview#if(row.slot == "logo"): dark#endif">
+        <img src="#(row.url)" alt="#(row.label)" data-slot-preview="#(row.slot)">
+      </div>
+      <div class="slot-body">
+        <h3>#(row.label)</h3>
+        <p class="source">#(row.purpose) #(row.accepts).</p>
+        <p class="source">
+          #if(row.uploaded):
+            Uploaded #(row.format)<span class="when" data-iso="#(row.updatedISO)"></span>.
+          #else:
+            TNG’s built-in image.
+          #endif
+        </p>
+        <div class="slot-actions">
+          <input type="file" id="file-#(row.slot)" accept="#(row.acceptAttribute)">
+          <button class="btn" onclick="uploadArtwork('#(row.slot)')">Upload</button>
+          #if(row.uploaded):
+          <button class="btn secondary" onclick="removeArtwork('#(row.slot)')">Use TNG’s image</button>
+          #endif
+        </div>
+        <div class="status" id="status-#(row.slot)"></div>
+      </div>
+    </div>
+    #endfor
+  </div>
+</main>
+#endexport
+
+#export("scripts"):
+<script>
+'use strict';
+
+document.querySelectorAll('.when[data-iso]').forEach(el => {
+  const d = new Date(el.dataset.iso);
+  if (!isNaN(d)) el.textContent = ' on ' + d.toLocaleString();
+});
+
+async function reasonFrom(res) {
+  let reason = await res.text();
+  try { reason = JSON.parse(reason).reason || reason; } catch (_) {}
+  if (res.status === 413) reason = 'The file is too large; artwork may be at most 1 MB.';
+  return reason;
+}
+
+function report(status, text, isError) {
+  status.textContent = text;
+  status.classList.toggle('error', !!isError);
+}
+
+async function saveNames() {
+  const button = document.getElementById('names-save');
+  const status = document.getElementById('names-status');
+  button.disabled = true;
+  report(status, 'Saving…');
+  try {
+    const res = await fetch('/admin/org/names', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: document.getElementById('name-input').value,
+        shortName: document.getElementById('short-name-input').value,
+      }),
+    });
+    if (res.ok) {
+      report(status, 'Saved. Reloading…');
+      setTimeout(() => location.reload(), 800);
+    } else {
+      report(status, 'Could not save: ' + await reasonFrom(res), true);
+      button.disabled = false;
+    }
+  } catch (e) {
+    report(status, 'Request failed: ' + e.message, true);
+    button.disabled = false;
+  }
+}
+
+async function uploadArtwork(slot) {
+  const input = document.getElementById('file-' + slot);
+  const status = document.getElementById('status-' + slot);
+  const file = input.files[0];
+  if (!file) { report(status, 'Choose a file first.', true); return; }
+  if (file.size > 1048576) { report(status, 'The file is too large; artwork may be at most 1 MB.', true); return; }
+
+  report(status, 'Uploading…');
+  try {
+    const res = await fetch('/admin/org/artwork/' + slot, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    });
+    if (res.ok) {
+      report(status, 'Uploaded. Reloading…');
+      setTimeout(() => location.reload(), 800);
+    } else {
+      report(status, 'Refused: ' + await reasonFrom(res), true);
+    }
+  } catch (e) {
+    report(status, 'Request failed: ' + e.message, true);
+  }
+}
+
+async function removeArtwork(slot) {
+  const status = document.getElementById('status-' + slot);
+  report(status, 'Removing…');
+  try {
+    const res = await fetch('/admin/org/artwork/' + slot, { method: 'DELETE' });
+    if (res.ok) {
+      report(status, 'Removed. Reloading…');
+      setTimeout(() => location.reload(), 800);
+    } else {
+      report(status, 'Could not remove: ' + await reasonFrom(res), true);
+    }
+  } catch (e) {
+    report(status, 'Request failed: ' + e.message, true);
+  }
+}
+</script>
+#endexport
+
+#endextend

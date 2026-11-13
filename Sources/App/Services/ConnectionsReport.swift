@@ -30,14 +30,14 @@ enum ConnectionsReport {
 
     private static func githubStatus(_ app: Application) async -> ConnectionStatus {
         let hasSecret = !(Environment.get("GITHUB_WEBHOOK_SECRET") ?? "").isEmpty
-        let repoURL = Environment.get("SVPB_MUSIC_REPO_URL") ?? ""
+        let repoURL = GitService.repoURL()?.url ?? ""
         // The webhook secret cannot be tested from here — it is only exercised when GitHub
         // signs a delivery — so it is reported as configuration, next to a probe that can.
         let credential = hasSecret
             ? "Webhook secret set; repository read with the URL's own credentials"
             : "⚠ GITHUB_WEBHOOK_SECRET is not set: pushes cannot be verified"
         let remedy = """
-            Set SVPB_MUSIC_REPO_URL and GITHUB_WEBHOOK_SECRET in .env. The secret must match \
+            Set \(GitService.repoURLVariable) and GITHUB_WEBHOOK_SECRET in .env. The secret must match \
             the one in the repository's webhook settings on GitHub; generate one with \
             `openssl rand -hex 32`.
             """
@@ -46,7 +46,7 @@ enum ConnectionsReport {
             return ConnectionStatus(
                 id: "github", name: "GitHub", purpose: githubPurpose,
                 state: .unconfigured, detail: nil, credential: credential,
-                error: "SVPB_MUSIC_REPO_URL is not set",
+                error: "\(GitService.repoURLVariable) is not set",
                 authorizePath: nil, remedy: remedy)
         }
 

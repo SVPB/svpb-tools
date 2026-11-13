@@ -30,11 +30,17 @@ struct ConfigurationError: Error, CustomStringConvertible {
 /// run without a full `.env` file.
 private let commonEnvironmentVariables: [String] = [
     "GITHUB_WEBHOOK_SECRET",
-    "SVPB_MUSIC_REPO_URL",
+    GitService.repoURLVariable,
     "SLACK_BOT_TOKEN",
     "SLACK_SIGNING_SECRET",
     "SLACK_WEBHOOK_URL",
     "INITIAL_ADMIN_SLACK_USER_ID",
+]
+
+/// Required variables that have been renamed, mapped to the name each had before. The old
+/// name still satisfies the check, so an existing `.env` keeps working.
+private let legacyEnvironmentNames: [String: String] = [
+    GitService.repoURLVariable: GitService.legacyRepoURLVariable,
 ]
 
 /// Reads `ARTIFACT_DESTINATION` and checks that every variable this deployment needs is
@@ -48,7 +54,9 @@ func validateEnvironment(
     let destination = try DestinationKind.load(from: get)
     guard checkRequired else { return destination }
     for key in commonEnvironmentVariables + destination.requiredEnvironmentVariables {
-        guard get(key) != nil else {
+        // A variable renamed by #89 is present when either name is.
+        let names = [key] + (legacyEnvironmentNames[key].map { [$0] } ?? [])
+        guard names.contains(where: { get($0) != nil }) else {
             throw ConfigurationError.missingEnvironmentVariable(key)
         }
     }
@@ -110,6 +118,9 @@ public func configure(_ app: Application) async throws {
 
     // ── Templating ─────────────────────────────────────────────────────────
     app.views.use(.leaf)
+    // `#org("site")` and friends: the organisation's names, without every controller
+    // putting them in its context (#89).
+    app.leaf.tags[OrgTag.name] = OrgTag()
 
     // ── Database ───────────────────────────────────────────────────────────
     // Tests get a private in-memory database: running them against the
@@ -126,6 +137,11 @@ public func configure(_ app: Application) async throws {
     // ── Migrations ─────────────────────────────────────────────────────────
     addMigrations(app)
     try await app.autoMigrate()
+
+    // ── Organisation ───────────────────────────────────────────────────────
+    // After the migrations: an admin's names are in `settings` (#89).
+    app.orgProfile = OrgProfile(try await OrgProfile.resolve(on: app.db).names)
+    app.defaultArtwork = try OrgArtwork.Defaults.load(fromResources: app.directory.resourcesDirectory)
 
     // ── Services ───────────────────────────────────────────────────────────
     initServices(app, destination: destination)
@@ -185,6 +201,8 @@ private func addMigrations(_ app: Application) {
     app.migrations.add(StampExistingSessions())
     // box_uploads → binder_uploads: nothing in the record is specific to Box (#85).
     app.migrations.add(RenameBoxUploads())
+    // The organisation's uploaded artwork (#89).
+    app.migrations.add(CreateOrgAsset())
 }
 
 // MARK: - Service initialisation
@@ -197,8 +215,15 @@ private func initServices(_ app: Application, destination kind: DestinationKind)
 
     let musicWorkspacePath = Environment.get("MUSIC_WORKSPACE_PATH") ?? "./music"
 
+    let repo = GitService.repoURL()
+    if let repo, repo.variable == GitService.legacyRepoURLVariable {
+        app.logger.warning("""
+            [config] \(GitService.legacyRepoURLVariable) is deprecated; rename it to \
+            \(GitService.repoURLVariable) in .env (#89)
+            """)
+    }
     let gitService = GitService(
-        repoURL: Environment.get("SVPB_MUSIC_REPO_URL") ?? "",
+        repoURL: repo?.url ?? "",
         workspaceBase: URL(fileURLWithPath: musicWorkspacePath, isDirectory: true)
     )
     app.gitService = gitService

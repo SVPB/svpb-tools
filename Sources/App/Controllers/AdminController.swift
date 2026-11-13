@@ -84,6 +84,8 @@ struct AdminController: RouteCollection {
             let currentUser: String
             /// Read-only: which music repository the branches below came from.
             let musicRepo: String?
+            /// Its name, for "Push to … to trigger the first build" (#89).
+            let musicRepoName: String?
             /// Where a rebuild publishes, for the Rebuild button's wording (#87).
             let destinationName: String
         }
@@ -106,6 +108,7 @@ struct AdminController: RouteCollection {
             branchNames: branches.map(\.name),
             currentUser: req.authenticatedUser?.displayName ?? req.authenticatedUser?.slackUserId ?? "",
             musicRepo: req.application.gitService.configuredRepoURL,
+            musicRepoName: req.application.gitService.repoName,
             destinationName: req.application.artifactDestination.displayName
         )
         return try await req.view.render("admin/index", ctx)
