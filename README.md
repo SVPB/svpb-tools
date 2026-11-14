@@ -1,9 +1,11 @@
 # SVPB Tools — Next Generation (TNG)
 
-A self-contained web service that automates sheet music distribution for the
-[Silicon Valley Pipe Band](https://siliconvalleypipeband.org). When a musician pushes updated ABC notation to
-GitHub, TNG converts it to PDF in-process, assembles the band's official binders, and uploads
-those to the band's Box folder, then notifies Slack. Band members can also use the built-in binder
+A self-contained web service that automates sheet music distribution for a pipe band. It was
+written for the [Silicon Valley Pipe Band](https://siliconvalleypipeband.org), and any band can run
+its own server: the name and artwork it shows are configurable (see
+[Organisation name and artwork](#organisation-name-and-artwork)). When a musician pushes updated ABC
+notation to GitHub, TNG converts it to PDF in-process, assembles the band's official binders, and
+uploads those to the band's Box folder, then notifies Slack. Band members can also use the built-in binder
 builder to generate a personalised PDF containing only the parts they need, with page numbers that
 reflect their own binder.
 
@@ -17,7 +19,7 @@ documentation.
 
 ## How it works
 
-1. A musician pushes a change to the `svpb-music` GitHub repository.
+1. A musician pushes a change to the band's music repository on GitHub (SVPB's is `svpb-music`).
 2. GitHub sends a webhook to the TNG server.
 3. TNG pulls the repository and converts every changed ABC file to PDF in-process
    (via CeolKit → SVGPDFKit). These per-tune PDFs are intermediates; they stay on the server.
@@ -32,7 +34,7 @@ to Box.
 
 The pipe major can use the binder constructor page to write `binders.yaml` for the band's
 official binders, and to read an existing one back in and edit it; the result is committed to
-`binders.yaml` in `svpb-music`.
+`binders.yaml` in the music repository.
 
 ---
 
@@ -49,7 +51,7 @@ and targets. The branch it is committed to *is* the year, so the file carries no
 
 binders:
   - name: "2026 Band Binder"          # shown in the UI and the build log
-    output: 2026_binder.pdf           # filename in Box, under pipe_music/<branch>/
+    output: 2026_binder.pdf           # filename in Box, under <BOX_FOLDER_ID>/<branch>/
     pack: true                        # optional: let short tunes share a sheet
     sections:
       - title: ["SVPB Music", "2026"] # a section with no tunes is a title page on its own:
@@ -83,7 +85,8 @@ binders:
 ```
 
 - **Only the binders listed here are uploaded to Box**, each under its `output` filename, into
-  the year folder for the branch (`pipe_music/2026/2026_binder.pdf`).
+  the year folder for the branch (for SVPB, whose folder is `pipe_music`:
+  `pipe_music/2026/2026_binder.pdf`).
 - `tune` is the tune's slug: the `.abc` filename without its extension.
 - `parts` is optional. Omit it to include every part of the tune, which is what the official
   binder normally wants.
@@ -172,12 +175,16 @@ each value before starting the stack.
 | `LOG_LEVEL` | Optional. How much the server logs; defaults to `info`. `notice` or above hides build progress and sign-ins from `docker compose logs` |
 | `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
 | `GITHUB_WEBHOOK_SECRET` | Shared secret configured in the GitHub webhook settings |
-| `SVPB_MUSIC_REPO_URL` | HTTPS clone URL of the `svpb-music` repository. The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped |
-| `ARTIFACT_DESTINATION` | Optional. Where official binders are published: `box`, the default. Only that destination's variables are required — see [Publishing destination](#publishing-destination) |
+| `ORG_MUSIC_REPO_URL` | HTTPS clone URL of the band's music repository (SVPB's is `svpb-music`). The running server reports which one it is on the admin dashboard and in `GET /health` (`music_repo`), with any credentials in the URL stripped. Its old name, `SVPB_MUSIC_REPO_URL`, is still read when this is unset, with a warning in the log |
+| `ORG_NAME` / `ORG_SHORT_NAME` | Optional. The band's full and short names, e.g. `Silicon Valley Pipe Band` and `SVPB`. Unset, pages just say "TNG". Both can be changed on the admin **Organisation** page — see [Organisation name and artwork](#organisation-name-and-artwork) |
+| `ARTIFACT_DESTINATION` | Optional. Where official binders are published: `box`, the default, or `google_drive`. Only that destination's variables are required — see [Publishing destination](#publishing-destination) |
 | `BOX_CLIENT_ID` | Box OAuth2 application client ID |
 | `BOX_CLIENT_SECRET` | Box OAuth2 application client secret |
 | `BOX_REFRESH_TOKEN` | Box OAuth2 refresh token |
-| `BOX_FOLDER_ID` | ID of the top-level `pipe_music` Box folder; TNG creates year subfolders inside it automatically |
+| `BOX_FOLDER_ID` | ID of the top-level Box folder binders go into (SVPB's is `pipe_music`); TNG creates year subfolders inside it automatically |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud OAuth client, when publishing to Google Drive |
+| `GOOGLE_DRIVE_FOLDER_NAME` | Name of the folder TNG creates in Google Drive and publishes into (SVPB's is `pipe_music`) |
+| `GOOGLE_REFRESH_TOKEN` | Optional. Seeds the Google Drive refresh token; normally obtained from the Connections page |
 | `SLACK_BOT_TOKEN` | Bot token (`xoxb-…`) for sending login links and build notifications |
 | `SLACK_SIGNING_SECRET` | Signing secret for verifying inbound Events API payloads |
 | `SLACK_WEBHOOK_URL` | Incoming Webhook URL for posting build notifications |
@@ -191,6 +198,31 @@ each value before starting the stack.
 | `BINDER_RETENTION_DAYS` | Optional. Days a personal binder stays on the server after it is built; defaults to 14, and can be changed on the admin **Binder cache** page |
 | `SESSION_IDLE_DAYS` | Optional. Days a sign-in lasts without being used; defaults to 7 |
 | `SESSION_MAX_DAYS` | Optional. Days a sign-in lasts at most, however often it is used; defaults to 30, and must be at least `SESSION_IDLE_DAYS` |
+
+### Organisation name and artwork
+
+A server shows its band's name and artwork, set on the admin **Organisation** page
+(`/admin/org`). With none set it looks like plain TNG: pages are titled "TNG", and the logo and
+icons are TNG's own pair of beamed notes.
+
+- **Names.** `ORG_SHORT_NAME` goes before "TNG" in page titles, the header and footers ("SVPB
+  TNG"); `ORG_NAME` is shown on the sign-in page. Set them in `.env`, or on the Organisation
+  page, which overrides `.env` and says where each value in force came from. Clearing a name on
+  the page and saving goes back to `.env`'s value.
+- **Artwork.** Three optional uploads, each at most 1 MB: the header logo (SVG or PNG, shown
+  on the dark header), the favicon (SVG, PNG or ICO) and the touch icon iOS uses for a
+  home-screen bookmark (PNG, 180×180). They are stored in the database, so the nightly
+  backup carries them. Removing one goes back to TNG's image.
+- **SVG uploads must be plain drawing.** One with script, event handlers, a DOCTYPE, links
+  to other files, or elements outside a short list of drawing elements (which excludes
+  Inkscape's editor metadata — save as *Plain SVG*) is refused, and the message names what
+  to remove. Nothing is rewritten: what is stored is exactly what was uploaded.
+  - **From Illustrator**, use **File → Export → Export As… → SVG** and set **Styling** to
+    **Presentation Attributes**. The default, Internal CSS, puts the colours in a `<style>`
+    element, which is refused. Avoid the older **Save As… → SVG** dialog: it writes a
+    `DOCTYPE`, which is refused too.
+
+SVPB's artwork is in [`Brand/`](Brand/README.md), ready to upload.
 
 ---
 
@@ -498,7 +530,7 @@ Digital Ocean's droplet **Backups** add-on (weekly or daily images of the whole 
 
 ### GitHub webhook
 
-In the `svpb-music` repository settings on GitHub, add a webhook:
+In the music repository's settings on GitHub (SVPB's is `svpb-music`), add a webhook:
 
 - **Payload URL**: `https://<your-domain>/webhook/github`
 - **Content type**: `application/json`
@@ -517,7 +549,8 @@ identity. All three are configured in the same app.
 **Create the app:**
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App → From
-   scratch**. Name it "SVPB Music Bot" and choose the SVPB workspace.
+   scratch**. Name it after the band (SVPB's is "SVPB Music Bot") and choose the band's
+   workspace. The app's name and icon are set in Slack, not in TNG.
 
 **Bot token and scopes:**
 
@@ -560,14 +593,15 @@ identity. All three are configured in the same app.
 ### Publishing destination
 
 TNG publishes each branch's official binders to one destination, named by
-`ARTIFACT_DESTINATION` in `.env`. Today the only one is `box`, which is also what an unset
-value means. The server checks at startup that the chosen destination's variables are set
+`ARTIFACT_DESTINATION` in `.env`: `box`, which is also what an unset value means, or
+`google_drive`. The server checks at startup that the chosen destination's variables are set
 and asks for no other destination's; an unrecognised value stops it, naming the accepted
 values. The admin **Connections** page shows the chosen destination's card.
 
 | Value | Set up with |
 |---|---|
 | `box` | [Box OAuth2](#box-oauth2) |
+| `google_drive` | [Google Drive OAuth2](#google-drive-oauth2) |
 
 **Switching destinations moves nothing.** Change `ARTIFACT_DESTINATION`, fill in the new
 destination's group in `.env`, and run `docker compose up -d tng`. Binders already published
@@ -595,7 +629,8 @@ Two different Box logins take part, and they do different jobs:
   [Box community thread](https://community.box.com/sdks-and-tools-7/box-developers-page-can-t-save-any-configuration-35195),
   which may need a community-forum login, a third kind of Box account.)
 - **The folder owner's account grants access.** On Box's **Grant Access** screen, log in as the
-  ordinary box.com user with admin access to `pipe_music`, not as the developer account. The token
+  ordinary box.com user with admin access to the `BOX_FOLDER_ID` folder (SVPB's `pipe_music`),
+  not as the developer account. The token
   TNG receives acts as that user, so the Connections check succeeds only if that user can see
   `BOX_FOLDER_ID`. It does not need to be a developer account, and no enterprise admin has to
   approve an app owned by another account.
@@ -613,7 +648,7 @@ the current app, the way out is the same: create a new app and follow
 1. Logged in as the **developer account**, go to the
    [Box Developer Console](https://app.box.com/developers/console) and click **Create New App**.
 2. Choose **Custom App**, then **User Authentication (OAuth 2.0)**.
-3. Give the app a name (e.g. "SVPB Music Server") and click **Create App**.
+3. Give the app a name (SVPB's is "SVPB Music Server") and click **Create App**.
 4. In the app's **Configuration** tab:
    - Note the **Client ID** and **Client Secret** — these are `BOX_CLIENT_ID` and
      `BOX_CLIENT_SECRET`.
@@ -633,7 +668,7 @@ Box OAuth2 requires completing an authorization flow once. Sign in to the dashbo
 1. Check the **Box redirect URI** shown at the bottom of the page against the one registered in
    the Box Developer Console. They must match exactly, or Box refuses the redirect.
 2. Press **Authorise Box**. A window opens at Box — log in as the **folder owner's account** (the
-   Box user with admin access to `pipe_music`, not the developer account) and click
+   Box user with admin access to the `BOX_FOLDER_ID` folder, not the developer account) and click
    **Grant Access**.
 3. The window closes itself and the page reloads. Box should now read **working**, naming the
    folder it is uploading into.
@@ -696,18 +731,93 @@ the developer account, add the server's redirect URI, and use the Connections pa
 
 **Finding the Box folder ID:**
 
-Navigate to the **`pipe_music`** folder in [box.com](https://box.com) — this is the top-level
-folder that contains the year folders (e.g. `2025`, `2026`). The folder ID is the number at
+Navigate to the band's top-level music folder in [box.com](https://box.com) — SVPB's is
+**`pipe_music`** — the folder that contains the year folders (e.g. `2025`, `2026`). The folder ID is the number at
 the end of the URL: `https://app.box.com/folder/`**`123456789`**. Set this as `BOX_FOLDER_ID`.
 
 TNG will automatically create a subfolder for each git branch (year) the first time it builds
 that branch, and will upload the assembled binders into the appropriate year folder. For example,
-after a push to the `2026` branch, `pipe_music/2026/2026_binder.pdf` appears in Box. The Gen.1
+after a push to the `2026` branch, `2026/2026_binder.pdf` appears in that folder in Box. The Gen.1
 `full_band`, `g3`, and `g4` subdirectory structure is not used; the binders for a year sit
 directly in the year folder.
 
 Nothing else is uploaded: per-tune PDFs are build intermediates kept on the server for the binder
 builder, and personalised binders are downloaded straight from TNG.
+
+### Google Drive OAuth2
+
+With `ARTIFACT_DESTINATION=google_drive`, TNG publishes into a folder in Google Drive, with a
+year folder per branch exactly as for Box. A binder published again replaces the file's content
+as a new revision of the same file, so links people have saved keep working.
+
+**What TNG can see.** TNG asks for the `drive.file` scope only: it can see and change the files it
+created, and nothing else in the account. That is why **TNG creates its own folder** rather than
+being pointed at one: on its first publish it makes a folder named `GOOGLE_DRIVE_FOLDER_NAME` at
+the top of the authorising account's My Drive, and remembers its ID. Share that folder with the
+band from Drive; the Connections page links to it. Renaming or moving it in Drive is fine.
+
+`drive.file` is one of Google's *non-sensitive* scopes, and an app that uses only non-sensitive
+scopes does not need Google's app verification
+([Drive API scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth),
+[OAuth app verification](https://support.google.com/cloud/answer/13463073)). Full Drive access
+(`drive`) is *restricted* and would need a third-party security assessment, which is why TNG does
+not ask for it.
+
+**Before you start: use a band account.** The files TNG creates belong to the Google account that
+authorises it. Authorise as an account the band owns, not a member's personal one, so the binders
+do not go with that member.
+
+**Creating the Google Cloud project and client:**
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), signed in as the band account,
+   create a project (e.g. "TNG").
+2. **APIs & Services → Library**: find **Google Drive API** and press **Enable**.
+3. **Google Auth Platform → Branding** (the OAuth consent screen): user type **External**; app
+   name, support email and developer contact. Add the server's domain under authorised domains.
+4. **Data Access**: add the scope `https://www.googleapis.com/auth/drive.file` and nothing else.
+5. **Audience**: press **Publish app** to move it from *Testing* to *In production*. This is not
+   optional. Google expires the refresh tokens of an app in Testing after 7 days
+   ([OAuth 2.0, refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)),
+   which the daily renewal cannot prevent. With only a non-sensitive scope, publishing does not
+   start a verification review.
+6. **Clients → Create client**: type **Web application**. Under **Authorised redirect URIs** add
+   `https://<your-domain>/google-drive-callback`, the exact value shown at the bottom of TNG's
+   Connections page. Create it, and put the **Client ID** and **Client secret** in `.env` as
+   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+**What the consent screen shows.** Until the app's branding is verified, Google shows the app's
+domain rather than its name and logo, and it may say that Google hasn't verified the app.
+Google's help pages tie that warning to apps in Testing and do not settle whether a production app
+with only non-sensitive scopes sees it. If it appears, choose **Advanced → Go to … (unsafe)**: the
+grant is to your own band's server. The permission listed is to see, edit, create and delete only
+the Google Drive files that TNG uses.
+
+**Authorizing TNG:**
+
+1. Set `ARTIFACT_DESTINATION=google_drive`, the `GOOGLE_*` values and `GOOGLE_DRIVE_FOLDER_NAME`
+   in `.env`, and run `docker compose up -d tng`.
+2. On **Connections** (`/admin/connections`), check the redirect URI at the bottom against the
+   one registered on the client, then press **Authorise Google Drive**, sign in as the band
+   account, and allow access.
+3. Google Drive should read **working**, signed in as the band account. The folder does not exist
+   yet: the first publish creates it. Use **Rebuild** on the admin dashboard to publish straight
+   away, then share the folder from Drive.
+
+Google keeps the same refresh token rather than issuing a new one on each refresh, and expires one
+only after **six months unused**. TNG still renews daily (`DESTINATION_TOKEN_REFRESH_HOURS`), which
+also checks that Drive works and tells Slack when it stops. A token can also stop working if the
+account removes TNG's access, or if the account authorises the same client more than 100 times.
+Press **Re-authorise Google Drive** for either.
+
+**If the folder is deleted.** Publishing fails with an error naming the folder, and the Connections
+page shows it. TNG does not quietly make a new folder, because the band has shared the old one and
+a new one would be shared with nobody. Restore the folder from Drive's trash if you can. Otherwise
+delete the stored ID, and the next publish creates a new folder to share:
+
+```sh
+sqlite3 "$TNG_STATE_DIR/data/tng.sqlite" \
+  "DELETE FROM settings WHERE key = 'google_drive.root_folder_id'"
+```
 
 ---
 

@@ -121,7 +121,7 @@ struct BoxAuthCommand: AsyncCommand {
         context.console.print("")
         context.console.print("  \(authURL)")
         context.console.print("")
-        context.console.print("Log in as the Box user who owns the pipe_music folder,")
+        context.console.print("Log in as the Box user who owns the BOX_FOLDER_ID folder,")
         context.console.print("then click Grant Access.")
         context.console.print("")
         context.console.print("Waiting for callback on \(redirectURI) …")

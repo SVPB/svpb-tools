@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):Binder Constructor — SVPB TNG#endexport
+#export("title"):Binder Constructor — #org("site")#endexport
 
 #export("styles"):
 #extend("partials/tune-selector-styles")

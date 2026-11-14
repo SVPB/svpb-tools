@@ -61,7 +61,7 @@
 <body>
 
 <header>
-  <h1><img src="/img/thistle.svg" width="24" height="35" alt="">SVPB TNG</h1>
+  <h1><img src="/img/logo" alt="">#org("site")</h1>
   <nav>
     <div class="nav-item">
       <a href="/">Home</a>
@@ -81,6 +81,7 @@
         <a href="/admin">Builds</a>
         <a href="/admin/connections">Connections</a>
         <a href="/admin/binders">Binder cache</a>
+        <a href="/admin/org">Organisation</a>
       </div>
     </div>
     #endif
@@ -97,7 +98,7 @@
 
 #import("content")
 
-<footer>SVPB TNG v#(appVersion)</footer>
+<footer>#org("site") v#(appVersion)</footer>
 
 #import("scripts")
 </body>

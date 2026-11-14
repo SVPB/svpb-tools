@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):Binder cache — SVPB TNG#endexport
+#export("title"):Binder cache — #org("site")#endexport
 
 #export("styles"):
 <style>

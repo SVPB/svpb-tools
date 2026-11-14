@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-13
+
+### Added
+
+#### Google Drive as a publishing destination (#88)
+
+- `ARTIFACT_DESTINATION=google_drive` publishes binders to Google Drive, with a year folder per
+  branch, as for Box. A binder published again becomes a new revision of the same file, so saved
+  links keep working. It needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+  `GOOGLE_DRIVE_FOLDER_NAME`, and is authorised from the Connections page. See README.md
+  § Google Drive OAuth2.
+- TNG asks only for the `drive.file` scope, so it creates its own folder on the first publish,
+  remembers it as `google_drive.root_folder_id`, and the band shares it from Drive. If that folder
+  is deleted or trashed, publishing fails with an error naming it, rather than making a new one
+  shared with nobody.
+- Destination cards on the Connections page can link to the place binders are published.
+
+#### The organisation's name and artwork are configurable (#89)
+
+- A new admin page, **Organisation** (`/admin/org`), sets the band's short and full names and
+  uploads its header logo, favicon and touch icon. `ORG_SHORT_NAME` and `ORG_NAME` in `.env`
+  give the starting names; the page overrides them and says where each value in force came
+  from. The short name goes before "TNG" in page titles, the header and footers; the full name
+  is on the sign-in page.
+- Artwork is stored in the database, so the nightly backup carries it. Uploads are at most
+  1 MB: the logo SVG or PNG, the favicon SVG, PNG or ICO, the touch icon a 180×180 PNG. An SVG
+  is refused, with the reason, if it has script, event handlers, a DOCTYPE, links outside the
+  file, or elements other than plain drawing ones; it is never rewritten. Artwork is served
+  with a sandboxing `Content-Security-Policy` and `X-Content-Type-Options: nosniff`.
+- With nothing set, the server looks like plain TNG: pages say "TNG", and the logo and icons
+  are TNG's own neutral mark.
+
+### Changed
+
+#### SVPB's name and artwork are no longer built in (#89)
+
+- **After deploying, the production site looks neutral until it is set up again.** This is
+  intended. Set `ORG_SHORT_NAME=SVPB` and `ORG_NAME=Silicon Valley Pipe Band` in the droplet's
+  `.env` (or on the Organisation page), and upload the thistle files from `Brand/web/`, as
+  `Brand/README.md` describes.
+- The thistle files have moved from `Public/` to `Brand/web/`. `/favicon.ico`, `/favicon.svg`,
+  `/apple-touch-icon.png` and the header logo, now `/img/logo`, are served by routes.
+- `SVPB_MUSIC_REPO_URL` is renamed `ORG_MUSIC_REPO_URL`. The old name is still read when the
+  new one is unset, with a warning in the log, so the production `.env` needs no change on the
+  day this deploys.
+- With no builds yet, the admin dashboard names the configured repository to push to, rather
+  than `svpb-music`.
+
 ## [0.9.0] - 2026-11-13
 
 ### Changed

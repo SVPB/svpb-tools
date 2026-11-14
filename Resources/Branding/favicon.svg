@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TNG">
+  <title>TNG</title>
+  <rect width="64" height="64" rx="12" fill="#1A1A2E"/>
+  <g fill="#FFFFFF" transform="translate(10.5 5) scale(0.84)">
+    <ellipse cx="10" cy="51" rx="8.5" ry="6.5" transform="rotate(-20 10 51)"/>
+    <ellipse cx="36" cy="45" rx="8.5" ry="6.5" transform="rotate(-20 36 45)"/>
+    <rect x="15.5" y="14" width="4" height="37"/>
+    <rect x="41.5" y="8" width="4" height="37"/>
+    <polygon points="15.5,12 45.5,4 45.5,12 15.5,20"/>
+  </g>
+</svg>

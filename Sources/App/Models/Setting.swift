@@ -2,7 +2,8 @@ import Fluent
 import Vapor
 
 /// A single piece of server state that outlives the process but does not belong to
-/// any of the domain models — currently the rotated Box refresh token.
+/// any of the domain models — the destinations' OAuth tokens, for instance, and values an
+/// admin page overrides `.env` with (#83, #89).
 ///
 /// The `.env` file seeds configuration; this table holds the values the server itself
 /// changes at runtime. A Box refresh token is the motivating case: Box issues a new one
@@ -16,9 +17,30 @@ final class Setting: Model, @unchecked Sendable {
     /// The key of the Box refresh token, rotated on every token refresh.
     static let boxRefreshToken = "box.refresh_token"
 
+    /// The key of the Google Drive refresh token (#88). Google does not rotate it, so it is
+    /// written when an authorisation issues one, not on every refresh.
+    static let googleDriveRefreshToken = "google_drive.refresh_token"
+
+    /// When the Google Drive credential was last used to renew the access token, as
+    /// ISO 8601. Google's six months of disuse count from here, and since the refresh
+    /// token itself rarely changes, its row's timestamp cannot say (#88).
+    static let googleDriveTokenRenewedAt = "google_drive.token_renewed_at"
+
+    /// The ID of the root folder TNG created in Google Drive on its first publish (#88).
+    /// With only the `drive.file` scope TNG cannot see a folder it did not make, so it
+    /// makes its own and remembers it here.
+    static let googleDriveRootFolderID = "google_drive.root_folder_id"
+
     /// The key of the binder retention period in days, when an admin has set one (#83).
     /// Overrides `BINDER_RETENTION_DAYS`.
     static let binderRetentionDays = "binders.retention_days"
+
+    /// The organisation's long name, when an admin has set one (#89). Overrides `ORG_NAME`.
+    static let orgName = "org.name"
+
+    /// The organisation's short name, when an admin has set one (#89). Overrides
+    /// `ORG_SHORT_NAME`.
+    static let orgShortName = "org.short_name"
 
     // MARK: - Fields
 
@@ -46,6 +68,47 @@ final class Setting: Model, @unchecked Sendable {
     /// The stored value for `key`, or `nil` when nothing has been stored under it.
     static func value(for key: String, on db: any Database) async throws -> String? {
         try await Setting.find(key, on: db)?.value
+    }
+
+    /// Where a value with an admin override came from, for the page that sets it.
+    enum Source: String, Encodable, Sendable {
+        /// Set from an admin page, and stored in `settings`.
+        case admin
+        /// From the environment (`.env`).
+        case environment
+        /// Neither.
+        case builtIn
+    }
+
+    /// A value an admin can override: the stored setting under `key`, else the environment
+    /// variable `environmentKey`, else `nil` with source ``Source/builtIn``.
+    ///
+    /// Blank values, stored or in the environment, count as unset. Values are trimmed.
+    static func layered(
+        _ key: String,
+        environmentKey: String,
+        on db: any Database,
+        environment: (String) -> String? = Environment.get
+    ) async throws -> (value: String?, source: Source) {
+        if let stored = nonBlank(try await value(for: key, on: db)) {
+            return (stored, .admin)
+        }
+        if let fromEnvironment = nonBlank(environment(environmentKey)) {
+            return (fromEnvironment, .environment)
+        }
+        return (nil, .builtIn)
+    }
+
+    /// `raw` trimmed, or `nil` when that leaves nothing.
+    static func nonBlank(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// Removes whatever is stored under `key`; a no-op when nothing is.
+    static func clear(_ key: String, on db: any Database) async throws {
+        try await Setting.find(key, on: db)?.delete(on: db)
     }
 
     /// Stores `value` under `key`, replacing whatever was there.

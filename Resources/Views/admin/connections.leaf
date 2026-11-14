@@ -1,6 +1,6 @@
 #extend("layouts/public"):
 
-#export("title"):Connections — SVPB TNG#endexport
+#export("title"):Connections — #org("site")#endexport
 
 #export("styles"):
 <style>
@@ -47,6 +47,7 @@
     <p class="purpose">#(connection.purpose)</p>
 
     #if(connection.detail):<p class="detail">#(connection.detail)</p>#endif
+    #if(connection.link):<p class="detail"><a href="#(connection.link)" target="_blank" rel="noopener">Open in #(connection.name)</a></p>#endif
     #if(connection.credential):<p class="credential">#(connection.credential)</p>#endif
     #if(connection.error):<p class="error">#(connection.error)</p>#endif
 

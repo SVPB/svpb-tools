@@ -26,4 +26,5 @@ public func routes(_ app: Application) throws {
     try app.register(collection: BinderCacheController())
     try app.register(collection: CatalogueController())
     try app.register(collection: BinderController())
+    try app.register(collection: OrgController())
 }
