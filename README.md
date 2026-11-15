@@ -170,7 +170,7 @@ each value before starting the stack.
 | Variable | Description |
 |---|---|
 | `DOMAIN` | Public hostname, e.g. `musictools.siliconvalleypipeband.com` — used by Caddy for TLS; unless it is unset or names `localhost`, `127.0.0.1` or `::1`, the sign-in cookie is sent only over HTTPS |
-| `TNG_IMAGE_TAG` | Optional. Which published image to run: `develop`, a release version, or unset for `latest` |
+| `TNG_IMAGE_TAG` | Optional. Which published image to run: a release version such as `0.10.0` to roll back, or unset for `latest`, the newest release |
 | `VAPOR_ENV` | Optional. The published image runs as `production`; nothing needs to change it |
 | `LOG_LEVEL` | Optional. How much the server logs; defaults to `info`. `notice` or above hides build progress and sign-ins from `docker compose logs` |
 | `TNG_STATE_DIR` | Optional. Host directory holding the database and Caddy's certificates. Defaults to `./state` in the checkout; on a server, point it at a mount that outlives the machine — see [Persistent state](#persistent-state) |
@@ -823,20 +823,22 @@ sqlite3 "$TNG_STATE_DIR/data/tng.sqlite" \
 
 ## Updating
 
-Pushing to `main` publishes a new `latest` image automatically. To move the server onto it,
-run from the checkout on the server:
+The server runs releases. Tagging a release (see [Releasing](#releasing)) publishes a new
+`latest` image. To move the server onto it, run from the checkout on the server:
 
 ```sh
 Scripts/deploy.sh
 ```
 
-It waits for the publish workflow for the tag's commit to succeed — pulling a mutable tag like
-`latest` before then silently fetches the previous build — then pulls, recreates the containers,
-waits for the healthcheck, prints the commit now running, and prunes the superseded image. It exits
-non-zero if any of that fails. `Scripts/deploy.sh --no-wait` skips the build gate.
+It checks out the release being deployed, leaving the checkout detached at its tag, so that
+`docker-compose.yml`, the `Caddyfile` and the scripts match the image. It then waits for the
+publish workflow for the tag's commit to succeed — pulling a mutable tag like `latest` before then
+silently fetches the previous build — then pulls, recreates the containers, waits for the
+healthcheck, prints the commit now running, and prunes the superseded image. It exits non-zero if
+any of that fails. `Scripts/deploy.sh --no-wait` skips the build gate.
 
-Pushes to `develop` publish a `develop` image too. It is for trying out unreleased work on a
-developer's own machine; the production server runs only what has been released to `main`.
+Every merge to `main` publishes a `main` image too. It holds merged but unreleased work, for trying
+out on a developer's own machine; the production server runs only releases.
 
 To see what is running at any other time, look at the page footer or ask the server: images
 built by CI report their commit in `GET /health`, both as `commit` and appended to `version`
@@ -850,7 +852,8 @@ docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revisi
 
 Persistent state lives under `TNG_STATE_DIR` and is preserved across updates; no data is lost.
 
-To roll back, set `TNG_IMAGE_TAG` in `.env` to a release version and run the script again.
+To roll back, set `TNG_IMAGE_TAG` in `.env` to a release version and run the script again; it
+checks out that release's tag. To go forward again, unset it and re-run.
 Superseded images are pruned on every deploy, so the local image cache is never a rollback target.
 
 The restart takes a few seconds, during which Caddy has nothing to proxy to. GitHub does not retry
@@ -862,3 +865,30 @@ To build the image on the server instead of pulling it — needs ~4 GB of RAM an
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
+
+---
+
+## Releasing
+
+Work happens on short-lived branches off `main`, named `feature/<slug>_<issue>`, and merges back
+into `main` by pull request. A fix for production is an ordinary branch like any other. A merge to
+`main` is integration, not a release: it publishes the `main` image, and production does not
+change.
+
+A release is a deliberate event that bundles changes which make sense together. Between releases,
+each PR adds its entry to the `[Unreleased]` section of `CHANGELOG.md`. To cut a release:
+
+1. On a branch off `main`, rename `[Unreleased]` in `CHANGELOG.md` to `[X.Y.Z] - <date>`, with a
+   new empty `[Unreleased]` above it, and summarise what the release is. Bump
+   `AppVersion.release` in `Sources/App/DTOs/HealthResponse.swift` to match.
+2. Open a PR into `main`. Its description can close the issues the release completes.
+3. Once it has merged and CI has passed, tag the merge commit and push the tag:
+
+   ```sh
+   git tag -a vX.Y.Z -m "Release X.Y.Z" <merge commit>
+   git push origin vX.Y.Z
+   ```
+
+   The tag publishes the `X.Y.Z` image and moves `latest` to it. Only a plain `vX.Y.Z` tag does
+   that.
+4. Deploy with `Scripts/deploy.sh`, as in [Updating](#updating).
