@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+#### `develop` is retired; `latest` is the newest release (#108)
+
+- Work branches off `main` and merges back by PR. A release is a `vX.Y.Z` tag on the merge of a
+  release PR; README.md § Releasing describes the steps.
+- **`latest` is now published only for a release tag,** not on every push to `main`. A merge to
+  `main` publishes the `main` image and nothing else, so it no longer reaches production on the
+  next `Scripts/deploy.sh`. Production leaves `TNG_IMAGE_TAG` unset, as before, and runs the
+  newest release.
+- `Scripts/deploy.sh` deploys the newest `vX.Y.Z` tag, or the pinned release, and leaves the
+  server's checkout detached at that tag instead of pulling `main`, so the compose file, the
+  `Caddyfile` and the scripts match the image.
+- The `develop` image is no longer published.
+
 ## [0.10.0] - 2026-11-13
 
 ### Added

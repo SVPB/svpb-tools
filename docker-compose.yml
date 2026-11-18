@@ -2,8 +2,8 @@ services:
 
   tng:
     # Images are built and published by .github/workflows/publish.yml.
-    # Set TNG_IMAGE_TAG in .env to pin a branch ("develop") or release ("0.2.0");
-    # it defaults to the latest build of the default branch.
+    # Set TNG_IMAGE_TAG in .env to pin a release ("0.2.0") for a rollback;
+    # it defaults to "latest", the newest release.
     image: ghcr.io/svpb/svpb-tools:${TNG_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env

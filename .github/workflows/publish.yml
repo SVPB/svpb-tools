@@ -4,14 +4,16 @@ name: Publish image
 # The droplet pulls from there — it never compiles Swift itself.
 #
 # Resulting tags:
-#   ghcr.io/svpb/svpb-tools:develop    every push to develop
-#   ghcr.io/svpb/svpb-tools:main       every push to main
-#   ghcr.io/svpb/svpb-tools:latest     pushes to the default branch only
+#   ghcr.io/svpb/svpb-tools:main       every push to main: integration, not a release
 #   ghcr.io/svpb/svpb-tools:0.2.0      pushes of a v0.2.0 tag
+#   ghcr.io/svpb/svpb-tools:latest     pushes of a release tag (vX.Y.Z) only
+#
+# `latest` is the newest release, and production runs it (#108). A merge to main
+# must never move it, or every merge would be one deploy.sh away from production.
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
@@ -35,15 +37,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Only a plain vX.Y.Z tag is a release. GitHub expressions have no regex,
+      # so the test is made here and passed to metadata-action as a flag.
+      - name: Is this a release?
+        id: release
+        run: |
+          if [[ "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Derive tags
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # metadata-action adds `latest` on its own for some tag types; this
+          # workflow decides it explicitly instead.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is_release }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

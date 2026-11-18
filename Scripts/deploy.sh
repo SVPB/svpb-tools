@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 #
-# Moves the running stack onto the latest published image.
+# Moves the running stack onto the newest release: the highest vX.Y.Z tag on
+# origin, whose image is published as `latest`. With TNG_IMAGE_TAG pinned in
+# .env, it moves onto that release instead.
 #
 # Run on the server, from anywhere inside the checkout:
 #
 #   Scripts/deploy.sh             wait for the image to finish publishing, then deploy
 #   Scripts/deploy.sh --no-wait   deploy whatever the registry holds right now
 #
-# The raw sequence is `git pull && docker compose pull && docker compose up -d`.
-# Each step below exists because that sequence fails silently in some way:
+# The raw sequence is `git checkout <release> && docker compose pull &&
+# docker compose up -d`. Each step below exists because that sequence fails
+# silently in some way:
 #
-#   1. Build gate. Branch tags (develop, main, latest) are mutable. Pulling while
+#   0. Checkout. The checkout supplies docker-compose.yml, the Caddyfile and the
+#      scripts, so it must match the image. It is left detached at the release
+#      being deployed, never at the tip of main, which may hold compose changes
+#      meant for the next release (#108).
+#   1. Build gate. Image tags such as latest and main are mutable. Pulling while
 #      the publish workflow is still running fetches the *previous* image with no
 #      error, so we wait for the workflow run for the commit the tag is about to
 #      point at, and refuse to deploy if it failed.
@@ -60,19 +67,33 @@ github_api() {
 
 # ── Which image, and which commit should it be? ──────────────────────────────
 
-# Pull first, so compose changes (including a new default tag) are in effect
-# before the image name is resolved.
-log "Updating checkout"
-git pull --ff-only
+log "Fetching from origin"
+# --force, so a tag that was moved on origin is moved here too.
+git fetch --quiet --tags --force origin
 
-IMAGE=$(docker compose config --images | grep "svpb-tools" | head -n1)
-[[ -n "$IMAGE" ]] || fail "could not resolve the $SERVICE image from docker compose config"
+# The image compose will run. TNG_IMAGE_TAG comes from .env, so this barely
+# depends on which commit is checked out; it is resolved again after checkout
+# in case the default in docker-compose.yml changed between releases.
+resolve_image() {
+    local image
+    image=$(docker compose config --images | grep "svpb-tools" | head -n1)
+    [[ -n "$image" ]] || fail "could not resolve the $SERVICE image from docker compose config"
+    echo "$image"
+}
+IMAGE=$(resolve_image)
 TAG=${IMAGE##*:}
 
 # Map the image tag back to the git ref whose push publishes it
 # (see the tag list at the top of .github/workflows/publish.yml).
 case "$TAG" in
-    latest)             REF=main;       REF_KIND=heads ;;
+    latest)
+        # The newest release. Only a plain vX.Y.Z tag is one, matching the test
+        # publish.yml uses to decide whether to move `latest`.
+        REF=$(git ls-remote --tags --refs origin 'v*' \
+            | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ { sub("refs/tags/", "", $2); print $2 }' \
+            | sort -V | tail -n1)
+        [[ -n "$REF" ]] || fail "no release tag (vX.Y.Z) on origin for image tag 'latest'"
+        REF_KIND=tags ;;
     [0-9]*.[0-9]*.[0-9]*) REF="v$TAG";  REF_KIND=tags ;;
     *)                  REF=$TAG;       REF_KIND=heads ;;
 esac
@@ -83,6 +104,18 @@ esac
 EXPECTED_SHA=$(git ls-remote origin "refs/$REF_KIND/$REF" "refs/$REF_KIND/$REF^{}" \
     | awk '/\^\{\}$/ { peeled = $1 } NR == 1 { plain = $1 } END { print peeled ? peeled : plain }')
 [[ -n "$EXPECTED_SHA" ]] || fail "no ref $REF on origin for image tag '$TAG'"
+
+# ── 0. Checkout ──────────────────────────────────────────────────────────────
+
+log "Checking out $REF"
+case "$REF_KIND" in
+    tags)  git checkout --quiet --detach "refs/tags/$REF" ;;
+    heads) git checkout --quiet --detach "origin/$REF" ;;
+esac
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] \
+    || fail "checked out $(git rev-parse --short=12 HEAD), but $REF on origin is ${EXPECTED_SHA:0:12}"
+[[ "$(resolve_image)" == "$IMAGE" ]] \
+    || fail "$REF's docker-compose.yml resolves the image as $(resolve_image), not $IMAGE; run $0 again"
 
 log "Image $IMAGE, expecting commit ${EXPECTED_SHA:0:12} ($REF)"
 
