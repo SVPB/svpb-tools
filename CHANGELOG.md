@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+#### CeolKit 5.0.0 (#111)
+
+- Ties and slurs are drawn where abcm2ps draws them: their ends sit at notehead centres and stem
+  tips, and slurs arc clear of the notes, gracenotes and beams they pass over. A rest that fills
+  its bar is centred in it. No tune in svpb-music/2027 changes page count.
+- Tunes can now ask for bar numbers (`%%barnumbers`, `%%measurefirst`, `%%measurebox`,
+  `%%setbarnb`) and multi-measure rests (`Zn`). Chord symbols and annotations written before a
+  rest stay on it. A `"@x,y"` annotation with no offset now gives a `malformedAnnotationOffset`
+  warning in the build output.
+
 #### `develop` is retired; `latest` is the newest release (#108)
 
 - Work branches off `main` and merges back by PR. A release is a `vX.Y.Z` tag on the merge of a
