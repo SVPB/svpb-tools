@@ -10,8 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-#### CeolKit 5.0.0 (#111)
+#### CeolKit 5.0.1 (#111)
 
+- **A broken rhythm now reaches across a slur, grace group or other mark.** In `d<{e}(A`, the
+  `A` is now dotted; before, the slur stopped the `<`, the `A` kept its written length, and
+  the bar came out too long. Eight tunes in svpb-music/2027 change: Wee Michael's March and
+  its harmonies, John Barclay's harmonies, Hyfrydol, Setting Course for Lewis and O Come All
+  Ye Faithful.
 - Ties and slurs are drawn where abcm2ps draws them: their ends sit at notehead centres and stem
   tips, and slurs arc clear of the notes, gracenotes and beams they pass over. A rest that fills
   its bar is centred in it. No tune in svpb-music/2027 changes page count.

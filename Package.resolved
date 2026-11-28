@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sbeitzel/CeolKit.git",
       "state" : {
-        "revision" : "2e75f50da9cbf73d48e4243907d245a8f506aff4",
-        "version" : "5.0.0"
+        "revision" : "db8e18f3ab03ce49ed1d7dac0a8bbc82a8b8f9d6",
+        "version" : "5.0.1"
       }
     },
     {
